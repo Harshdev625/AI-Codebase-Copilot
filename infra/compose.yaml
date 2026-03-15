@@ -1,0 +1,82 @@
+# ── Local-dev stack ──────────────────────────────────────────────────────────
+# Starts only postgres + pgAdmin.
+# Run backend (FastAPI) and frontend (Next.js) directly on the host.
+# For a fully-containerised run use: podman compose --profile full up
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aicc-postgres
+    environment:
+      POSTGRES_DB: aicc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../backend/scripts/init_pgvector.sql:/docker-entrypoint-initdb.d/init_pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aicc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: aicc-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@aicc.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  # ── Full-stack containers (opt-in) ──────────────────────────────────────────
+  api:
+    profiles: ["full"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.backend
+    container_name: aicc-api
+    environment:
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: aicc
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mypassword
+      VECTOR_DIM: ${VECTOR_DIM:-1024}
+      REPO_CACHE_DIR: .repo_cache
+      MAX_INDEX_FILE_SIZE_BYTES: 1000000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    profiles: ["full"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.frontend
+    container_name: aicc-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  pgadmin_data:
