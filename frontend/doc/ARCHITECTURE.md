@@ -1,49 +1,39 @@
-# System Architecture
+# Frontend Architecture
 
-## Frontend Architecture
+## Current Scope
 
-The frontend is a Next.js application that serves as the user interface for the agentic RAG system. It connects to the backend via REST API and provides interactive search and chat capabilities for codebase retrieval.
+The frontend currently implements a chat-first experience.
 
-### Key Components
-- **Next.js**: Enables server-side rendering and fast client-side updates.
-- **API Client**: Handles communication with backend endpoints (`/v1/search`, `/v1/chat`).
-- **UI Components**: Includes search bar, chat interface, results display, and error handling.
-- **Config**: Allows customization of backend API endpoint for local or remote operation.
+- single page rendered by `app/page.tsx`
+- primary client component `components/chat-shell.tsx`
+- API helper `lib/api.ts` for calling `/api/chat`
 
-### Data Flow
-1. **User Input**: User enters a search or chat query in the UI.
-2. **API Request**: Frontend sends the request to the backend API.
-3. **Result Display**: UI renders search results or chat responses.
+## UI Responsibilities
 
-### Integration
-- Frontend expects backend at `http://localhost:8000` (configurable).
-- Handles errors, loading states, and displays results interactively.
+- collect `repo_id` and `query`
+- submit chat requests
+- show loading state (`Thinking...`)
+- show backend errors
+- render answer text, intent label, and retrieved source list
 
----
+## Data Flow
 
-## How Things Work Together
-- Frontend provides a seamless UI for interacting with the backend agentic RAG system.
-- Backend processes queries, retrieves relevant codebase data, and returns results.
-- PostgreSQL stores embeddings and retrieval data, managed via containerized infra.
-- Agentic pipeline ensures flexible, scalable retrieval and response generation.
-
----
-
-## Diagrams
-
-### Frontend Architecture
 ```
-User
-  |
-  |  UI (Next.js)
-  v
-Search/Chat Components
-  |
-  |  API Client
-  v
-Backend API (FastAPI)
+User input
+   -> ChatShell submit
+   -> sendChat(payload)
+   -> /api/chat (frontend route)
+   -> backend /v1/chat
+   -> response rendered in ChatShell
 ```
 
----
+## Integration Notes
 
-For more details, see code comments and endpoint documentation.
+- Frontend expects backend to be reachable from the Next.js API route.
+- Backend returns `answer`, `intent`, and `sources`.
+- If indexing is missing or Ollama is unavailable, errors are displayed in the UI.
+
+## Testing Strategy
+
+- component tests for `ChatShell` behavior (submit, loading, success, error)
+- unit tests for `sendChat` success/failure handling

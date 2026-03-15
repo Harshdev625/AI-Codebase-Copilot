@@ -2,7 +2,7 @@
 
 # AI Codebase Copilot
 
-### Self-hosted code search and retrieval pipeline for any Git repository
+### Self-hosted code indexing, retrieval, and chat assistant for Git repositories
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -11,7 +11,7 @@
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20Embeddings-000000?style=for-the-badge)
 ![Next.js](https://img.shields.io/badge/Next.js-Frontend-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
 
-[Overview](#overview) • [Features](#features) • [Quick Start](#quick-start) • [API](#api) • [Architecture](#architecture) • [Contributing](#contributing)
+[Overview](#overview) • [Features](#features) • [Quick Start](#quick-start) • [API](#api) • [Architecture](#architecture) • [Testing](#testing) • [Contributing](#contributing)
 
 </div>
 
@@ -19,9 +19,9 @@
 
 ## Overview
 
-AI Codebase Copilot indexes any Git repository and exposes a hybrid search and retrieval API over its source code. Point it at a local path or a GitHub URL and query the codebase in natural language.
+AI Codebase Copilot indexes any Git repository and exposes APIs for indexing, hybrid retrieval, and chat over code chunks. You can point it at a local path or a GitHub URL.
 
-The system is built around a LangGraph pipeline with keyword-based intent routing, hybrid vector + full-text retrieval, and a tool-execution layer for safe git/shell actions. LLM integration is intentionally left as a plug-in point in the workflow nodes.
+The system uses LangGraph for workflow orchestration, PostgreSQL + pgvector for storage/retrieval, and Ollama for local embeddings.
 
 ## Features
 
@@ -30,8 +30,8 @@ The system is built around a LangGraph pipeline with keyword-based intent routin
 - **Local + remote ingestion** — index from a local path or clone directly from a GitHub URL; clones are cached in `backend/.repo_cache`
 - **AST-based chunking** — Python files are chunked by function and class boundaries using the `ast` module; all other supported file types are chunked via tree-sitter
 - **Ollama embeddings** — uses `mxbai-embed-large` by default; fully local, no API key required
-- **LangGraph workflow** — planner → retrieval → code_understanding → patch_generation → answer, with conditional routing
-- **Tool execution endpoint** — safe execution of `read_file`, `git status`, and allowlisted shell commands via `/v1/tools/execute`
+- **LangGraph workflow** — planner → retrieval/tool_execution → code_understanding → patch_generation/answer, with conditional routing
+- **Tool execution endpoint** — execution of `read_file`, `git status`, and allowlisted shell commands via `/v1/tools/execute`
 - **Large-repo safeguards** — configurable file-size cutoff and extension allowlist prevent indexing binaries and generated files
 
 ## Tech Stack
@@ -42,7 +42,7 @@ The system is built around a LangGraph pipeline with keyword-based intent routin
 | Workflow | LangGraph |
 | Vector DB | PostgreSQL 16 + pgvector |
 | Embeddings | Ollama (`mxbai-embed-large`) |
-| Frontend | Next.js 14, TypeScript, Tailwind CSS |
+| Frontend | Next.js, TypeScript, Tailwind CSS |
 | Infrastructure | Podman / Docker Compose |
 
 ## Quick Start
@@ -103,6 +103,20 @@ npm run dev
 
 Frontend: `http://localhost:3000`
 
+### 5. Run backend tests
+
+```bash
+cd backend
+pytest tests/unit -v
+```
+
+### 6. Run frontend tests
+
+```bash
+cd frontend
+npm test
+```
+
 ## Configuration
 
 All settings live in `backend/.env` (copy from `.env.example`):
@@ -151,7 +165,7 @@ Returns ranked code chunks with `path`, `symbol`, `content`, and `score`.
 { "repo_id": "myrepo", "query": "What does the planner node do?" }
 ```
 
-Returns `answer`, `intent`, and `sources` (retrieved chunks). The answer node composes a response from retrieved context. Intent is classified by keyword matching: `search`, `debug`, `refactor`, `docs`, or `tool`.
+Returns `answer`, `intent`, and `sources` (retrieved chunks). Intent is classified by keyword matching: `search`, `debug`, `refactor`, `docs`, or `tool`.
 
 ### `POST /v1/tools/execute`
 
@@ -192,13 +206,18 @@ User query
 - `content` indexed with GIN for full-text search
 - Upsert-on-conflict so re-indexing is safe to run repeatedly
 
-**Chunking** — Python files use AST-level chunking (function and class nodes). All other supported file types use tree-sitter.
+**Chunking** — Python files use AST-level chunking (function and class nodes). Other supported file types use tree-sitter chunking.
 
-## Running Tests
+## Testing
 
 ```bash
 cd backend
 pytest tests/ -v
+```
+
+```bash
+cd frontend
+npm test
 ```
 
 ## Utility Scripts

@@ -30,3 +30,6 @@ Thumbs.db
 
 # Backend clone cache
 backend/.repo_cache/
+
+# Internal planning/spec notes
+Project.md
