@@ -1,35 +1,41 @@
 # Frontend Documentation
 
-## How to Run
+## Overview
 
-1. Ensure Node.js (16+) and npm are installed.
-2. Navigate to the frontend folder:
-   ```
-   cd frontend
-   ```
-3. Install dependencies:
-   ```
-   npm install
-   ```
-4. Start the frontend server:
-   ```
-   npm run dev
-   ```
+The frontend is a Next.js app that provides a chat UI for querying indexed repositories.
 
-## What We Are Doing
+Implemented features:
 
-- Next.js frontend for agentic RAG system.
-- Connects to backend API for search and chat.
-- Provides UI for codebase retrieval and chat.
+- repository ID input
+- query input
+- loading and error states
+- answer rendering (`answer`, `intent`, `sources`)
 
-## System Architecture
+## Run
 
-See ARCHITECTURE.md for detailed frontend and backend architecture, data flow, and diagrams.
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-- Frontend: Next.js UI, API client, search/chat components.
-- Backend: FastAPI agentic RAG pipeline, hybrid retrieval, embeddings, Postgres/pgvector.
+Default URL: `http://localhost:3000`
+
+## Backend Dependency
+
+The frontend calls `POST /api/chat`, which proxies to backend `POST /v1/chat`.
+
+Ensure backend is running at `http://localhost:8000` unless overridden in frontend env.
+
+## Tests
+
+```bash
+cd frontend
+npm test
+```
 
 ## Troubleshooting
-- Ensure backend is running and accessible at `http://localhost:8000`.
-- Update API endpoint in frontend config if backend port changes.
-- Use browser dev tools for debugging UI issues.
+
+- If chat fails, verify backend health and Ollama availability.
+- If source list is empty, ensure repository indexing completed first.
+- Use browser dev tools network tab to inspect `/api/chat` errors.
