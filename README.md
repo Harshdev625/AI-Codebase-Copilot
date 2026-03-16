@@ -62,6 +62,13 @@ cd infra
 podman compose up -d postgres
 ```
 
+Or run the full stack (infra + API + web) as one Podman Compose project:
+
+```bash
+cd infra
+podman compose --profile full up -d
+```
+
 Apply the schema:
 
 ```bash
@@ -132,6 +139,9 @@ All settings live in `backend/.env` (copy from `.env.example`):
 | `POSTGRES_PASSWORD` | `mypassword` | Database password |
 | `REPO_CACHE_DIR` | `.repo_cache` | Where cloned repos are stored |
 | `MAX_INDEX_FILE_SIZE_BYTES` | `1000000` | Skip files larger than this |
+| `BOOTSTRAP_ADMIN_EMAIL` | _(empty)_ | Optional admin account email created/promoted at API startup |
+| `BOOTSTRAP_ADMIN_PASSWORD` | _(empty)_ | Password for bootstrap admin |
+| `BOOTSTRAP_ADMIN_FULL_NAME` | `Administrator` | Display name for bootstrap admin |
 
 > `VECTOR_DIM` must match the selected Ollama model. `mxbai-embed-large` outputs 1024 dimensions.
 

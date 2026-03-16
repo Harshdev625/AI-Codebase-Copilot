@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.services.qdrant_service import QdrantService
 
 
 def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 60) -> list[str]:
@@ -19,7 +20,7 @@ def _to_vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{v:.8f}" for v in values) + "]"
 
 
-def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
     embedding = get_embedding_provider().embed_text(query)
     validate_embedding_dimension(embedding)
     vector_literal = _to_vector_literal(embedding)
@@ -38,6 +39,41 @@ def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) ->
         {"embedding": vector_literal, "repo_id": repo_id, "top_k": top_k},
     ).mappings()
     return [dict(row) for row in rows]
+
+
+def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+    embedding = get_embedding_provider().embed_text(query)
+    validate_embedding_dimension(embedding)
+
+    try:
+        matches = QdrantService().search(vector=embedding, repo_id=repo_id, limit=top_k)
+    except RuntimeError:
+        return _dense_search_postgres(session, repo_id, query, top_k=top_k)
+
+    if not matches:
+        return []
+
+    matched_ids = [str(item.get("id")) for item in matches]
+    score_map = {str(item.get("id")): float(item.get("score", 0.0)) for item in matches}
+
+    stmt = text(
+        """
+        SELECT id, path, symbol, content
+        FROM code_chunks
+        WHERE repo_id = :repo_id
+        """
+    )
+    rows = session.execute(stmt, {"repo_id": repo_id}).mappings().all()
+    rows_by_id = {str(row["id"]): dict(row) for row in rows}
+
+    merged: list[dict] = []
+    for item_id in matched_ids:
+        row = rows_by_id.get(item_id)
+        if not row:
+            continue
+        row["score"] = score_map.get(item_id, 0.0)
+        merged.append(row)
+    return merged
 
 
 def lexical_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:

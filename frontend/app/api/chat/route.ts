@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getBackendUrl } from "@/lib/backend-url";
 
 export async function POST(request: NextRequest) {
   const payload = await request.json();
-  const backend = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/v1";
+  const backend = getBackendUrl();
 
   const response = await fetch(`${backend}/chat`, {
     method: "POST",

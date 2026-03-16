@@ -1,7 +1,17 @@
 # ── Local-dev stack ──────────────────────────────────────────────────────────
-# Starts only postgres + pgAdmin.
+# Starts infra services: postgres, qdrant, redis, ollama (+ optional pgAdmin).
 # Run backend (FastAPI) and frontend (Next.js) directly on the host.
-# For a fully-containerised run use: podman compose --profile full up
+#
+# ▶ Using Podman (recommended):
+#     cd infra
+#     podman compose up -d
+#
+# ▶ For fully-containerised run (builds backend + frontend images):
+#     podman compose --profile full up -d
+#
+# ▶ Pull a model into ollama after first start:
+#     podman exec -it aicc-ollama ollama pull qwen2.5-coder
+#     podman exec -it aicc-ollama ollama pull mxbai-embed-large
 # ─────────────────────────────────────────────────────────────────────────────
 services:
   postgres:
@@ -37,6 +47,31 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    container_name: aicc-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  redis:
+    image: redis:7-alpine
+    container_name: aicc-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aicc-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
   # ── Full-stack containers (opt-in) ──────────────────────────────────────────
   api:
     profiles: ["full"]
@@ -47,9 +82,16 @@ services:
     environment:
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-qwen2.5-coder}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_COLLECTION: code_chunks
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_DB: 0
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: aicc
@@ -58,11 +100,20 @@ services:
       VECTOR_DIM: ${VECTOR_DIM:-1024}
       REPO_CACHE_DIR: .repo_cache
       MAX_INDEX_FILE_SIZE_BYTES: 1000000
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@aicc.dev}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-password123}
+      BOOTSTRAP_ADMIN_FULL_NAME: ${BOOTSTRAP_ADMIN_FULL_NAME:-Platform Admin}
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_started
+      ollama:
+        condition: service_started
 
   web:
     profiles: ["full"]
@@ -72,6 +123,7 @@ services:
     container_name: aicc-web
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000/v1
+      API_INTERNAL_URL: http://api:8000/v1
     ports:
       - "3000:3000"
     depends_on:
@@ -80,3 +132,6 @@ services:
 volumes:
   pgdata:
   pgadmin_data:
+  qdrant_data:
+  redis_data:
+  ollama_data:

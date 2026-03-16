@@ -6,8 +6,9 @@ The backend exposes APIs for repository indexing, hybrid search, chat, and tool 
 
 - Framework: FastAPI
 - Workflow: LangGraph
-- Storage: PostgreSQL + pgvector
-- Embeddings: Ollama only
+- Storage: PostgreSQL + pgvector + Qdrant
+- Cache: Redis
+- Embeddings + Chat: Ollama model router
 
 ## Run Backend
 
@@ -33,7 +34,10 @@ Required `.env` keys:
 
 - `OLLAMA_BASE_URL`
 - `OLLAMA_EMBEDDING_MODEL`
+- `OLLAMA_CHAT_MODEL`
 - `VECTOR_DIM` (must match embedding dimension)
+- `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_COLLECTION`
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`
 
 ## Indexing Behavior
 
@@ -54,6 +58,14 @@ Runs hybrid retrieval: dense vector search + lexical search + RRF.
 ### `POST /v1/chat`
 
 Runs the LangGraph flow and returns `answer`, `intent`, and `sources`.
+
+### Admin Endpoints
+
+- `GET /v1/admin/users`
+- `GET /v1/admin/repositories`
+- `GET /v1/admin/indexing-status`
+- `GET /v1/admin/agent-runs`
+- `GET /v1/admin/system-metrics`
 
 ### `POST /v1/tools/execute`
 

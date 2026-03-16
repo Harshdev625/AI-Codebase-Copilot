@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.services.qdrant_service import QdrantService
 
 
 class IndexingService:
@@ -187,6 +188,7 @@ class IndexingService:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.embedder = get_embedding_provider()
+        self.qdrant = QdrantService()
 
     def index_repository(
         self,
@@ -242,6 +244,8 @@ class IndexingService:
         if not chunks:
             return
 
+        self.qdrant.ensure_collection()
+
         stmt = text(
             """
             INSERT INTO code_chunks (
@@ -260,6 +264,7 @@ class IndexingService:
             """
         )
 
+        qdrant_points: list[dict] = []
         for chunk in chunks:
             embedding = self.embedder.embed_text(chunk.content)
             validate_embedding_dimension(embedding)
@@ -282,4 +287,21 @@ class IndexingService:
                 },
             )
 
+            qdrant_points.append(
+                {
+                    "id": chunk.id,
+                    "vector": embedding,
+                    "payload": {
+                        "repo_id": chunk.repo_id,
+                        "path": chunk.path,
+                        "symbol": chunk.symbol,
+                        "language": chunk.language,
+                        "chunk_type": chunk.chunk_type,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                    },
+                }
+            )
+
         self.session.commit()
+        self.qdrant.upsert_points(qdrant_points)
