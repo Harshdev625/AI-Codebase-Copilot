@@ -126,41 +126,41 @@ def ensure_app_schema() -> None:
     with engine.begin() as connection:
         connection.execute(text(APP_SCHEMA_SQL))
 
-    admin_email = settings.bootstrap_admin_email.strip().lower()
-    admin_password = settings.bootstrap_admin_password
-    if not admin_email or not admin_password:
-      return
+        admin_email = settings.bootstrap_admin_email.strip().lower()
+        admin_password = settings.bootstrap_admin_password
+        if not admin_email or not admin_password:
+            return
 
-    existing = connection.execute(
-      text("SELECT id, role, is_active FROM users WHERE email = :email"),
-      {"email": admin_email},
-    ).mappings().first()
+        existing = connection.execute(
+            text("SELECT id, role, is_active FROM users WHERE email = :email"),
+            {"email": admin_email},
+        ).mappings().first()
 
-    if existing is None:
-      connection.execute(
-        text(
-          """
-          INSERT INTO users (id, email, password_hash, full_name, role, is_active)
-          VALUES (:id, :email, :password_hash, :full_name, 'admin', TRUE)
-          """
-        ),
-        {
-          "id": str(uuid.uuid4()),
-          "email": admin_email,
-          "password_hash": hash_password(admin_password),
-          "full_name": settings.bootstrap_admin_full_name,
-        },
-      )
-      return
+        if existing is None:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO users (id, email, password_hash, full_name, role, is_active)
+                    VALUES (:id, :email, :password_hash, :full_name, 'admin', TRUE)
+                    """
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "email": admin_email,
+                    "password_hash": hash_password(admin_password),
+                    "full_name": settings.bootstrap_admin_full_name,
+                },
+            )
+            return
 
-    if existing["role"] != "admin" or not bool(existing["is_active"]):
-      connection.execute(
-        text(
-          """
-          UPDATE users
-          SET role = 'admin', is_active = TRUE
-          WHERE id = :id
-          """
-        ),
-        {"id": existing["id"]},
-      )
+        if existing["role"] != "admin" or not bool(existing["is_active"]):
+            connection.execute(
+                text(
+                    """
+                    UPDATE users
+                    SET role = 'admin', is_active = TRUE
+                    WHERE id = :id
+                    """
+                ),
+                {"id": existing["id"]},
+            )

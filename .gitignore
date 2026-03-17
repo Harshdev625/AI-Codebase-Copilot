@@ -28,6 +28,13 @@ Thumbs.db
 # Logs
 *.log
 
+# Test Coverage
+coverage/
+.coverage
+coverage.xml
+*.lcov
+lcov-report/
+
 # Backend clone cache
 backend/.repo_cache/
 

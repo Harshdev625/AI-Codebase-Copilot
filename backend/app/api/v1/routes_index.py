@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import ensure_repository_access, get_current_user
 from app.db.database import get_db_session
 from app.models.api_models import IndexRequest, IndexResponse
 from app.services.indexing_service import IndexingService
@@ -13,16 +14,16 @@ router = APIRouter(tags=["index"])
 
 
 @router.post("/index", response_model=IndexResponse)
-def index_repo(req: IndexRequest, session: Session = Depends(get_db_session)) -> IndexResponse:
+def index_repo(
+    req: IndexRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> IndexResponse:
     snapshot_id = str(uuid.uuid4())
     indexing_job_id = str(uuid.uuid4())
 
-    repository_row = session.execute(
-        text("SELECT id FROM repositories WHERE repo_id = :repo_id LIMIT 1"),
-        {"repo_id": req.repo_id},
-    ).mappings().first()
-
-    repository_db_id = repository_row["id"] if repository_row else None
+    repository_row = ensure_repository_access(session, req.repo_id, current_user["id"])
+    repository_db_id = repository_row["id"]
     if repository_db_id is not None:
         session.execute(
             text(

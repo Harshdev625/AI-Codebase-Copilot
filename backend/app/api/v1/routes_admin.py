@@ -12,7 +12,7 @@ router = APIRouter(tags=["admin"])
 
 @router.get("/admin/users")
 def admin_users(
-    _: dict = Depends(require_roles({"admin", "owner"})),
+    _: dict = Depends(require_roles({"admin"})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
     rows = session.execute(
@@ -29,7 +29,7 @@ def admin_users(
 
 @router.get("/admin/repositories")
 def admin_repositories(
-    _: dict = Depends(require_roles({"admin", "owner"})),
+    _: dict = Depends(require_roles({"admin"})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
     rows = session.execute(
@@ -46,7 +46,7 @@ def admin_repositories(
 
 @router.get("/admin/indexing-status")
 def admin_indexing_status(
-    _: dict = Depends(require_roles({"admin", "owner"})),
+    _: dict = Depends(require_roles({"admin"})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
     rows = session.execute(
@@ -64,7 +64,7 @@ def admin_indexing_status(
 
 @router.get("/admin/agent-runs")
 def admin_agent_runs(
-    _: dict = Depends(require_roles({"admin", "owner"})),
+    _: dict = Depends(require_roles({"admin"})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
     rows = session.execute(
@@ -82,7 +82,7 @@ def admin_agent_runs(
 
 @router.get("/admin/system-metrics")
 def admin_system_metrics(
-    _: dict = Depends(require_roles({"admin", "owner"})),
+    _: dict = Depends(require_roles({"admin"})),
     session: Session = Depends(get_db_session),
 ) -> dict:
     counts = session.execute(

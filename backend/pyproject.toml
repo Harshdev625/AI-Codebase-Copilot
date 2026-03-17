@@ -24,6 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.0",
+  "pytest-cov>=6.0.0",
   "pytest-asyncio>=0.24.0",
   "ruff>=0.6.0",
   "mypy>=1.11.0"
@@ -39,3 +40,10 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = "--cov=app --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
