@@ -21,7 +21,10 @@ def _to_vector_literal(values: list[float]) -> str:
 
 
 def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
-    embedding = get_embedding_provider().embed_text(query)
+    try:
+        embedding = get_embedding_provider().embed_text(query)
+    except RuntimeError:
+        return []  # Ollama unavailable; skip dense search
     validate_embedding_dimension(embedding)
     vector_literal = _to_vector_literal(embedding)
     stmt = text(
@@ -30,6 +33,7 @@ def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: in
                1 - (embedding <=> CAST(:embedding AS vector)) AS score
         FROM code_chunks
         WHERE repo_id = :repo_id
+          AND embedding IS NOT NULL
         ORDER BY embedding <=> CAST(:embedding AS vector)
         LIMIT :top_k
         """
@@ -42,7 +46,10 @@ def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: in
 
 
 def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
-    embedding = get_embedding_provider().embed_text(query)
+    try:
+        embedding = get_embedding_provider().embed_text(query)
+    except RuntimeError:
+        return []  # Ollama unavailable; dense search not possible
     validate_embedding_dimension(embedding)
 
     try:
@@ -56,14 +63,13 @@ def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) ->
     matched_ids = [str(item.get("id")) for item in matches]
     score_map = {str(item.get("id")): float(item.get("score", 0.0)) for item in matches}
 
+    # Fetch only the matched rows by primary key (efficient vs. full table scan)
+    placeholders = ", ".join(f":mid{i}" for i in range(len(matched_ids)))
     stmt = text(
-        """
-        SELECT id, path, symbol, content
-        FROM code_chunks
-        WHERE repo_id = :repo_id
-        """
+        f"SELECT id, path, symbol, content FROM code_chunks WHERE id IN ({placeholders})"
     )
-    rows = session.execute(stmt, {"repo_id": repo_id}).mappings().all()
+    params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
+    rows = session.execute(stmt, params).mappings().all()
     rows_by_id = {str(row["id"]): dict(row) for row in rows}
 
     merged: list[dict] = []

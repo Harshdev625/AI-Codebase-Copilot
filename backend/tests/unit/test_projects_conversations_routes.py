@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.v1.routes_auth import router as auth_router
-from app.api.v1.routes_conversations import router as conversations_router
-from app.api.v1.routes_projects import router as projects_router
+from app.api.v1.auth import router as auth_router
+from app.api.v1.chat import router as chat_router
+from app.api.v1.repositories import router as repositories_router
 from app.core.security import hash_password
 from app.db.database import get_db_session
 
@@ -123,8 +123,8 @@ def session_factory() -> Generator[sessionmaker, None, None]:
 def app(session_factory: sessionmaker) -> FastAPI:
     fastapi_app = FastAPI()
     fastapi_app.include_router(auth_router, prefix="/v1")
-    fastapi_app.include_router(projects_router, prefix="/v1")
-    fastapi_app.include_router(conversations_router, prefix="/v1")
+    fastapi_app.include_router(repositories_router, prefix="/v1")
+    fastapi_app.include_router(chat_router, prefix="/v1")
 
     def override_db() -> Generator[Session, None, None]:
         session = session_factory()

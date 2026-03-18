@@ -6,6 +6,7 @@ import {
   Users, GitBranch, Database, MessageSquare,
   Activity, Layers, FolderOpen, RefreshCw,
   ShieldCheck, CheckCircle, AlertCircle, Server,
+  Shield, ShieldOff, ChevronDown, Trash2,
 } from "lucide-react";
 import { clearSession, getStoredUser } from "@/lib/auth";
 
@@ -53,6 +54,8 @@ export default function AdminPage() {
   const [error,    setError]    = useState<string | null>(null);
   const [loading,  setLoading]  = useState(false);
   const [tab,      setTab]      = useState<"metrics" | "users" | "services">("metrics");
+  const [updatingUserId, setUpdatingUserId] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   async function load() {
     setLoading(true);
@@ -68,6 +71,13 @@ export default function AdminPage() {
       router.replace("/dashboard");
       return;
     }
+    setCurrentUser({
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name || "",
+      role: user.role,
+      is_active: true,
+    });
     try {
       const [mRes, uRes] = await Promise.all([
         fetch("/api/admin/system-metrics", { headers: { Authorization: `Bearer ${token}` } }),
@@ -87,6 +97,51 @@ export default function AdminPage() {
       setError(err instanceof Error ? err.message : "Failed to load admin data");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function updateUserRole(userId: string, newRole: string) {
+    const token = localStorage.getItem("aicc_token") || "";
+    setUpdatingUserId(userId);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/role`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ user_id: userId, role: newRole }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.detail || "Failed to update user role");
+      }
+      // Refresh users list
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update user role");
+    } finally {
+      setUpdatingUserId(null);
+    }
+  }
+
+  async function deleteUser(userId: string, userEmail: string) {
+    if (!confirm(`Delete user ${userEmail}? This cannot be undone.`)) return;
+    
+    const token = localStorage.getItem("aicc_token") || "";
+    setUpdatingUserId(userId);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data?.detail || "Failed to delete user");
+      }
+      // Refresh users list
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete user");
+    } finally {
+      setUpdatingUserId(null);
     }
   }
 
@@ -158,9 +213,10 @@ export default function AdminPage() {
       {tab === "users" && (
         <div className="card overflow-hidden p-0 animate-fade-in">
           <div className="flex items-center justify-between border-b border-border px-5 py-3">
-            <h3 className="text-sm font-semibold text-text">Registered Users</h3>
+            <h3 className="text-sm font-semibold text-text">Manage Users</h3>
             <span className="badge badge-cyan">{users.length} total</span>
           </div>
+          <p className="px-5 pt-3 text-xs text-muted">Promoted admins from this panel. Only admins can access system controls.</p>
           {users.length === 0 ? (
             <div className="py-12 text-center text-sm text-muted">No users found.</div>
           ) : (
@@ -171,6 +227,7 @@ export default function AdminPage() {
                   <th className="px-5 py-3 text-xs font-medium text-muted">Role</th>
                   <th className="px-5 py-3 text-xs font-medium text-muted">Status</th>
                   <th className="px-5 py-3 text-xs font-medium text-muted">Joined</th>
+                  <th className="px-5 py-3 text-xs font-medium text-muted">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -182,7 +239,7 @@ export default function AdminPage() {
                           {(u.full_name || u.email).charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-medium text-text">{u.full_name || "—"}</p>
+                          <p className="font-medium text-text">{u.full_name || "—"} {u.id === currentUser?.id && <span className="text-xs text-muted">(you)</span>}</p>
                           <p className="text-xs text-muted">{u.email}</p>
                         </div>
                       </div>
@@ -202,6 +259,34 @@ export default function AdminPage() {
                     </td>
                     <td className="px-5 py-3 text-xs text-muted">
                       {u.created_at ? new Date(u.created_at).toLocaleDateString() : "—"}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2">
+                        {u.id !== currentUser?.id && (
+                          <>
+                            <button
+                              onClick={() => updateUserRole(u.id, u.role === "admin" ? "developer" : "admin")}
+                              disabled={updatingUserId === u.id}
+                              className="btn-secondary gap-1 py-1 px-2 text-xs"
+                              title={u.role === "admin" ? "Demote to developer" : "Promote to admin"}
+                            >
+                              {u.role === "admin" ? (
+                                <ShieldOff className="h-3 w-3" />
+                              ) : (
+                                <Shield className="h-3 w-3" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => deleteUser(u.id, u.email)}
+                              disabled={updatingUserId === u.id}
+                              className="btn-secondary gap-1 py-1 px-2 text-xs"
+                              title="Delete user"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

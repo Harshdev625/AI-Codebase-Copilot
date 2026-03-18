@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import json
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.api.dependencies import ensure_repository_access, get_current_user
+from app.db.database import get_db_session, SessionLocal
+from app.models.api_models import (
+    AddRepositoryRequest,
+    CreateProjectRequest,
+    IndexRequest,
+    IndexResponse,
+    ProjectResponse,
+    RepositoryResponse,
+)
+from app.services.indexing_service import IndexingService
+
+router = APIRouter(tags=["repositories"])
+
+
+def _to_payload(row: dict) -> dict:
+    payload = dict(row)
+    created_at = payload.get("created_at")
+    if created_at is not None and hasattr(created_at, "isoformat"):
+        payload["created_at"] = created_at.isoformat()
+    return payload
+
+
+@router.get("/projects", response_model=list[ProjectResponse])
+def list_projects(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[ProjectResponse]:
+    rows = session.execute(
+        text(
+            """
+            SELECT p.id, p.name, p.description, p.created_by, p.created_at
+            FROM projects p
+            JOIN project_memberships pm ON pm.project_id = p.id
+            WHERE pm.user_id = :user_id
+            ORDER BY p.created_at DESC
+            """
+        ),
+        {"user_id": current_user["id"]},
+    ).mappings().all()
+    return [ProjectResponse(**_to_payload(row)) for row in rows]
+
+
+@router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+def create_project(
+    req: CreateProjectRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> ProjectResponse:
+    project_id = str(uuid.uuid4())
+    membership_id = str(uuid.uuid4())
+
+    session.execute(
+        text(
+            """
+            INSERT INTO projects (id, name, description, created_by)
+            VALUES (:id, :name, :description, :created_by)
+            """
+        ),
+        {
+            "id": project_id,
+            "name": req.name,
+            "description": req.description,
+            "created_by": current_user["id"],
+        },
+    )
+    session.execute(
+        text(
+            """
+            INSERT INTO project_memberships (id, project_id, user_id, membership_role)
+            VALUES (:id, :project_id, :user_id, 'owner')
+            """
+        ),
+        {
+            "id": membership_id,
+            "project_id": project_id,
+            "user_id": current_user["id"],
+        },
+    )
+    session.commit()
+
+    row = session.execute(
+        text("SELECT id, name, description, created_by, created_at FROM projects WHERE id = :id"),
+        {"id": project_id},
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=500, detail="Project creation failed")
+
+    return ProjectResponse(**_to_payload(row))
+
+
+@router.get("/projects/{project_id}/repositories", response_model=list[RepositoryResponse])
+def list_repositories(
+    project_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[RepositoryResponse]:
+    _ensure_membership(session, project_id, current_user["id"])
+    rows = session.execute(
+        text(
+            """
+            SELECT id, project_id, repo_id, remote_url, local_path, default_branch, created_at
+            FROM repositories
+            WHERE project_id = :project_id
+            ORDER BY created_at DESC
+            """
+        ),
+        {"project_id": project_id},
+    ).mappings().all()
+    return [RepositoryResponse(**_to_payload(row)) for row in rows]
+
+
+@router.post(
+    "/projects/{project_id}/repositories",
+    response_model=RepositoryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_repository(
+    project_id: str,
+    req: AddRepositoryRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> RepositoryResponse:
+    _ensure_membership(session, project_id, current_user["id"])
+
+    repository_id = str(uuid.uuid4())
+    session.execute(
+        text(
+            """
+            INSERT INTO repositories (id, project_id, repo_id, remote_url, local_path, default_branch)
+            VALUES (:id, :project_id, :repo_id, :remote_url, :local_path, :default_branch)
+            """
+        ),
+        {
+            "id": repository_id,
+            "project_id": project_id,
+            "repo_id": req.repo_id,
+            "remote_url": req.remote_url,
+            "local_path": req.local_path,
+            "default_branch": req.default_branch,
+        },
+    )
+    session.commit()
+
+    row = session.execute(
+        text(
+            """
+            SELECT id, project_id, repo_id, remote_url, local_path, default_branch, created_at
+            FROM repositories
+            WHERE id = :id
+            """
+        ),
+        {"id": repository_id},
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=500, detail="Repository creation failed")
+
+    return RepositoryResponse(**_to_payload(row))
+
+
+@router.post("/index", response_model=IndexResponse, status_code=status.HTTP_202_ACCEPTED)
+def index_repo(
+    req: IndexRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> IndexResponse:
+    snapshot_id = str(uuid.uuid4())
+    indexing_job_id = str(uuid.uuid4())
+
+    repository_row = ensure_repository_access(session, req.repo_id, current_user["id"])
+    repository_db_id = repository_row["id"]
+    if repository_db_id is not None:
+        session.execute(
+            text(
+                """
+                INSERT INTO repository_snapshots (id, repository_id, commit_sha, branch, index_status)
+                VALUES (:id, :repository_id, :commit_sha, :branch, 'running')
+                """
+            ),
+            {
+                "id": snapshot_id,
+                "repository_id": repository_db_id,
+                "commit_sha": req.commit_sha,
+                "branch": req.repo_ref or "main",
+            },
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO indexing_jobs (id, repository_id, snapshot_id, status, message, started_at)
+                VALUES (:id, :repository_id, :snapshot_id, 'running', 'Indexing started', NOW())
+                """
+            ),
+            {
+                "id": indexing_job_id,
+                "repository_id": repository_db_id,
+                "snapshot_id": snapshot_id,
+            },
+        )
+        session.commit()
+
+    def _background_index_job(
+        repo_id: str,
+        repo_path: str | None,
+        repo_url: str | None,
+        repo_ref: str | None,
+        commit_sha: str,
+        repository_db_id: str | None,
+        snapshot_id: str | None,
+        indexing_job_id: str | None,
+    ) -> None:
+        db = SessionLocal()
+        try:
+            total = IndexingService(db).index_repository(
+                repo_id=repo_id,
+                repo_path=repo_path,
+                repo_url=repo_url,
+                repo_ref=repo_ref,
+                commit_sha=commit_sha,
+                indexing_job_id=indexing_job_id,
+            )
+        except Exception as exc:
+            # Reset failed transaction before issuing status updates.
+            db.rollback()
+            if repository_db_id is not None and indexing_job_id is not None and snapshot_id is not None:
+                db.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'failed', message = :message, finished_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": indexing_job_id, "message": str(exc)},
+                )
+                db.execute(
+                    text(
+                        """
+                        UPDATE repository_snapshots
+                        SET index_status = 'failed', stats = CAST(:stats AS jsonb), indexed_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": snapshot_id, "stats": json.dumps({"error": str(exc)})},
+                )
+                db.commit()
+            return
+        else:
+            if repository_db_id is not None and indexing_job_id is not None and snapshot_id is not None:
+                db.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'completed', message = :message, finished_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": indexing_job_id, "message": f"Indexed {total} chunks"},
+                )
+                db.execute(
+                    text(
+                        """
+                        UPDATE repository_snapshots
+                        SET index_status = 'completed', stats = CAST(:stats AS jsonb), indexed_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": snapshot_id, "stats": json.dumps({"indexed_chunks": total})},
+                )
+                db.commit()
+        finally:
+            db.close()
+
+    background_tasks.add_task(
+        _background_index_job,
+        req.repo_id,
+        req.repo_path,
+        req.repo_url,
+        req.repo_ref,
+        req.commit_sha,
+        repository_db_id,
+        snapshot_id,
+        indexing_job_id,
+    )
+
+    return IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id)
+
+
+@router.get("/index/progress/{snapshot_id}")
+def get_index_progress(
+    snapshot_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Get indexing progress for a snapshot."""
+    row = session.execute(
+        text(
+            """
+            SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at
+            FROM repository_snapshots rs
+            LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
+            WHERE rs.id = :snapshot_id
+            """
+        ),
+        {"snapshot_id": snapshot_id},
+    ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    return {
+        "snapshot_id": snapshot_id,
+        "index_status": row["index_status"],
+        "job_status": row["status"],
+        "message": row["message"] or "Indexing in progress...",
+        "stats": row["stats"] or {},
+        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+    }
+
+
+def _ensure_membership(session: Session, project_id: str, user_id: str) -> None:
+    membership = session.execute(
+        text(
+            """
+            SELECT id
+            FROM project_memberships
+            WHERE project_id = :project_id AND user_id = :user_id
+            """
+        ),
+        {"project_id": project_id, "user_id": user_id},
+    ).first()
+    if membership is None:
+        raise HTTPException(status_code=403, detail="Not authorized for this project")

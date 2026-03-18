@@ -9,10 +9,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.v1.routes_admin import router as admin_router
-from app.api.v1.routes_auth import router as auth_router
-from app.api.v1.routes_chat import router as chat_router
-from app.api.v1.routes_search import router as search_router
+from app.api.v1.admin import router as admin_router
+from app.api.v1.auth import router as auth_router
+from app.api.v1.chat import router as chat_router
+from app.api.v1.search import router as search_router
 from app.core.security import hash_password
 from app.db.database import get_db_session
 
@@ -207,7 +207,7 @@ def test_search_requires_repository_membership(
         session.close()
 
     monkeypatch.setattr(
-        "app.api.v1.routes_search.hybrid_retrieve",
+        "app.api.v1.search.hybrid_retrieve",
         lambda *_args, **_kwargs: [{"path": "app/main.py", "symbol": "main", "content": "hello", "score": 1.0}],
     )
 
@@ -271,7 +271,7 @@ def test_chat_requires_repository_membership(
         session.close()
 
     monkeypatch.setattr(
-        "app.api.v1.routes_chat.QueryService.run",
+        "app.api.v1.chat.QueryService.run",
         lambda *_args, **_kwargs: {"answer": "hello", "intent": "qna", "retrieved_context": []},
     )
 
@@ -345,7 +345,7 @@ def test_chat_returns_503_when_query_service_fails(
     def raise_runtime_error(*_args, **_kwargs):
         raise RuntimeError("Query engine unavailable")
 
-    monkeypatch.setattr("app.api.v1.routes_chat.QueryService.run", raise_runtime_error)
+    monkeypatch.setattr("app.api.v1.chat.QueryService.run", raise_runtime_error)
 
     token = _login(client, "chat-fail@example.com")
     response = client.post(

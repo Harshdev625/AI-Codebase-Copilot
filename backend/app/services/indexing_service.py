@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from pathspec import PathSpec
@@ -63,15 +64,20 @@ class IndexingService:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", repo_id).strip(".-")
         return slug or "repo"
 
-    def _run_git(self, args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", *args],
-            cwd=str(cwd) if cwd else None,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+    def _run_git(self, args: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
+        """Run git command with timeout (default 5 minutes)."""
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd) if cwd else None,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Git command timed out after {timeout}s: {' '.join(args)}") from exc
 
     def _resolve_repo_root(
         self,
@@ -190,6 +196,26 @@ class IndexingService:
         self.embedder = get_embedding_provider()
         self.qdrant = QdrantService()
 
+    def _update_progress(self, indexing_job_id: str | None, current: int, total: int, message: str = "") -> None:
+        """Update indexing job progress in database."""
+        if not indexing_job_id:
+            return
+        try:
+            self.session.execute(
+                text(
+                    """
+                    UPDATE indexing_jobs
+                    SET message = :message, updated_at = NOW()
+                    WHERE id = :id
+                    """
+                ),
+                {"id": indexing_job_id, "message": message or f"Processing: {current}/{total} files"},
+            )
+            self.session.commit()
+        except Exception:
+            # Non-critical update failure; rollback to avoid aborted transactions.
+            self.session.rollback()
+
     def index_repository(
         self,
         repo_id: str,
@@ -197,19 +223,35 @@ class IndexingService:
         repo_path: str | None = None,
         repo_url: str | None = None,
         repo_ref: str | None = None,
+        indexing_job_id: str | None = None,
     ) -> int:
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
 
         ignore_spec = self._load_gitignore_spec(root)
+        self._update_progress(indexing_job_id, 0, 0, "Discovering files...")
 
         chunks: list[CodeChunk] = []
-        for file_path in self._iter_indexable_files(root, ignore_spec):
-            source = file_path.read_text(encoding="utf-8", errors="ignore")
-            if file_path.suffix == ".py":
-                chunks.extend(chunk_python_file(repo_id, commit_sha, file_path, source))
-            else:
-                chunks.extend(self.generic_chunk_file(repo_id, commit_sha, file_path, source))
+        file_list = list(self._iter_indexable_files(root, ignore_spec))
+        total_files = len(file_list)
+        self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index")
 
+        for idx, file_path in enumerate(file_list, 1):
+            try:
+                source = file_path.read_text(encoding="utf-8", errors="ignore")
+                if file_path.suffix == ".py":
+                    chunks.extend(chunk_python_file(repo_id, commit_sha, file_path, source))
+                else:
+                    chunks.extend(self.generic_chunk_file(repo_id, commit_sha, file_path, source))
+                
+                # Update progress every 10 files or at completion
+                if idx % 10 == 0 or idx == total_files:
+                    self._update_progress(indexing_job_id, idx, total_files, f"Indexed {idx}/{total_files} files ({len(chunks)} chunks)")
+            except Exception as exc:
+                # Log but continue on file-level errors
+                self._update_progress(indexing_job_id, idx, total_files, f"Error in {file_path.name}: {str(exc)[:100]}")
+                continue
+
+        self._update_progress(indexing_job_id, total_files, total_files, f"Storing {len(chunks)} chunks...")
         self._upsert_chunks(chunks)
         return len(chunks)
 
@@ -223,7 +265,9 @@ class IndexingService:
             content = "\n".join(chunk_lines)
             start_line = i + 1
             end_line = min(i + chunk_size, len(lines))
-            chunk_id = f"{repo_id}|{file_path}|{start_line}|{end_line}"
+            # Use UUID5 for deterministic, Qdrant-compatible IDs
+            raw_key = f"{repo_id}|{file_path}|{start_line}|{end_line}"
+            chunk_id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
             chunks.append(
                 CodeChunk(
                     id=chunk_id,
@@ -244,8 +288,17 @@ class IndexingService:
         if not chunks:
             return
 
-        self.qdrant.ensure_collection()
+        # Qdrant is optional — if unavailable, chunks are stored Postgres-only
+        qdrant_available = False
+        try:
+            self.qdrant.ensure_collection()
+            qdrant_available = True
+        except RuntimeError:
+            pass
 
+        # Single SQL that works for both NULL and non-NULL embedding values.
+        # COALESCE on update: keep existing embedding if the new value is NULL
+        # (lets re-indexing without Ollama preserve previously-generated embeddings).
         stmt = text(
             """
             INSERT INTO code_chunks (
@@ -258,50 +311,73 @@ class IndexingService:
             )
             ON CONFLICT (id) DO UPDATE SET
               commit_sha = EXCLUDED.commit_sha,
-              content = EXCLUDED.content,
-              metadata = EXCLUDED.metadata,
-              embedding = EXCLUDED.embedding
+              content    = EXCLUDED.content,
+              metadata   = EXCLUDED.metadata,
+              embedding  = COALESCE(EXCLUDED.embedding, code_chunks.embedding)
             """
         )
 
         qdrant_points: list[dict] = []
         for chunk in chunks:
-            embedding = self.embedder.embed_text(chunk.content)
-            validate_embedding_dimension(embedding)
-            vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
-            self.session.execute(
-                stmt,
-                {
-                    "id": chunk.id,
-                    "repo_id": chunk.repo_id,
-                    "commit_sha": chunk.commit_sha,
-                    "path": chunk.path,
-                    "language": chunk.language,
-                    "symbol": chunk.symbol,
-                    "chunk_type": chunk.chunk_type,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "content": chunk.content,
-                    "metadata": "{}",
-                    "embedding": vector_literal,
-                },
-            )
+            # Try to generate embedding — Ollama is required for dense search
+            # but it is not required for the chunk to be stored or lexically searched.
+            embedding_list: list[float] | None = None
+            vector_literal: str | None = None
+            try:
+                embedding_list = self.embedder.embed_text(chunk.content)
+                validate_embedding_dimension(embedding_list)
+                vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding_list) + "]"
+            except RuntimeError:
+                pass  # Ollama unavailable; chunk stored without embedding vector
 
-            qdrant_points.append(
-                {
-                    "id": chunk.id,
-                    "vector": embedding,
-                    "payload": {
+            try:
+                self.session.execute(
+                    stmt,
+                    {
+                        "id": chunk.id,
                         "repo_id": chunk.repo_id,
+                        "commit_sha": chunk.commit_sha,
                         "path": chunk.path,
-                        "symbol": chunk.symbol,
                         "language": chunk.language,
+                        "symbol": chunk.symbol,
                         "chunk_type": chunk.chunk_type,
                         "start_line": chunk.start_line,
                         "end_line": chunk.end_line,
+                        "content": chunk.content,
+                        "metadata": "{}",
+                        "embedding": vector_literal,  # None → SQL NULL (nullable column)
                     },
-                }
-            )
+                )
+            except Exception:
+                # Roll back this failed insert and keep going with the rest.
+                self.session.rollback()
+                continue
 
-        self.session.commit()
-        self.qdrant.upsert_points(qdrant_points)
+            if qdrant_available and embedding_list is not None:
+                qdrant_points.append(
+                    {
+                        "id": chunk.id,  # UUID5 string — valid Qdrant point ID
+                        "vector": embedding_list,
+                        "payload": {
+                            "repo_id": chunk.repo_id,
+                            "path": chunk.path,
+                            "symbol": chunk.symbol,
+                            "language": chunk.language,
+                            "chunk_type": chunk.chunk_type,
+                            "start_line": chunk.start_line,
+                            "end_line": chunk.end_line,
+                        },
+                    }
+                )
+
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+
+        if qdrant_available and qdrant_points:
+            try:
+                self.qdrant.upsert_points(qdrant_points)
+            except RuntimeError:
+                pass  # Qdrant write failed; dense search falls back to Postgres

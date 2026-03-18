@@ -14,6 +14,25 @@ npm run dev
 
 Frontend URL: `http://localhost:3000`
 
+Flow diagram (Mermaid)
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant F as NextJS_Frontend
+  participant B as FastAPI_Backend
+  U->>F: POST /api/auth/login
+  U->>F: POST /api/projects (create/select)
+  U->>F: POST /api/projects/:id/repositories (add repo)
+  U->>F: POST /api/index (trigger)
+  F->>B: POST /v1/index (proxy)
+  B-->>F: 202 Accepted
+  Note over B: Background indexing job writes to Postgres and Qdrant
+  U->>F: POST /api/chat
+  F->>B: POST /v1/chat
+  B-->>F: chat answer
+```
+
 ## Application Routes
 
 ### Public Routes
@@ -133,6 +152,28 @@ These routes forward requests to the backend base URL defined in `src/lib/backen
 - Backend URL defaults to `http://localhost:8000/v1`.
 - Session state is stored client-side.
 - The dashboard behavior changes by role: admins see platform metrics, non-admins see project summaries.
+
+Quick dev start (Windows PowerShell)
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Environment variables
+
+- `NEXT_PUBLIC_API_URL` — browser-accessible backend base URL (e.g. `http://localhost:8000/v1`)
+- `API_INTERNAL_URL` — server-side internal URL used by Next proxy routes when available
+
+If you run the backend in Docker and the frontend on the host, set `NEXT_PUBLIC_API_URL` to the host-accessible backend address.
+
+Indexing and proxy routes
+
+- The frontend uses lightweight proxy routes under `/api/*` to forward requests to the backend base URL configured by `frontend/src/lib/backend-url.ts`.
+- The repository UI triggers `POST /api/index` which forwards to the backend `POST /v1/index` endpoint. The backend now returns `202 Accepted` and performs indexing in the background; the UI will show an indexing status badge.
+
+
 
 ## Environment Variables and Configuration
 

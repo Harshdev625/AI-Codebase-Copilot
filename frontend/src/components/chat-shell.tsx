@@ -1,7 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Send, Bot, User, FileCode, Zap, AlertCircle } from "lucide-react";
+import { Send, Bot, User, FileCode, Zap, AlertCircle, Plus, Copy, Check, Building, Bug, RefreshCw, BookOpen } from "lucide-react";
+import Link from "next/link";
 import { sendChat } from "@/lib/api";
 
 type Source   = { path?: string; symbol?: string };
@@ -15,10 +16,10 @@ type Message  = {
 };
 
 const SUGGESTIONS = [
-  "Where is authentication implemented?",
-  "Explain the indexing pipeline flow.",
-  "How does the RAG retrieval work?",
-  "List all API endpoints available.",
+  { icon: Building, text: "Explain the architecture" },
+  { icon: Bug, text: "Help me debug this" },
+  { icon: RefreshCw, text: "How to refactor this?" },
+  { icon: BookOpen, text: "Generate documentation" },
 ];
 
 export function ChatShell() {
@@ -28,6 +29,7 @@ export function ChatShell() {
   const [loading,  setLoading]  = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -90,23 +92,29 @@ export function ChatShell() {
     submit(input);
   }
 
+  function copyToClipboard(text: string, idx: number) {
+    navigator.clipboard.writeText(text);
+    setCopied(idx);
+    setTimeout(() => setCopied(null), 2000);
+  }
+
   return (
-    <div className="flex h-full flex-col gap-0 overflow-hidden rounded-xl border border-border bg-surface shadow-card" style={{ height: "calc(100vh - 8rem)" }}>
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-dim ring-1 ring-primary/30">
-            <Bot className="h-4 w-4 text-primary" />
+    <div className="flex h-full flex-col gap-0 overflow-hidden rounded-2xl border border-border bg-gradient-to-b from-surface to-background shadow-2xl" style={{ height: "calc(100vh - 8rem)" }}>
+      {/* ── Modern Header ──────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between border-b border-border/50 bg-gradient-to-r from-blue-600/10 to-purple-600/10 px-6 py-4">
+        <div className="flex items-center gap-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 shadow-lg">
+            <Bot className="h-5 w-5 text-white" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-text">Copilot Chat</p>
-            <p className="text-xs text-subtle">Agentic RAG · Semantic Search</p>
+            <p className="font-bold text-text text-lg">AI Code Assistant</p>
+            <p className="text-xs text-muted">Semantic search · Agentic RAG · Real-time answers</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted">Repo ID:</label>
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-muted">Repository:</label>
           <select
-            className="w-36 rounded-lg border border-border bg-surface2 px-2.5 py-1 text-xs text-text focus:border-primary/50 focus:outline-none"
+            className="rounded-lg border border-border/50 bg-surface2 hover:bg-surface2 px-3.5 py-2 text-sm text-text focus:border-blue-500/50 focus:outline-none focus:ring-1 focus:ring-blue-500/20 transition-all"
             value={repoId}
             onChange={(e) => setRepoId(e.target.value)}
           >
@@ -118,97 +126,160 @@ export function ChatShell() {
         </div>
       </div>
 
-      {/* ── Messages ────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+      {/* ── Chat Messages ──────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6 scroll-smooth">
         {messages.length === 0 && (
-          <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-dim ring-1 ring-primary/30">
-              <Zap className="h-8 w-8 text-primary" />
+          <div className="flex h-full flex-col items-center justify-center gap-8 text-center py-12">
+            <div className="space-y-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-3xl mx-auto bg-gradient-to-br from-blue-500/20 to-purple-500/20 ring-1 ring-blue-500/30">
+                <Zap className="h-10 w-10 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-text">Ask about your code</p>
+                <p className="mt-2 text-sm text-muted max-w-md mx-auto">Ask questions about architecture, debugging, refactoring, and more</p>
+              </div>
+              {setupError && (
+                <div className="mt-4 flex flex-col items-center gap-3 p-4 rounded-xl bg-orange-50 border border-orange-200">
+                  <div className="flex items-center gap-2 text-orange-700 text-sm font-medium">
+                    <AlertCircle className="h-4 w-4" />
+                    {setupError}
+                  </div>
+                  <Link
+                    href="/repositories"
+                    className="inline-flex items-center gap-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 text-sm font-semibold transition-all"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Go to Repositories
+                  </Link>
+                </div>
+              )}
             </div>
-            <div>
-              <p className="text-lg font-semibold text-text">Ask anything about your codebase</p>
-              <p className="mt-1 text-sm text-muted">Architecture, debugging, refactoring, or documentation — I can help.</p>
-              {setupError && <p className="mt-2 text-xs text-danger">{setupError}</p>}
-            </div>
-            <div className="grid w-full max-w-md grid-cols-2 gap-2">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => submit(s)}
-                  className="rounded-lg border border-border bg-surface2 px-3 py-2 text-left text-xs text-muted transition-colors hover:border-primary/30 hover:bg-primary-dim hover:text-primary"
-                >
-                  {s}
-                </button>
-              ))}
+            
+            {/* Suggestion Grid */}
+            <div className="grid w-full max-w-2xl grid-cols-2 gap-3">
+              {SUGGESTIONS.map((s, i) => {
+                const IconComponent = s.icon;
+                return (
+                  <button
+                    key={i}
+                    onClick={() => submit(s.text)}
+                    className="group p-4 rounded-xl border border-border/50 bg-surface2/50 hover:bg-gradient-to-br hover:from-blue-500/10 hover:to-purple-500/10 hover:border-blue-500/30 transition-all text-left"
+                  >
+                    <IconComponent className="h-6 w-6 mb-2 text-blue-600 group-hover:text-purple-600 transition-colors" />
+                    <p className="text-sm font-medium text-text group-hover:text-blue-600 transition-colors">{s.text}</p>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
 
         {messages.map((msg, idx) => (
-          <div key={idx} className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+          <div key={idx} className={`flex gap-4 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"} animate-fade-in`}>
             {/* Avatar */}
-            <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ring-1 ${
+            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 flex-none ${
               msg.role === "user"
-                ? "bg-accent-dim ring-accent/30"
+                ? "bg-gradient-to-br from-blue-500 to-blue-600 ring-blue-500/30"
                 : msg.error
-                  ? "bg-danger-dim ring-danger/30"
-                  : "bg-primary-dim ring-primary/30"
+                  ? "bg-gradient-to-br from-red-500 to-red-600 ring-red-500/30"
+                  : "bg-gradient-to-br from-purple-500 to-purple-600 ring-purple-500/30"
             }`}>
               {msg.role === "user"
-                ? <User className="h-4 w-4 text-accent" />
+                ? <User className="h-4 w-4 text-white" />
                 : msg.error
-                  ? <AlertCircle className="h-4 w-4 text-danger" />
-                  : <Bot className="h-4 w-4 text-primary" />
+                  ? <AlertCircle className="h-4 w-4 text-white" />
+                  : <Bot className="h-4 w-4 text-white" />
               }
             </div>
 
-            {/* Bubble */}
-            <div className={`max-w-[80%] space-y-2 ${msg.role === "user" ? "items-end" : ""}`}>
+            {/* Content */}
+            <div className={`max-w-2xl space-y-2 ${msg.role === "user" ? "items-end" : "items-start"}`}>
               {msg.intent && (
-                <span className="badge badge-cyan mb-1">
-                  <Zap className="h-2.5 w-2.5" /> {msg.intent}
-                </span>
+                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold w-fit">
+                  <Zap className="h-3 w-3" />
+                  {msg.intent}
+                </div>
               )}
-              <div className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+              
+              <div className={`rounded-2xl px-4 py-3 ${
                 msg.role === "user"
-                  ? "bg-accent/10 text-text ring-1 ring-accent/20"
+                  ? "bg-blue-600 text-white shadow-md"
                   : msg.error
-                    ? "bg-danger-dim text-danger ring-1 ring-danger/20"
-                    : "bg-surface2 text-text ring-1 ring-border"
+                    ? "bg-red-50 text-red-900 border border-red-200"
+                    : "bg-surface2 border border-border/50 text-text shadow-sm"
               }`}>
-                <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
+                <div className="text-sm leading-relaxed whitespace-pre-wrap font-normal">{msg.content}</div>
               </div>
 
               {/* Sources */}
               {msg.sources && msg.sources.length > 0 && (
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
-                    <FileCode className="h-3 w-3" /> Sources
+                <div className="rounded-xl border border-border/50 bg-surface2/50 px-4 py-3 mt-2">
+                  <p className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted">
+                    <FileCode className="h-3.5 w-3.5" />
+                    Sources ({msg.sources.length})
                   </p>
-                  <ul className="space-y-1">
+                  <div className="space-y-1.5">
                     {msg.sources.map((src, i) => (
-                      <li key={i} className="truncate text-xs text-subtle">
-                        <span className="text-primary">{src.path ?? "unknown"}</span>
-                        {src.symbol && <span className="text-muted"> · {src.symbol}</span>}
-                      </li>
+                      <div key={i} className="p-2 rounded-lg bg-background/50 hover:bg-background transition-colors group">
+                        <div className="flex items-center justify-between gap-2">
+                          <code className="text-xs text-blue-600 font-mono">
+                            {src.path ?? "unknown"}
+                            {src.symbol && <span className="text-muted"> · {src.symbol}</span>}
+                          </code>
+                          <button
+                            onClick={() => copyToClipboard(`${src.path}${src.symbol ? ` · ${src.symbol}` : ""}`, idx)}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-border rounded"
+                            title="Copy"
+                          >
+                            {copied === idx ? (
+                              <Check className="h-3 w-3 text-green-600" />
+                            ) : (
+                              <Copy className="h-3 w-3 text-muted" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 </div>
+              )}
+
+              {msg.role === "assistant" && !msg.error && (
+                <button
+                  onClick={() => copyToClipboard(msg.content, idx)}
+                  className="text-xs text-muted hover:text-text transition-colors flex items-center gap-1.5"
+                  title="Copy response"
+                >
+                  {copied === idx ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" />
+                      Copy
+                    </>
+                  )}
+                </button>
               )}
             </div>
           </div>
         ))}
 
-        {/* Typing indicator */}
+        {/* Loading indicator */}
         {loading && (
-          <div className="flex gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-dim ring-1 ring-primary/30">
-              <Bot className="h-4 w-4 text-primary" />
+          <div className="flex gap-4 animate-fade-in">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 flex-none">
+              <Bot className="h-4 w-4 text-white" />
             </div>
-            <div className="flex items-center rounded-xl bg-surface2 px-4 py-3 ring-1 ring-border">
-              <span className="animate-typing">
-                <span /><span /><span />
-              </span>
+            <div className="flex items-center rounded-2xl bg-surface2 border border-border/50 px-4 py-3 gap-2">
+              <div className="flex gap-1">
+                <div className="h-2 w-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "0s" }} />
+                <div className="h-2 w-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "0.2s" }} />
+                <div className="h-2 w-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: "0.4s" }} />
+              </div>
+              <span className="text-xs text-muted">Thinking...</span>
             </div>
           </div>
         )}
@@ -216,27 +287,34 @@ export function ChatShell() {
         <div ref={bottomRef} />
       </div>
 
-      {/* ── Input bar ───────────────────────────────────────────── */}
-      <div className="border-t border-border p-4">
+      {/* ── Input Bar ───────────────────────────────────────────── */}
+      <div className="border-t border-border/50 bg-gradient-to-t from-background to-surface/50 p-5">
         <form onSubmit={onSubmit} className="flex gap-3">
           <input
-            className="input-base flex-1"
-            placeholder="Ask about your codebase…"
+            className="flex-1 rounded-xl border border-border/50 bg-surface2 px-4 py-3 text-sm text-text placeholder-muted focus:border-blue-500/50 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
+            placeholder="Ask anything about your code…"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={loading}
           />
           <button
             type="submit"
-            disabled={loading || !input.trim() || !repoId || !!setupError}
-            className="btn-primary shrink-0 px-3"
+            disabled={loading || !input.trim() || !repoId}
+            className="flex items-center justify-center h-11 w-11 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white hover:shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed transition-all shrink-0"
+            title="Send message"
           >
-            <Send className="h-4 w-4" />
+            <Send className="h-5 w-5" />
           </button>
         </form>
-        <p className="mt-2 text-xs text-subtle">
-          Press Enter to send · Results powered by Ollama + Qdrant RAG
-        </p>
+        <div className="mt-2 flex items-center justify-between">
+          <p className="text-xs text-subtle">
+            {!repoId && !setupError
+              ? "Select a repository above to start chatting."
+              : setupError
+                ? "Index a repository first before chatting."
+                : "Results powered by local RAG + semantic search"}
+          </p>
+        </div>
       </div>
     </div>
   );

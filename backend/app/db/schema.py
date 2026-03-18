@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
   message TEXT,
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -105,6 +106,28 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   finished_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS code_chunks (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  commit_sha TEXT NOT NULL DEFAULT 'local',
+  path TEXT NOT NULL,
+  language TEXT NOT NULL DEFAULT '',
+  symbol TEXT NOT NULL DEFAULT '',
+  chunk_type TEXT NOT NULL DEFAULT 'generic',
+  start_line INTEGER NOT NULL DEFAULT 1,
+  end_line INTEGER NOT NULL DEFAULT 1,
+  content TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  embedding VECTOR(1024),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repo_id);
+CREATE INDEX IF NOT EXISTS idx_code_chunks_path ON code_chunks(path);
+CREATE INDEX IF NOT EXISTS idx_code_chunks_language ON code_chunks(language);
+CREATE INDEX IF NOT EXISTS idx_code_chunks_content_fts
+  ON code_chunks USING gin(to_tsvector('english', content));
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_memberships_user ON project_memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_project ON project_memberships(project_id);
@@ -125,6 +148,16 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_repo_id ON agent_runs(repo_id);
 def ensure_app_schema() -> None:
     with engine.begin() as connection:
         connection.execute(text(APP_SCHEMA_SQL))
+
+        # Migration: make code_chunks.embedding nullable so indexing can proceed
+        # even when Ollama is unavailable.  Safe to run on any existing schema —
+        # DROP NOT NULL on an already-nullable column is a no-op in Postgres.
+        connection.execute(
+            text(
+                "ALTER TABLE IF EXISTS code_chunks "
+                "ALTER COLUMN embedding DROP NOT NULL"
+            )
+        )
 
         admin_email = settings.bootstrap_admin_email.strip().lower()
         admin_password = settings.bootstrap_admin_password

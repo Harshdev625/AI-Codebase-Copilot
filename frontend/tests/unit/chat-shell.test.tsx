@@ -31,7 +31,7 @@ describe("ChatShell", () => {
     render(<ChatShell />);
 
     expect(await screen.findByDisplayValue("my-repo")).toBeInTheDocument();
-    expect(screen.getByText("Copilot Chat")).toBeInTheDocument();
+    expect(screen.getByText("AI Code Assistant")).toBeInTheDocument();
   });
 
   it("submits request and renders answer with sources", async () => {
@@ -43,7 +43,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…");
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…");
     fireEvent.change(queryInput, { target: { value: "Where is auth?" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -61,7 +61,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…");
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…");
     fireEvent.change(queryInput, { target: { value: "Where is auth?" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -84,7 +84,7 @@ describe("ChatShell", () => {
   it("handles empty query submission gracefully", async () => {
     render(<ChatShell />);
 
-    const form = await screen.findByPlaceholderText("Ask about your codebase…").then(el => el.closest("form"));
+    const form = await screen.findByPlaceholderText("Ask anything about your code…").then(el => el.closest("form"));
     fireEvent.submit(form!);
 
     // Should not call sendChat if query is empty
@@ -104,7 +104,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…");
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…");
     fireEvent.change(queryInput, { target: { value: "Show all auth code" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -125,7 +125,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…") as HTMLInputElement;
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…") as HTMLInputElement;
     fireEvent.change(queryInput, { target: { value: "Test query" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -178,7 +178,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…");
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…");
     fireEvent.change(queryInput, { target: { value: "Explain the architecture" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -192,7 +192,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…");
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…");
     fireEvent.change(queryInput, { target: { value: "Test query" } });
     fireEvent.submit(queryInput.closest("form")!);
 
@@ -209,7 +209,7 @@ describe("ChatShell", () => {
 
     render(<ChatShell />);
 
-    const queryInput = await screen.findByPlaceholderText("Ask about your codebase…") as HTMLInputElement;
+    const queryInput = await screen.findByPlaceholderText("Ask anything about your code…") as HTMLInputElement;
     fireEvent.change(queryInput, { target: { value: "Test query" } });
     fireEvent.submit(queryInput.closest("form")!);
 

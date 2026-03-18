@@ -20,7 +20,7 @@ describe("Sidebar", () => {
 
     render(<Sidebar />);
 
-    expect(screen.queryByText("Admin")).not.toBeInTheDocument();
+    expect(screen.queryByText("Admin Panel")).not.toBeInTheDocument();
   });
 
   it("shows admin link for admin users", async () => {
@@ -31,7 +31,7 @@ describe("Sidebar", () => {
 
     render(<Sidebar />);
 
-    expect(await screen.findByText("Admin")).toBeInTheDocument();
+    expect(await screen.findByText("Admin Panel")).toBeInTheDocument();
   });
 
   it("renders dashboard link for all authenticated users", async () => {
@@ -64,7 +64,7 @@ describe("Sidebar", () => {
 
     render(<Sidebar />);
 
-    const adminLink = await screen.findByText("Admin");
+    const adminLink = await screen.findByText("Admin Panel");
     expect(adminLink).toBeInTheDocument();
   });
 

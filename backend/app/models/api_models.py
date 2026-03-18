@@ -41,6 +41,7 @@ class IndexRequest(BaseModel):
 class IndexResponse(BaseModel):
     indexed_chunks: int
     status: Literal["ok"] = "ok"
+    snapshot_id: str | None = None
 
 
 class ToolRequest(BaseModel):

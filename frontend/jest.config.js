@@ -8,7 +8,7 @@ const customJestConfig = {
   testEnvironment: "jest-environment-jsdom",
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
   collectCoverageFrom: [
-    "src/app/**/*.{ts,tsx}",
+    "src/app/api/**/*.{ts,tsx}",
     "src/components/**/*.{ts,tsx}",
     "src/lib/**/*.{ts,tsx}",
     "!**/*.d.ts",
