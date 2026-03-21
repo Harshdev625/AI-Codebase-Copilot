@@ -5,6 +5,7 @@ from collections.abc import Generator
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -60,6 +61,30 @@ def _create_schema(session: Session) -> None:
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """,
+                """
+                CREATE TABLE repository_snapshots (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    commit_sha TEXT,
+                    branch TEXT,
+                    index_status TEXT,
+                    stats TEXT DEFAULT '{}',
+                    indexed_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
+                """
+                CREATE TABLE indexing_jobs (
+                    id TEXT PRIMARY KEY,
+                    repository_id TEXT NOT NULL,
+                    snapshot_id TEXT NOT NULL,
+                    status TEXT,
+                    message TEXT,
+                    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TEXT,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+                """,
         """
         CREATE TABLE conversations (
           id TEXT PRIMARY KEY,
@@ -109,6 +134,11 @@ def session_factory() -> Generator[sessionmaker, None, None]:
         poolclass=StaticPool,
         future=True,
     )
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_now(conn, _record):  # type: ignore[no-untyped-def]
+        conn.create_function("NOW", 0, lambda: "2026-01-01 00:00:00")
+
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     session = SessionLocal()
     try:
@@ -256,3 +286,65 @@ def test_create_and_list_conversation(client: TestClient, session_factory: sessi
     )
     assert list_messages.status_code == 200
     assert list_messages.json() == []
+
+
+def test_index_uses_repository_source_and_returns_progress(
+    client: TestClient,
+    session_factory: sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.v1 import repositories as repositories_module
+
+    _insert_user(session_factory, "u-4", "index@example.com")
+    token = _login(client, "index@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_project = client.post(
+        "/v1/projects",
+        json={"name": "IndexProject", "description": "index flow"},
+        headers=headers,
+    )
+    assert create_project.status_code == 201
+    project_id = create_project.json()["id"]
+
+    repo_id = "index-repo"
+    add_repo = client.post(
+        f"/v1/projects/{project_id}/repositories",
+        json={
+            "repo_id": repo_id,
+            "remote_url": "https://github.com/example/index-repo",
+            "local_path": None,
+            "default_branch": "main",
+        },
+        headers=headers,
+    )
+    assert add_repo.status_code == 201
+
+    captured = {}
+
+    def fake_index_repository(self, **kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return 7
+
+    def fake_generate_embeddings(self, **kwargs):  # type: ignore[no-untyped-def]
+        return {}
+
+    monkeypatch.setattr(repositories_module.IndexingService, "index_repository", fake_index_repository)
+    monkeypatch.setattr(repositories_module.IndexingService, "generate_embeddings_for_chunks", fake_generate_embeddings)
+
+    index_response = client.post(
+        "/v1/index",
+        json={"repo_id": repo_id},
+        headers=headers,
+    )
+    assert index_response.status_code == 202
+    snapshot_id = index_response.json()["snapshot_id"]
+
+    assert captured["repo_id"] == repo_id
+    assert captured["repo_url"] == "https://github.com/example/index-repo"
+    assert captured["repo_ref"] == "main"
+
+    progress_response = client.get(f"/v1/index/progress/{snapshot_id}", headers=headers)
+    assert progress_response.status_code == 200
+    assert progress_response.json()["snapshot_id"] == snapshot_id
+    assert progress_response.json()["index_status"] in {"running", "completed", "failed"}

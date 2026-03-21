@@ -285,20 +285,16 @@ class IndexingService:
         return chunks
 
     def _upsert_chunks(self, chunks: list[CodeChunk]) -> None:
+        """Store chunks in PostgreSQL WITHOUT embeddings.
+        
+        Embeddings are generated separately in a non-blocking way.
+        This ensures chunks are persisted for lexical search immediately.
+        """
         if not chunks:
             return
 
-        # Qdrant is optional — if unavailable, chunks are stored Postgres-only
-        qdrant_available = False
-        try:
-            self.qdrant.ensure_collection()
-            qdrant_available = True
-        except RuntimeError:
-            pass
-
-        # Single SQL that works for both NULL and non-NULL embedding values.
-        # COALESCE on update: keep existing embedding if the new value is NULL
-        # (lets re-indexing without Ollama preserve previously-generated embeddings).
+        # Single SQL that works with NULL embedding values.
+        # Embedding is optional — chunks can be searched lexically without vectors.
         stmt = text(
             """
             INSERT INTO code_chunks (
@@ -307,29 +303,18 @@ class IndexingService:
             ) VALUES (
               :id, :repo_id, :commit_sha, :path, :language, :symbol,
               :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
-              CAST(:embedding AS vector)
+              NULL
             )
             ON CONFLICT (id) DO UPDATE SET
               commit_sha = EXCLUDED.commit_sha,
               content    = EXCLUDED.content,
-              metadata   = EXCLUDED.metadata,
-              embedding  = COALESCE(EXCLUDED.embedding, code_chunks.embedding)
+              metadata   = EXCLUDED.metadata
             """
         )
 
-        qdrant_points: list[dict] = []
+        # Store all chunks without embeddings (blocking insert only)
+        stored_count = 0
         for chunk in chunks:
-            # Try to generate embedding — Ollama is required for dense search
-            # but it is not required for the chunk to be stored or lexically searched.
-            embedding_list: list[float] | None = None
-            vector_literal: str | None = None
-            try:
-                embedding_list = self.embedder.embed_text(chunk.content)
-                validate_embedding_dimension(embedding_list)
-                vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding_list) + "]"
-            except RuntimeError:
-                pass  # Ollama unavailable; chunk stored without embedding vector
-
             try:
                 self.session.execute(
                     stmt,
@@ -345,30 +330,13 @@ class IndexingService:
                         "end_line": chunk.end_line,
                         "content": chunk.content,
                         "metadata": "{}",
-                        "embedding": vector_literal,  # None → SQL NULL (nullable column)
                     },
                 )
+                stored_count += 1
             except Exception:
                 # Roll back this failed insert and keep going with the rest.
                 self.session.rollback()
                 continue
-
-            if qdrant_available and embedding_list is not None:
-                qdrant_points.append(
-                    {
-                        "id": chunk.id,  # UUID5 string — valid Qdrant point ID
-                        "vector": embedding_list,
-                        "payload": {
-                            "repo_id": chunk.repo_id,
-                            "path": chunk.path,
-                            "symbol": chunk.symbol,
-                            "language": chunk.language,
-                            "chunk_type": chunk.chunk_type,
-                            "start_line": chunk.start_line,
-                            "end_line": chunk.end_line,
-                        },
-                    }
-                )
 
         try:
             self.session.commit()
@@ -376,8 +344,46 @@ class IndexingService:
             self.session.rollback()
             raise
 
-        if qdrant_available and qdrant_points:
+    def generate_embeddings_for_chunks(self, repo_id: str, chunk_ids: list[str] | None = None) -> dict[str, list[float]]:
+        """Generate embeddings for chunks in a non-blocking way.
+        
+        This is called separately after chunks are stored, allowing the indexing job
+        to complete quickly. Embeddings are optional for lexical search.
+        
+        Returns: dict mapping chunk_id -> embedding_vector
+        """
+        generated = {}
+        
+        if not chunk_ids:
+            # Get chunks without embeddings
+            chunks = self.session.execute(
+                text("SELECT id, content FROM code_chunks WHERE repo_id = :repo_id AND embedding IS NULL LIMIT 100"),
+                {"repo_id": repo_id},
+            ).fetchall()
+        else:
+            chunks = self.session.execute(
+                text("SELECT id, content FROM code_chunks WHERE id IN :ids"),
+                {"ids": chunk_ids},
+            ).fetchall()
+        
+        for chunk_id, content in chunks:
             try:
-                self.qdrant.upsert_points(qdrant_points)
-            except RuntimeError:
-                pass  # Qdrant write failed; dense search falls back to Postgres
+                embedding_list = self.embedder.embed_text(content)
+                validate_embedding_dimension(embedding_list)
+                vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding_list) + "]"
+                
+                self.session.execute(
+                    text("UPDATE code_chunks SET embedding = CAST(:embedding AS vector) WHERE id = :id"),
+                    {"id": chunk_id, "embedding": vector_literal},
+                )
+                generated[chunk_id] = embedding_list
+            except Exception:
+                # Skip failed embeddings; chunk remains searchable lexically
+                continue
+        
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+        
+        return generated

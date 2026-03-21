@@ -31,12 +31,6 @@ class IndexRequest(BaseModel):
     repo_ref: str | None = None
     commit_sha: str = "local-working-copy"
 
-    @model_validator(mode="after")
-    def validate_source(self) -> "IndexRequest":
-        if not self.repo_path and not self.repo_url:
-            raise ValueError("Provide either repo_path or repo_url")
-        return self
-
 
 class IndexResponse(BaseModel):
     indexed_chunks: int

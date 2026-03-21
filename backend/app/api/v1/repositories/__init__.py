@@ -179,6 +179,16 @@ def index_repo(
 
     repository_row = ensure_repository_access(session, req.repo_id, current_user["id"])
     repository_db_id = repository_row["id"]
+    effective_repo_path = req.repo_path or repository_row.get("local_path")
+    effective_repo_url = req.repo_url or repository_row.get("remote_url")
+    effective_repo_ref = req.repo_ref or repository_row.get("default_branch") or "main"
+
+    if not effective_repo_path and not effective_repo_url:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Repository source missing: set local_path or remote_url on repository, or pass repo_path/repo_url in request",
+        )
+
     if repository_db_id is not None:
         session.execute(
             text(
@@ -191,7 +201,7 @@ def index_repo(
                 "id": snapshot_id,
                 "repository_id": repository_db_id,
                 "commit_sha": req.commit_sha,
-                "branch": req.repo_ref or "main",
+                "branch": effective_repo_ref,
             },
         )
         session.execute(
@@ -281,17 +291,37 @@ def index_repo(
         finally:
             db.close()
 
+    def _background_embedding_job(repo_id: str) -> None:
+        """
+        Generate embeddings for chunks AFTER indexing completes.
+        This runs separately to avoid blocking the indexing job.
+        Chunks are already searchable lexically; embeddings enable vector search.
+        """
+        import time
+        db = SessionLocal()
+        try:
+            # Wait a bit to ensure chunk storage is fully committed
+            time.sleep(2)
+            IndexingService(db).generate_embeddings_for_chunks(repo_id=repo_id)
+        except Exception:
+            pass  # Embedding generation failure is non-critical
+        finally:
+            db.close()
+
     background_tasks.add_task(
         _background_index_job,
         req.repo_id,
-        req.repo_path,
-        req.repo_url,
-        req.repo_ref,
+        effective_repo_path,
+        effective_repo_url,
+        effective_repo_ref,
         req.commit_sha,
         repository_db_id,
         snapshot_id,
         indexing_job_id,
     )
+
+    # Schedule embedding generation to run after indexing completes
+    background_tasks.add_task(_background_embedding_job, req.repo_id)
 
     return IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id)
 
@@ -318,13 +348,17 @@ def get_index_progress(
     if not row:
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
+    started_at = row["started_at"]
+    if started_at is not None and hasattr(started_at, "isoformat"):
+        started_at = started_at.isoformat()
+
     return {
         "snapshot_id": snapshot_id,
         "index_status": row["index_status"],
         "job_status": row["status"],
         "message": row["message"] or "Indexing in progress...",
         "stats": row["stats"] or {},
-        "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+        "started_at": started_at,
     }
 
 
