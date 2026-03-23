@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     vector_dim: int = 1024
     max_retrieval_k: int = 12
     repo_cache_dir: str = ".repo_cache"
+    repo_cache_persist: bool = False
     max_index_file_size_bytes: int = 1_000_000
 
     jwt_secret_key: str = "change-me-in-production"

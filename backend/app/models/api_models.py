@@ -106,6 +106,12 @@ class RepositoryResponse(BaseModel):
     local_path: str | None = None
     default_branch: str
     created_at: str
+    latest_index_status: str | None = None
+    latest_index_stats: dict[str, Any] | None = None
+    latest_indexed_chunks: int | None = None
+    has_completed_index: bool = False
+    latest_completed_index_stats: dict[str, Any] | None = None
+    latest_completed_indexed_chunks: int | None = None
 
 
 class CreateConversationRequest(BaseModel):

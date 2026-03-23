@@ -249,6 +249,52 @@ def test_add_and_list_repositories_for_project(client: TestClient, session_facto
     assert list_repo.json()[0]["repo_id"] == "demo-repo"
 
 
+def test_add_repository_duplicate_repo_id_returns_conflict(
+    client: TestClient,
+    session_factory: sessionmaker,
+) -> None:
+    _insert_user(session_factory, "u-5", "dup@example.com")
+    token = _login(client, "dup@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    project_one = client.post(
+        "/v1/projects",
+        json={"name": "RepoProjectOne", "description": None},
+        headers=headers,
+    )
+    project_two = client.post(
+        "/v1/projects",
+        json={"name": "RepoProjectTwo", "description": None},
+        headers=headers,
+    )
+    project_one_id = project_one.json()["id"]
+    project_two_id = project_two.json()["id"]
+
+    first_add = client.post(
+        f"/v1/projects/{project_one_id}/repositories",
+        json={
+            "repo_id": "dup-repo",
+            "remote_url": "https://github.com/example/dup-repo",
+            "local_path": None,
+            "default_branch": "main",
+        },
+        headers=headers,
+    )
+    assert first_add.status_code == 201
+
+    duplicate_add = client.post(
+        f"/v1/projects/{project_two_id}/repositories",
+        json={
+            "repo_id": "dup-repo",
+            "remote_url": "https://github.com/example/dup-repo2",
+            "local_path": None,
+            "default_branch": "main",
+        },
+        headers=headers,
+    )
+    assert duplicate_add.status_code == 409
+
+
 def test_create_and_list_conversation(client: TestClient, session_factory: sessionmaker) -> None:
     _insert_user(session_factory, "u-3", "chat@example.com")
     token = _login(client, "chat@example.com")

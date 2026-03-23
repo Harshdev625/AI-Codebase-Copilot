@@ -37,10 +37,28 @@ class QueryService:
             context_parts.append(f"File: {path} | Symbol: {symbol}\n{content}")
         assembled_context = "\n\n---\n\n".join(context_parts)
 
-        llm_answer = self.model_router.chat(prompt=query, context=assembled_context)
+        try:
+            llm_answer = self.model_router.chat(prompt=query, context=assembled_context)
+        except RuntimeError:
+            llm_answer = self._build_fallback_answer(snippets)
+
         if llm_answer:
             result["answer"] = llm_answer
 
         safe_result = json.loads(json.dumps(result, default=str))
         self.cache.set_json(cache_key, safe_result)
         return safe_result
+
+    def _build_fallback_answer(self, snippets: list[dict]) -> str:
+        if not snippets:
+            return "I could not reach the language model right now, and no indexed context was found for this query."
+
+        lines = [
+            "I could not reach the language model right now, but I found related indexed code:",
+        ]
+        for snippet in snippets[:5]:
+            path = snippet.get("path", "unknown")
+            symbol = snippet.get("symbol") or "module"
+            lines.append(f"- {path} ({symbol})")
+        lines.append("Please retry in a moment for a full AI-generated explanation.")
+        return "\n".join(lines)

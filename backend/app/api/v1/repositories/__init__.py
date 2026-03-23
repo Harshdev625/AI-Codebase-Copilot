@@ -5,6 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import ensure_repository_access, get_current_user
@@ -27,6 +28,35 @@ def _to_payload(row: dict) -> dict:
     created_at = payload.get("created_at")
     if created_at is not None and hasattr(created_at, "isoformat"):
         payload["created_at"] = created_at.isoformat()
+
+    latest_stats = payload.get("latest_index_stats")
+    if isinstance(latest_stats, str):
+        try:
+            latest_stats = json.loads(latest_stats)
+        except json.JSONDecodeError:
+            latest_stats = {}
+    if latest_stats is None:
+        latest_stats = {}
+
+    payload["latest_index_stats"] = latest_stats
+    indexed_chunks = latest_stats.get("indexed_chunks") if isinstance(latest_stats, dict) else None
+    payload["latest_indexed_chunks"] = indexed_chunks if isinstance(indexed_chunks, int) else None
+
+    completed_stats = payload.get("latest_completed_index_stats")
+    if isinstance(completed_stats, str):
+        try:
+            completed_stats = json.loads(completed_stats)
+        except json.JSONDecodeError:
+            completed_stats = {}
+    if completed_stats is None:
+        completed_stats = {}
+
+    payload["latest_completed_index_stats"] = completed_stats
+    completed_chunks = completed_stats.get("indexed_chunks") if isinstance(completed_stats, dict) else None
+    payload["latest_completed_indexed_chunks"] = completed_chunks if isinstance(completed_chunks, int) else None
+
+    has_completed_index = payload.get("has_completed_index")
+    payload["has_completed_index"] = bool(has_completed_index)
     return payload
 
 
@@ -108,9 +138,44 @@ def list_repositories(
     rows = session.execute(
         text(
             """
-            SELECT id, project_id, repo_id, remote_url, local_path, default_branch, created_at
-            FROM repositories
-            WHERE project_id = :project_id
+                        SELECT
+                            r.id,
+                            r.project_id,
+                            r.repo_id,
+                            r.remote_url,
+                            r.local_path,
+                            r.default_branch,
+                            r.created_at,
+                            (
+                                SELECT rs.index_status
+                                FROM repository_snapshots rs
+                                WHERE rs.repository_id = r.id
+                                ORDER BY rs.created_at DESC
+                                LIMIT 1
+                            ) AS latest_index_status,
+                            (
+                                SELECT rs.stats
+                                FROM repository_snapshots rs
+                                WHERE rs.repository_id = r.id
+                                ORDER BY rs.created_at DESC
+                                LIMIT 1
+                                                        ) AS latest_index_stats,
+                                                        EXISTS (
+                                                                SELECT 1
+                                                                FROM repository_snapshots rs
+                                                                WHERE rs.repository_id = r.id
+                                                                    AND rs.index_status = 'completed'
+                                                        ) AS has_completed_index,
+                                                        (
+                                                                SELECT rs.stats
+                                                                FROM repository_snapshots rs
+                                                                WHERE rs.repository_id = r.id
+                                                                    AND rs.index_status = 'completed'
+                                                                ORDER BY rs.created_at DESC
+                                                                LIMIT 1
+                                                        ) AS latest_completed_index_stats
+                        FROM repositories r
+                        WHERE r.project_id = :project_id
             ORDER BY created_at DESC
             """
         ),
@@ -133,23 +198,27 @@ def add_repository(
     _ensure_membership(session, project_id, current_user["id"])
 
     repository_id = str(uuid.uuid4())
-    session.execute(
-        text(
-            """
-            INSERT INTO repositories (id, project_id, repo_id, remote_url, local_path, default_branch)
-            VALUES (:id, :project_id, :repo_id, :remote_url, :local_path, :default_branch)
-            """
-        ),
-        {
-            "id": repository_id,
-            "project_id": project_id,
-            "repo_id": req.repo_id,
-            "remote_url": req.remote_url,
-            "local_path": req.local_path,
-            "default_branch": req.default_branch,
-        },
-    )
-    session.commit()
+    try:
+        session.execute(
+            text(
+                """
+                INSERT INTO repositories (id, project_id, repo_id, remote_url, local_path, default_branch)
+                VALUES (:id, :project_id, :repo_id, :remote_url, :local_path, :default_branch)
+                """
+            ),
+            {
+                "id": repository_id,
+                "project_id": project_id,
+                "repo_id": req.repo_id,
+                "remote_url": req.remote_url,
+                "local_path": req.local_path,
+                "default_branch": req.default_branch,
+            },
+        )
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Repository already exists") from None
 
     row = session.execute(
         text(

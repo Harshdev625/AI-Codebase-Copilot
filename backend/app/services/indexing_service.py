@@ -79,6 +79,28 @@ class IndexingService:
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Git command timed out after {timeout}s: {' '.join(args)}") from exc
 
+    def _cache_root(self) -> Path:
+        cache_root = Path(settings.repo_cache_dir)
+        if not cache_root.is_absolute():
+            cache_root = (Path.cwd() / cache_root).resolve()
+        return cache_root
+
+    def _should_cleanup_cached_repo(self, root: Path, repo_url: str | None, repo_path: str | None) -> bool:
+        if settings.repo_cache_persist:
+            return False
+        if repo_path:
+            return False
+        if not repo_url:
+            return False
+        if Path(repo_url).exists():
+            return False
+        cache_root = self._cache_root()
+        try:
+            root.resolve().relative_to(cache_root.resolve())
+            return True
+        except ValueError:
+            return False
+
     def _resolve_repo_root(
         self,
         repo_id: str,
@@ -99,9 +121,7 @@ class IndexingService:
         if local_path_candidate.exists():
             return local_path_candidate
 
-        cache_root = Path(settings.repo_cache_dir)
-        if not cache_root.is_absolute():
-            cache_root = (Path.cwd() / cache_root).resolve()
+        cache_root = self._cache_root()
         cache_root.mkdir(parents=True, exist_ok=True)
 
         target = cache_root / self._slugify_repo_id(repo_id)
@@ -116,13 +136,16 @@ class IndexingService:
                 self._run_git(["clone", "--depth", "1", repo_url, str(target)])
             else:
                 self._run_git(["clone", "--depth", "1", repo_url, str(target)])
-
-            if repo_ref:
-                self._run_git(["fetch", "--all", "--tags"], cwd=target)
-                self._run_git(["checkout", repo_ref], cwd=target)
         except subprocess.CalledProcessError as exc:
             stderr = (exc.stderr or "").strip()
             raise RuntimeError(f"Failed to prepare repository from repo_url: {stderr}") from exc
+
+        if repo_ref:
+            try:
+                self._run_git(["fetch", "--all", "--tags"], cwd=target)
+                self._run_git(["checkout", repo_ref], cwd=target)
+            except subprocess.CalledProcessError:
+                pass
 
         return target
 
@@ -226,34 +249,37 @@ class IndexingService:
         indexing_job_id: str | None = None,
     ) -> int:
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
+        cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
 
-        ignore_spec = self._load_gitignore_spec(root)
-        self._update_progress(indexing_job_id, 0, 0, "Discovering files...")
+        try:
+            ignore_spec = self._load_gitignore_spec(root)
+            self._update_progress(indexing_job_id, 0, 0, "Discovering files...")
 
-        chunks: list[CodeChunk] = []
-        file_list = list(self._iter_indexable_files(root, ignore_spec))
-        total_files = len(file_list)
-        self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index")
+            chunks: list[CodeChunk] = []
+            file_list = list(self._iter_indexable_files(root, ignore_spec))
+            total_files = len(file_list)
+            self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index")
 
-        for idx, file_path in enumerate(file_list, 1):
-            try:
-                source = file_path.read_text(encoding="utf-8", errors="ignore")
-                if file_path.suffix == ".py":
-                    chunks.extend(chunk_python_file(repo_id, commit_sha, file_path, source))
-                else:
-                    chunks.extend(self.generic_chunk_file(repo_id, commit_sha, file_path, source))
-                
-                # Update progress every 10 files or at completion
-                if idx % 10 == 0 or idx == total_files:
-                    self._update_progress(indexing_job_id, idx, total_files, f"Indexed {idx}/{total_files} files ({len(chunks)} chunks)")
-            except Exception as exc:
-                # Log but continue on file-level errors
-                self._update_progress(indexing_job_id, idx, total_files, f"Error in {file_path.name}: {str(exc)[:100]}")
-                continue
+            for idx, file_path in enumerate(file_list, 1):
+                try:
+                    source = file_path.read_text(encoding="utf-8", errors="ignore")
+                    if file_path.suffix == ".py":
+                        chunks.extend(chunk_python_file(repo_id, commit_sha, file_path, source))
+                    else:
+                        chunks.extend(self.generic_chunk_file(repo_id, commit_sha, file_path, source))
 
-        self._update_progress(indexing_job_id, total_files, total_files, f"Storing {len(chunks)} chunks...")
-        self._upsert_chunks(chunks)
-        return len(chunks)
+                    if idx % 10 == 0 or idx == total_files:
+                        self._update_progress(indexing_job_id, idx, total_files, f"Indexed {idx}/{total_files} files ({len(chunks)} chunks)")
+                except Exception as exc:
+                    self._update_progress(indexing_job_id, idx, total_files, f"Error in {file_path.name}: {str(exc)[:100]}")
+                    continue
+
+            self._update_progress(indexing_job_id, total_files, total_files, f"Storing {len(chunks)} chunks...")
+            self._upsert_chunks(chunks)
+            return len(chunks)
+        finally:
+            if cleanup_cached_repo and root.exists():
+                shutil.rmtree(root, ignore_errors=True)
 
     def generic_chunk_file(self, repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
         # Simple chunking: split file into N-line chunks (e.g., 40 lines)

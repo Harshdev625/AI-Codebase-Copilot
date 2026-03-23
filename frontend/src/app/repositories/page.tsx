@@ -15,6 +15,12 @@ type Repo = {
   remote_url?: string;
   local_path?: string;
   default_branch: string;
+  latest_index_status?: string | null;
+  latest_index_stats?: { indexed_chunks?: number } | null;
+  latest_indexed_chunks?: number | null;
+  has_completed_index?: boolean;
+  latest_completed_index_stats?: { indexed_chunks?: number } | null;
+  latest_completed_indexed_chunks?: number | null;
 };
 
 type IndexState = "idle" | "running" | "done" | "failed";
@@ -117,7 +123,37 @@ export default function RepositoriesPage() {
     try {
       const res  = await fetch(`/api/projects/${pid}/repositories`, { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
-      if (res.ok) setItems(data);
+      if (res.ok) {
+        setItems(data);
+
+        const nextStates: Record<string, IndexState> = {};
+        const nextResults: Record<string, { chunks?: number; error?: string }> = {};
+
+        for (const repo of data as Repo[]) {
+          const status = repo.latest_index_status;
+          if (repo.has_completed_index || status === "completed") {
+            nextStates[repo.repo_id] = "done";
+            const chunks =
+              repo.latest_completed_indexed_chunks ??
+              repo.latest_completed_index_stats?.indexed_chunks ??
+              repo.latest_indexed_chunks ??
+              repo.latest_index_stats?.indexed_chunks;
+            if (typeof chunks === "number") {
+              nextResults[repo.repo_id] = { chunks };
+            }
+          } else if (status === "failed") {
+            nextStates[repo.repo_id] = "failed";
+            nextResults[repo.repo_id] = { error: "Last indexing attempt failed" };
+          } else if (status === "running") {
+            nextStates[repo.repo_id] = "running";
+          } else {
+            nextStates[repo.repo_id] = "idle";
+          }
+        }
+
+        setIndexStates(nextStates);
+        setIndexResults(nextResults);
+      }
     } finally {
       setLoading(false);
     }

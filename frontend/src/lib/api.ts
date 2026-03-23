@@ -18,7 +18,12 @@ export async function sendChat(payload: ChatPayload) {
 
   if (!res.ok) {
     const message = await res.text();
-    throw new Error(message || "Failed to call backend.");
+    try {
+      const parsed = JSON.parse(message);
+      throw new Error(parsed?.detail || parsed?.error || "Failed to call backend.");
+    } catch {
+      throw new Error(message || "Failed to call backend.");
+    }
   }
 
   return res.json();

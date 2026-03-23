@@ -6,7 +6,12 @@ import Link from "next/link";
 import { sendChat } from "@/lib/api";
 
 type Source   = { path?: string; symbol?: string };
-type Repo = { id: string; repo_id: string };
+type Repo = {
+  id: string;
+  repo_id: string;
+  latest_index_status?: string | null;
+  has_completed_index?: boolean;
+};
 type Message  = {
   role:    "user" | "assistant";
   content: string;
@@ -53,9 +58,18 @@ export function ChatShell() {
           setSetupError("Add and index at least one repository before using chat.");
           return;
         }
+
+        const indexedRepos = data.filter((repo: Repo) => repo.has_completed_index || repo.latest_index_status === "completed");
         setRepos(data);
+
+        if (indexedRepos.length > 0) {
+          setRepoId(indexedRepos[0].repo_id);
+          setSetupError(null);
+          return;
+        }
+
         setRepoId(data[0].repo_id);
-        setSetupError(null);
+        setSetupError("No repository is indexed yet. Go to Repositories and run Index first.");
       })
       .catch(() => setSetupError("Failed to load repositories for chat."));
   }, []);
