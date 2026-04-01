@@ -42,17 +42,18 @@ graph TD;
 - `repositories`: connected repositories and source metadata
 - `repository_snapshots`: indexing snapshots
 - `indexing_jobs`: indexing status tracking
-- `conversations`: chat sessions under a project
-- `messages`: persisted user and assistant messages
-- `agent_runs`: query execution and diagnostics
 - `code_chunks`: indexed code chunks for retrieval
+- `conversations`/`messages`/`agent_runs`: legacy history tables retained in schema (not part of active API surface)
 
 ## Auth Model
 
 - Backend issues JWT access tokens.
 - Frontend stores session data locally.
 - Protected frontend pages redirect unauthenticated users to `/login`.
-- Admin pages are restricted to users whose role is `admin`.
+- Admin pages are restricted to users whose role is `ADMIN`.
+- Normal user signup/login does not accept role from client payloads.
+- Admin signup uses dedicated endpoint with server-side secret key validation.
+- Frontend revalidates session via `/api/auth/me` and clears session on unauthorized responses.
 
 ## Indexing Flow
 
@@ -65,7 +66,7 @@ graph TD;
 ## Query Flow
 
 1. User selects a repository and asks a question.
-2. Frontend calls the backend chat or search endpoint.
+2. Frontend calls the backend chat endpoint.
 3. Backend verifies repository access.
 4. Query service runs retrieval and LangGraph reasoning.
 5. Backend returns answer, intent, and source context.
@@ -77,5 +78,12 @@ Admins can retrieve:
 - user list
 - repository list
 - indexing job history
-- agent run history
 - aggregate system metrics
+- recent activity and service health
+
+Admin access lifecycle:
+
+1. Configure `ADMIN_REGISTRATION_SECRET_KEY` on backend.
+2. Create admin via `/register/admin` (frontend) -> `/api/auth/admin/register` -> `/v1/auth/admin/register`.
+3. Login via `/login/admin` (frontend) -> `/api/auth/admin/login` -> `/v1/auth/admin/login`.
+4. Use `/admin` dashboard and admin API routes.

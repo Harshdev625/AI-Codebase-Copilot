@@ -28,7 +28,7 @@ describe("AdminPage", () => {
     window.localStorage.setItem("aicc_token", "token");
     window.localStorage.setItem(
       "aicc_user",
-      JSON.stringify({ id: "u1", email: "dev@example.com", role: "developer", is_active: true })
+      JSON.stringify({ id: "u1", email: "dev@example.com", role: "USER", is_active: true })
     );
 
     render(<AdminPage />);
@@ -42,7 +42,7 @@ describe("AdminPage", () => {
     window.localStorage.setItem("aicc_token", "token");
     window.localStorage.setItem(
       "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true })
+      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
     );
 
     const fetchSpy = jest.spyOn(global, "fetch");
@@ -56,11 +56,26 @@ describe("AdminPage", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "developer", is_active: true },
+            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
+            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { name: "Backend API", status: "online", detail: null },
+            { name: "PostgreSQL", status: "online", detail: null },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
       );
 
     render(<AdminPage />);
@@ -78,7 +93,7 @@ describe("AdminPage", () => {
     window.localStorage.setItem("aicc_token", "token");
     window.localStorage.setItem(
       "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true })
+      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
     );
 
     const fetchSpy = jest.spyOn(global, "fetch");
@@ -87,29 +102,41 @@ describe("AdminPage", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "developer", is_active: true },
+            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
+            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       )
       .mockResolvedValueOnce(new Response("", { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 2 }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "admin", is_active: true },
+            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
+            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "ADMIN", is_active: true },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       );
 
     render(<AdminPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: /users/i }));
 
-    const actionButtons = await screen.findAllByTitle(/Promote to admin|Demote to developer/);
+    const actionButtons = await screen.findAllByTitle(/Promote to admin|Demote to user/);
     fireEvent.click(actionButtons[0]);
 
     await waitFor(() => {
@@ -124,7 +151,7 @@ describe("AdminPage", () => {
     window.localStorage.setItem("aicc_token", "token");
     window.localStorage.setItem(
       "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true })
+      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
     );
 
     const fetchSpy = jest.spyOn(global, "fetch");
@@ -141,7 +168,7 @@ describe("AdminPage", () => {
     window.localStorage.setItem("aicc_token", "token");
     window.localStorage.setItem(
       "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true })
+      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
     );
 
     const fetchSpy = jest.spyOn(global, "fetch");
@@ -150,21 +177,33 @@ describe("AdminPage", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "developer", is_active: true },
+            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
+            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       )
       .mockResolvedValueOnce(new Response("", { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "admin", is_active: true },
+            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       );
 
     render(<AdminPage />);

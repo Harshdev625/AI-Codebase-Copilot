@@ -4,6 +4,14 @@ import LoginPage from "@/app/login/page";
 import RegisterPage from "@/app/register/page";
 import * as auth from "@/lib/auth";
 
+const mockPush = jest.fn();
+
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({
+    push: mockPush,
+  }),
+}));
+
 jest.mock("@/lib/auth", () => ({
   storeSession: jest.fn(),
 }));
@@ -14,13 +22,14 @@ describe("LoginPage", () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     mockedStoreSession.mockReset();
+    mockPush.mockReset();
   });
 
   it("logs in successfully and redirects", async () => {
     mockedStoreSession.mockResolvedValue({
       id: "u1",
       email: "admin@aicc.dev",
-      role: "admin",
+      role: "ADMIN",
       is_active: true,
     });
 
@@ -65,13 +74,14 @@ describe("RegisterPage", () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     mockedStoreSession.mockReset();
+    mockPush.mockReset();
   });
 
   it("registers, logs in, stores session and redirects", async () => {
     mockedStoreSession.mockResolvedValue({
       id: "u2",
       email: "user@example.com",
-      role: "developer",
+      role: "USER",
       is_active: true,
     });
 

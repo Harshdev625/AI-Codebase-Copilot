@@ -5,7 +5,27 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.rag.retrieval.code_graph import graph_expand_context
 from app.services.qdrant_service import QdrantService
+
+
+NOISY_PATH_TOKENS = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pipfile.lock",
+    "dist/",
+    "build/",
+    "node_modules/",
+    ".next/",
+    "coverage/",
+}
+
+
+def _is_noisy_path(path: str) -> bool:
+    lower = path.lower().replace("\\", "/")
+    return any(token in lower for token in NOISY_PATH_TOKENS)
 
 
 def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 60) -> list[str]:
@@ -78,23 +98,35 @@ def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) ->
         if not row:
             continue
         row["score"] = score_map.get(item_id, 0.0)
+        if _is_noisy_path(str(row.get("path", ""))):
+            continue
         merged.append(row)
     return merged
 
 
 def lexical_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+    if not query.strip():
+        return []
+
     stmt = text(
         """
         SELECT id, path, symbol, content,
                ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
         FROM code_chunks
         WHERE repo_id = :repo_id
+          AND to_tsvector('english', content) @@ plainto_tsquery('english', :query)
         ORDER BY score DESC
         LIMIT :top_k
         """
     )
     rows = session.execute(stmt, {"query": query, "repo_id": repo_id, "top_k": top_k}).mappings()
-    return [dict(row) for row in rows]
+    filtered: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        if _is_noisy_path(str(item.get("path", ""))):
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def hybrid_retrieve(session: Session, repo_id: str, query: str, top_k: int = 8) -> list[dict]:
@@ -105,5 +137,25 @@ def hybrid_retrieve(session: Session, repo_id: str, query: str, top_k: int = 8) 
     lexical_ids = [item["id"] for item in lexical]
     merged_ids = reciprocal_rank_fusion([dense_ids, lexical_ids])[:top_k]
 
-    items_by_id = {item["id"]: item for item in [*dense, *lexical]}
-    return [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]
+    items_by_id = {str(item["id"]): item for item in [*dense, *lexical]}
+    ordered_items = [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]
+
+    if len(ordered_items) >= top_k:
+        return ordered_items[:top_k]
+
+    try:
+        graph_items = graph_expand_context(session, repo_id, merged_ids, limit=max(top_k * 2, 8))
+    except Exception:
+        graph_items = []
+
+    seen_ids = {str(item.get("id")) for item in ordered_items}
+    for graph_item in graph_items:
+        item_id = str(graph_item.get("id"))
+        if not item_id or item_id in seen_ids:
+            continue
+        ordered_items.append(graph_item)
+        seen_ids.add(item_id)
+        if len(ordered_items) >= top_k:
+            break
+
+    return ordered_items[:top_k]

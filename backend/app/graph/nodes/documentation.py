@@ -1,4 +1,5 @@
 from app.graph.state import CopilotState
+from app.graph.nodes.common import build_context, llm_try
 
 
 def documentation_node(state: CopilotState) -> CopilotState:
@@ -8,6 +9,19 @@ def documentation_node(state: CopilotState) -> CopilotState:
             "documentation": "Documentation draft unavailable because no context was retrieved.",
             "confidence": 0.2,
         }
+
+    generated = ""
+    query = str(state.get("query", "")).strip()
+    if query:
+        context = build_context(snippets)
+        prompt = (
+            "Generate concise technical documentation for this code area: purpose, key modules, "
+            "inputs/outputs, failure modes, and maintenance notes. "
+            f"User request: {query}"
+        )
+        generated = llm_try(prompt=prompt, context=context)
+    if generated:
+        return {"documentation": generated, "confidence": 0.76}
 
     lines = ["## Generated Documentation Draft", "", "### Relevant Files"]
     for item in snippets[:5]:

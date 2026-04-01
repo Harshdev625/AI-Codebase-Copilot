@@ -1,40 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
-from types import SimpleNamespace
+import json
+from datetime import datetime, timezone
 
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
-from app.api.v1.auth import login, register
-from app.api.v1.chat import (
-    _ensure_membership as chat_ensure_membership,
-    _get_conversation,
-    chat,
-    create_conversation,
-    create_message,
-    list_messages,
-)
-from app.api.v1.repositories import (
-    _ensure_membership as repo_ensure_membership,
-    add_repository,
-    create_project,
-    get_index_progress,
-    list_projects,
-    list_repositories,
-)
-from app.api.v1.search import search
+from app.api.v1.auth import admin_login, admin_register, login, register
+from app.api.v1.chat import chat
+from app.api.v1.repositories import _ensure_membership as repo_ensure_membership
+from app.api.v1.repositories import get_index_progress, list_projects
 from app.core import security
-from app.models.api_models import (
-    AddRepositoryRequest,
-    AuthLoginRequest,
-    AuthRegisterRequest,
-    ChatRequest,
-    CreateConversationRequest,
-    CreateProjectRequest,
-    MessageCreateRequest,
-    SearchRequest,
-)
+from app.models.api_models import AuthAdminRegisterRequest, AuthLoginRequest, AuthRegisterRequest, ChatRequest
 
 
 class _Result:
@@ -69,6 +46,10 @@ class _SessionQueue:
         self.commits += 1
 
 
+def _payload(response) -> dict:
+    return json.loads(response.body.decode("utf-8"))["data"]
+
+
 def test_security_negative_paths() -> None:
     assert security.verify_password("x", "bad-format") is False
 
@@ -82,14 +63,17 @@ def test_security_negative_paths() -> None:
     assert payload["sub"] == "u1"
 
 
-def test_auth_register_login_and_invalid_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_register_and_login_paths() -> None:
     existing_session = _SessionQueue(results=[[{"id": "u1"}]])
     with pytest.raises(HTTPException, match="Email already registered"):
         register(AuthRegisterRequest(email="a@b.com", password="password123", full_name="A"), session=existing_session)
 
     new_session = _SessionQueue(results=[[]])
-    out = register(AuthRegisterRequest(email="c@d.com", password="password123", full_name="C"), session=new_session)
-    assert out.email == "c@d.com"
+    register_response = register(
+        AuthRegisterRequest(email="c@d.com", password="password123", full_name="C"),
+        session=new_session,
+    )
+    assert _payload(register_response)["role"] == "USER"
 
     bad_login_session = _SessionQueue(results=[[{"id": "u1", "password_hash": "x", "is_active": True}]])
     with pytest.raises(HTTPException, match="Invalid credentials"):
@@ -101,97 +85,52 @@ def test_auth_register_login_and_invalid_paths(monkeypatch: pytest.MonkeyPatch) 
         login(AuthLoginRequest(email="a@b.com", password="password123"), session=inactive_login_session)
 
     active_login_session = _SessionQueue(results=[[{"id": "u1", "password_hash": pwd_hash, "is_active": True}]])
-    token = login(AuthLoginRequest(email="a@b.com", password="password123"), session=active_login_session)
-    assert token.access_token
+    login_response = login(AuthLoginRequest(email="a@b.com", password="password123"), session=active_login_session)
+    assert _payload(login_response)["access_token"]
 
 
-def test_search_success_and_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    import app.api.v1.search as search_module
+def test_admin_register_and_admin_login_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.api.v1.auth as auth_module
 
-    monkeypatch.setattr(search_module, "ensure_repository_access", lambda session, repo_id, user_id: {"id": "r1"})
-    monkeypatch.setattr(search_module, "hybrid_retrieve", lambda session, repo_id, query, top_k: [{"id": "1"}])
-    out = search(
-        SearchRequest(repo_id="repo", query="find", top_k=2),
-        current_user={"id": "u1"},
-        session=_SessionQueue(),
-    )
-    assert len(out.results) == 1
+    monkeypatch.setattr(auth_module.settings, "admin_registration_secret_key", "secret-key")
 
-    monkeypatch.setattr(search_module, "hybrid_retrieve", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("down")))
-    with pytest.raises(HTTPException, match="down"):
-        search(
-            SearchRequest(repo_id="repo", query="find", top_k=2),
-            current_user={"id": "u1"},
-            session=_SessionQueue(),
+    with pytest.raises(HTTPException, match="Invalid admin secret key"):
+        admin_register(
+            AuthAdminRegisterRequest(
+                email="admin@example.com",
+                password="password123",
+                full_name="Admin",
+                admin_secret_key="wrong",
+            ),
+            session=_SessionQueue(results=[[]]),
         )
 
-
-def test_repository_routes_main_paths() -> None:
-    now = datetime.utcnow()
-    session = _SessionQueue(
-        results=[
-            [{"id": "p0", "name": "Proj0", "description": "d0", "created_by": "u1", "created_at": now}],
-            [],
-            [],
-            [{"id": "p1", "name": "P", "description": "d", "created_by": "u1", "created_at": now}],
-            [{"id": "m1"}],
-            [],
-            [{"id": "r1", "project_id": "p1", "repo_id": "repo", "remote_url": "url", "local_path": None, "default_branch": "main", "created_at": now}],
-            [{"id": "m1"}],
-            [{"id": "r1", "project_id": "p1", "repo_id": "repo", "remote_url": "url", "local_path": None, "default_branch": "main", "created_at": now}],
-            [{"id": "s1", "index_status": "running", "stats": {}, "message": "m", "status": "running", "started_at": now}],
-        ]
+    register_response = admin_register(
+        AuthAdminRegisterRequest(
+            email="admin@example.com",
+            password="password123",
+            full_name="Admin",
+            admin_secret_key="secret-key",
+        ),
+        session=_SessionQueue(results=[[]]),
     )
+    assert _payload(register_response)["role"] == "ADMIN"
 
-    projects = list_projects(current_user={"id": "u1"}, session=session)
-    assert projects[0].id == "p0"
-
-    created_project = create_project(
-        CreateProjectRequest(name="Proj", description="desc"),
-        current_user={"id": "u1"},
-        session=session,
-    )
-    assert created_project.id == "p1"
-
-    created_repo = add_repository(
-        "p1",
-        AddRepositoryRequest(repo_id="repo", remote_url="url", default_branch="main"),
-        current_user={"id": "u1"},
-        session=session,
-    )
-    assert created_repo.repo_id == "repo"
-
-    repos = list_repositories("p1", current_user={"id": "u1"}, session=session)
-    assert repos[0].id == "r1"
-
-    progress = get_index_progress("s1", current_user={"id": "u1"}, session=session)
-    assert progress["snapshot_id"] == "s1"
-
-
-def test_repository_routes_error_paths() -> None:
-    with pytest.raises(HTTPException, match="Not authorized"):
-        repo_ensure_membership(_SessionQueue(results=[[]]), "p1", "u1")
-
-    with pytest.raises(HTTPException, match="Project creation failed"):
-        create_project(
-            CreateProjectRequest(name="Proj", description="desc"),
-            current_user={"id": "u1"},
-            session=_SessionQueue(results=[[], []]),
+    pwd_hash = security.hash_password("password123")
+    with pytest.raises(HTTPException, match="Admin account required"):
+        admin_login(
+            AuthLoginRequest(email="dev@example.com", password="password123"),
+            session=_SessionQueue(results=[[{"id": "u1", "password_hash": pwd_hash, "is_active": True, "role": "USER"}]]),
         )
 
-    with pytest.raises(HTTPException, match="Repository creation failed"):
-        add_repository(
-            "p1",
-            AddRepositoryRequest(repo_id="repo", remote_url="url", default_branch="main"),
-            current_user={"id": "u1"},
-            session=_SessionQueue(results=[[{"id": "m1"}], []]),
-        )
-
-    with pytest.raises(HTTPException, match="Snapshot not found"):
-        get_index_progress("missing", current_user={"id": "u1"}, session=_SessionQueue(results=[[]]))
+    admin_login_response = admin_login(
+        AuthLoginRequest(email="admin@example.com", password="password123"),
+        session=_SessionQueue(results=[[{"id": "u1", "password_hash": pwd_hash, "is_active": True, "role": "ADMIN"}]]),
+    )
+    assert _payload(admin_login_response)["access_token"]
 
 
-def test_chat_routes_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chat_route_success_and_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.api.v1.chat as chat_module
 
     monkeypatch.setattr(chat_module, "ensure_repository_access", lambda session, repo_id, user_id: {"id": "r1"})
@@ -205,85 +144,48 @@ def test_chat_routes_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(chat_module, "QueryService", FakeQueryService)
 
-    out = chat(ChatRequest(repo_id="repo", query="what?"), current_user={"id": "u1"}, session=_SessionQueue())
-    assert out.answer == "hello"
+    response = chat(ChatRequest(repo_id="repo1", query="what?"), current_user={"id": "u1"}, session=_SessionQueue())
+    assert _payload(response)["answer"] == "hello"
 
     class FailingQueryService(FakeQueryService):
         def run(self, repo_id: str, query: str):
             raise RuntimeError("llm unavailable")
 
     monkeypatch.setattr(chat_module, "QueryService", FailingQueryService)
-    with pytest.raises(HTTPException, match="llm unavailable"):
-        chat(ChatRequest(repo_id="repo", query="what?"), current_user={"id": "u1"}, session=_SessionQueue())
+    with pytest.raises(HTTPException, match="AI service is temporarily unavailable"):
+        chat(ChatRequest(repo_id="repo1", query="what?"), current_user={"id": "u1"}, session=_SessionQueue())
 
 
-def test_chat_conversation_and_messages_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    import app.api.v1.chat as chat_module
-
-    now = datetime.utcnow()
-    session = _SessionQueue(
-        results=[
-            [{"id": "m1"}],
-            [],
-            [{"id": "c1", "project_id": "p1", "user_id": "u1", "title": "t", "created_at": now}],
-            [{"id": "c1", "project_id": "p1"}],
-            [{"id": "m1"}],
-            [{"id": "m1", "conversation_id": "c1", "role": "user", "content": "q", "created_at": now}],
-            [{"id": "c1", "project_id": "p1"}],
-            [{"id": "m1"}],
-            [],
-            [],
-            [],
-            [],
-            [
-                {"id": "a1", "conversation_id": "c1", "role": "assistant", "content": "ans", "created_at": now},
-                {"id": "u1", "conversation_id": "c1", "role": "user", "content": "q", "created_at": now},
-            ],
-        ]
+def test_repository_list_projects_and_progress_paths() -> None:
+    now = datetime.now(timezone.utc)
+    projects_session = _SessionQueue(
+        results=[[{"id": "p0", "name": "Proj0", "description": "d0", "created_by": "u1", "created_at": now}]]
     )
+    projects_response = list_projects(current_user={"id": "u1"}, session=projects_session)
+    assert _payload(projects_response)[0]["id"] == "p0"
 
-    class FakeQueryService:
-        def __init__(self, db):
-            self.db = db
-
-        def run(self, repo_id: str, query: str):
-            return {"answer": "ans", "intent": "explain", "retrieved_context": [{"id": "x"}]}
-
-    monkeypatch.setattr(chat_module, "QueryService", FakeQueryService)
-
-    conv = create_conversation(
-        "p1",
-        CreateConversationRequest(title="t"),
-        current_user={"id": "u1"},
-        session=session,
+    progress_session = _SessionQueue(
+        results=[[
+            {
+                "id": "s1",
+                "index_status": "completed",
+                "stats": {"indexed_chunks": 12, "total_files": 5, "processed_files": 5, "percentage": 100},
+                "message": "done",
+                "status": "completed",
+                "started_at": now,
+                "updated_at": now,
+            }
+        ]]
     )
-    assert conv.id == "c1"
-
-    listed = list_messages("c1", current_user={"id": "u1"}, session=session)
-    assert listed[0].conversation_id == "c1"
-
-    created = create_message(
-        "c1",
-        MessageCreateRequest(repo_id="repo", query="where?"),
-        current_user={"id": "u1"},
-        session=session,
-    )
-    assert len(created) == 2
+    progress_response = get_index_progress("s1", current_user={"id": "u1"}, session=progress_session)
+    progress_data = _payload(progress_response)
+    assert progress_data["snapshot_id"] == "s1"
+    assert progress_data["percentage"] == 100
 
 
-def test_chat_error_helpers() -> None:
-    with pytest.raises(HTTPException, match="Conversation not found"):
-        _get_conversation(_SessionQueue(results=[[]]), "missing")
-
-    assert _get_conversation(_SessionQueue(results=[[{"id": "c1", "project_id": "p1"}]]), "c1")["id"] == "c1"
-
+def test_repository_membership_and_progress_errors() -> None:
     with pytest.raises(HTTPException, match="Not authorized"):
-        chat_ensure_membership(_SessionQueue(results=[[]]), "p1", "u1")
+        repo_ensure_membership(_SessionQueue(results=[[]]), "p1", "u1")
 
-    with pytest.raises(HTTPException, match="Conversation creation failed"):
-        create_conversation(
-            "p1",
-            CreateConversationRequest(title="t"),
-            current_user={"id": "u1"},
-            session=_SessionQueue(results=[[{"id": "m1"}], []]),
-        )
+    with pytest.raises(HTTPException, match="Snapshot not found"):
+        get_index_progress("missing", current_user={"id": "u1"}, session=_SessionQueue(results=[[]]))

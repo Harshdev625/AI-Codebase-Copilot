@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import text
 
-from app.core.config import settings
-from app.core.security import hash_password
 from app.db.database import engine
 
 
@@ -17,7 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   full_name TEXT,
-  role TEXT NOT NULL DEFAULT 'developer',
+  role TEXT NOT NULL DEFAULT 'USER',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -44,7 +40,7 @@ CREATE TABLE IF NOT EXISTS project_memberships (
 CREATE TABLE IF NOT EXISTS repositories (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  repo_id TEXT UNIQUE NOT NULL,
+  repo_id TEXT NOT NULL,
   remote_url TEXT,
   local_path TEXT,
   default_branch TEXT NOT NULL DEFAULT 'main',
@@ -122,16 +118,31 @@ CREATE TABLE IF NOT EXISTS code_chunks (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS code_graph_edges (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL,
+  source_chunk_id TEXT NOT NULL,
+  target_chunk_id TEXT NOT NULL,
+  edge_type TEXT NOT NULL,
+  weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(repo_id, source_chunk_id, target_chunk_id, edge_type)
+);
+
 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repo_id);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_path ON code_chunks(path);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_language ON code_chunks(language);
 CREATE INDEX IF NOT EXISTS idx_code_chunks_content_fts
   ON code_chunks USING gin(to_tsvector('english', content));
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_repo_id ON code_graph_edges(repo_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_source ON code_graph_edges(source_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_code_graph_edges_target ON code_graph_edges(target_chunk_id);
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_memberships_user ON project_memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_project ON project_memberships(project_id);
 CREATE INDEX IF NOT EXISTS idx_repositories_project_id ON repositories(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_repositories_project_repo_unique ON repositories(project_id, repo_id);
 CREATE INDEX IF NOT EXISTS idx_repository_snapshots_repository_id ON repository_snapshots(repository_id);
 CREATE INDEX IF NOT EXISTS idx_repository_snapshots_status ON repository_snapshots(index_status);
 CREATE INDEX IF NOT EXISTS idx_indexing_jobs_repository_id ON indexing_jobs(repository_id);
@@ -159,41 +170,33 @@ def ensure_app_schema() -> None:
             )
         )
 
-        admin_email = settings.bootstrap_admin_email.strip().lower()
-        admin_password = settings.bootstrap_admin_password
-        if not admin_email or not admin_password:
-            return
+        # Migration: repositories.repo_id was previously globally unique, which
+        # prevents the same repository key being reused across different
+        # projects. Scope uniqueness per project instead.
+        connection.execute(
+          text(
+            "ALTER TABLE IF EXISTS repositories "
+            "DROP CONSTRAINT IF EXISTS repositories_repo_id_key"
+          )
+        )
+        connection.execute(
+          text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_repositories_project_repo_unique "
+            "ON repositories(project_id, repo_id)"
+          )
+        )
 
-        existing = connection.execute(
-            text("SELECT id, role, is_active FROM users WHERE email = :email"),
-            {"email": admin_email},
-        ).mappings().first()
-
-        if existing is None:
-            connection.execute(
-                text(
-                    """
-                    INSERT INTO users (id, email, password_hash, full_name, role, is_active)
-                    VALUES (:id, :email, :password_hash, :full_name, 'admin', TRUE)
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "email": admin_email,
-                    "password_hash": hash_password(admin_password),
-                    "full_name": settings.bootstrap_admin_full_name,
-                },
-            )
-            return
-
-        if existing["role"] != "admin" or not bool(existing["is_active"]):
-            connection.execute(
-                text(
-                    """
-                    UPDATE users
-                    SET role = 'admin', is_active = TRUE
-                    WHERE id = :id
-                    """
-                ),
-                {"id": existing["id"]},
-            )
+        # Migration: normalize legacy role values to canonical USER/ADMIN.
+        connection.execute(
+          text(
+            """
+            UPDATE users
+            SET role = CASE
+              WHEN LOWER(role) IN ('admin') THEN 'ADMIN'
+              WHEN LOWER(role) IN ('developer', 'user', 'member') THEN 'USER'
+              WHEN UPPER(role) IN ('ADMIN', 'USER') THEN UPPER(role)
+              ELSE role
+            END
+            """
+          )
+        )

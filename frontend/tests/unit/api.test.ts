@@ -101,9 +101,12 @@ describe("sendChat", () => {
 
     const result = await getAdminMetrics("admin-token");
 
-    expect(global.fetch).toHaveBeenCalledWith("/api/admin/system-metrics", {
-      headers: { Authorization: "Bearer admin-token" }
-    });
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/admin/system-metrics",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer admin-token" })
+      })
+    );
     expect(result).toEqual({ users_count: 5, projects_count: 2 });
   });
 

@@ -26,6 +26,7 @@ jest.mock("@/components/chat-shell", () => ({
 jest.mock("@/lib/auth", () => ({
   getToken: jest.fn(() => mockToken),
   getStoredUser: jest.fn(() => mockUser),
+  validateSessionAndRefreshUser: jest.fn(async () => mockUser),
 }));
 
 describe("AppShell", () => {
@@ -68,9 +69,9 @@ describe("AppShell", () => {
   });
 
   it("redirects non-admin users from admin pages", async () => {
-    mockPathname = "/admin";
+    mockPathname = "/admin/dashboard";
     mockToken = "token";
-    mockUser = { role: "developer" };
+    mockUser = { role: "USER" };
 
     render(
       <AppShell>
@@ -86,7 +87,7 @@ describe("AppShell", () => {
   it("renders protected layout for authorized users", async () => {
     mockPathname = "/repositories";
     mockToken = "token";
-    mockUser = { role: "developer" };
+    mockUser = { role: "USER" };
 
     render(
       <AppShell>

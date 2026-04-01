@@ -40,6 +40,8 @@ sequenceDiagram
 - `/`
 - `/login`
 - `/register`
+- `/login/admin`
+- `/register/admin`
 
 ### Protected Routes
 
@@ -57,6 +59,7 @@ Rules:
 
 - missing token or user redirects to `/login`
 - non-admin access to `/admin` redirects to `/dashboard`
+- expired/invalid token triggers session clear and redirect to `/login` (session is revalidated periodically via `/api/auth/me`)
 
 ## User Flows
 
@@ -65,6 +68,8 @@ Rules:
 The login page posts to the frontend proxy route:
 
 - `POST /api/auth/login`
+
+Frontend route to use: `/api/auth/login`
 
 Expected payload:
 
@@ -82,6 +87,8 @@ The registration page calls:
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 
+Frontend route to use: `/api/auth/register`
+
 Expected payload:
 
 ```json
@@ -89,6 +96,35 @@ Expected payload:
   "email": "user@example.com",
   "password": "password123",
   "full_name": "Example User"
+}
+```
+
+### Admin Registration and Login
+
+Dedicated admin auth paths:
+
+- `POST /api/auth/admin/register`
+- `POST /api/auth/admin/login`
+
+Important behavior:
+
+- Standard `/api/auth/register` creates `developer` users only.
+- Standard `/api/auth/login` does not accept role in payload.
+- Admin login is isolated through `/api/auth/admin/login`.
+
+Frontend pages:
+
+- `/register/admin`
+- `/login/admin`
+
+Admin registration payload:
+
+```json
+{
+  "email": "admin@example.com",
+  "password": "password123",
+  "full_name": "Platform Admin",
+  "admin_secret_key": "your-secret"
 }
 ```
 
@@ -123,6 +159,16 @@ Payload:
 }
 ```
 
+Copilot-style response modes supported in UI:
+
+- Architecture
+- Debug
+- Refactor
+- Docs
+- Code
+
+Modes enrich the query prompt so the assistant can better explain architecture, debug issues, suggest refactors, produce docs, and provide implementation guidance.
+
 ### Admin Dashboard
 
 The admin page retrieves:
@@ -132,6 +178,22 @@ The admin page retrieves:
 
 It displays metrics, registered users, and service status cards.
 
+### First Admin Setup
+
+Recommended:
+
+1. Set backend `ADMIN_REGISTRATION_SECRET_KEY`
+2. Open `/register/admin` and create admin account
+3. Login via `/login/admin`
+4. Access `/admin` after session is established
+
+Role decision model:
+
+- Role is not accepted from login/register payloads.
+- New users are created as `developer` by backend.
+- Admin users are created via admin register + secret key.
+- Existing admins can manage user roles from admin endpoints/UI.
+
 ## Frontend API Proxy Routes
 
 Current proxy handlers in `src/app/api`:
@@ -139,11 +201,18 @@ Current proxy handlers in `src/app/api`:
 - `/api/auth/login`
 - `/api/auth/register`
 - `/api/auth/me`
+- `/api/auth/admin/register`
+- `/api/auth/admin/login`
 - `/api/projects`
 - `/api/projects/[projectId]/repositories`
 - `/api/chat`
 - `/api/admin/system-metrics`
 - `/api/admin/users`
+- `/api/admin/repositories`
+- `/api/admin/indexing-status`
+- `/api/admin/users/[userId]/role`
+- `/api/admin/users/[userId]/status`
+- `/api/admin/users/[userId]`
 
 These routes forward requests to the backend base URL defined in `src/lib/backend-url.ts`.
 
@@ -152,6 +221,7 @@ These routes forward requests to the backend base URL defined in `src/lib/backen
 - Backend URL defaults to `http://localhost:8000/v1`.
 - Session state is stored client-side.
 - The dashboard behavior changes by role: admins see platform metrics, non-admins see project summaries.
+- Dashboard is role-specific: admins see platform-wide insights; developers see user-scoped workspace insights.
 
 Quick dev start (Windows PowerShell)
 
@@ -160,13 +230,6 @@ cd frontend
 npm install
 npm run dev
 ```
-
-Environment variables
-
-- `NEXT_PUBLIC_API_URL` — browser-accessible backend base URL (e.g. `http://localhost:8000/v1`)
-- `API_INTERNAL_URL` — server-side internal URL used by Next proxy routes when available
-
-If you run the backend in Docker and the frontend on the host, set `NEXT_PUBLIC_API_URL` to the host-accessible backend address.
 
 Indexing and proxy routes
 

@@ -1,8 +1,13 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Code2, GitBranch, Zap, Shield, Eye, EyeOff } from "lucide-react";
 import { storeSession } from "@/lib/auth";
+import { apiRequest, requireData } from "@/lib/http";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 const FEATURES = [
   { icon: GitBranch, label: "Index any GitHub repo",     desc: "Point to a remote URL and let the AI parse, chunk and embed your entire codebase." },
@@ -11,26 +16,26 @@ const FEATURES = [
 ];
 
 export default function LoginPage() {
-  const [email,      setEmail]      = useState("admin@aicc.dev");
-  const [password,   setPassword]   = useState("password123");
-  const [showPass,   setShowPass]   = useState(false);
-  const [error,      setError]      = useState<string | null>(null);
-  const [loading,    setLoading]    = useState(false);
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const res  = await fetch("/api/auth/login", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ email, password }),
+      const result = await apiRequest<{ access_token: string }>("/api/auth/login", {
+        method: "POST",
+        body: { email, password },
+        withAuth: false,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.detail || "Login failed");
+      const data = requireData(result, "Login failed");
       await storeSession(data.access_token);
-      window.location.href = "/dashboard";
+      router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
@@ -111,11 +116,10 @@ export default function LoginPage() {
             {/* Email */}
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted">Email address</label>
-              <input
+              <Input
                 type="email"
                 required
                 autoComplete="email"
-                className="input-base"
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -126,11 +130,11 @@ export default function LoginPage() {
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted">Password</label>
               <div className="relative">
-                <input
+                <Input
                   type={showPass ? "text" : "password"}
                   required
                   autoComplete="current-password"
-                  className="input-base pr-10"
+                  className="pr-10"
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -154,7 +158,7 @@ export default function LoginPage() {
             )}
 
             {/* Submit */}
-            <button type="submit" disabled={loading} className="btn-primary w-full justify-center py-2.5 text-sm">
+            <Button type="submit" disabled={loading} className="w-full justify-center py-2.5 text-sm">
               {loading ? (
                 <span className="flex items-center gap-2">
                   <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -164,15 +168,21 @@ export default function LoginPage() {
                   Signing in…
                 </span>
               ) : "Sign in"}
-            </button>
+            </Button>
           </form>
 
           {/* Register link */}
           <p className="mt-6 text-center text-xs text-subtle">
             No account?{" "}
-            <a href="/register" className="text-primary transition-colors hover:text-primary-hover">
+            <Link href="/register" className="text-primary transition-colors hover:text-primary-hover">
               Create one
-            </a>
+            </Link>
+          </p>
+          <p className="mt-2 text-center text-xs text-subtle">
+            Admin access?{" "}
+            <Link href="/admin/login" className="text-primary transition-colors hover:text-primary-hover">
+              Sign in as admin
+            </Link>
           </p>
         </div>
       </div>

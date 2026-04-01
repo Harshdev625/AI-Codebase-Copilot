@@ -1,11 +1,21 @@
 """Integration tests for API endpoints."""
 import uuid
 import json
+import os
 import httpx
 import pytest
 
 
-BASE = "http://127.0.0.1:8000/v1"
+_RUN_LIVE = os.getenv("RUN_LIVE_INTEGRATION_TESTS", "").strip().lower() in {"1", "true", "yes"}
+BASE = os.getenv("LIVE_API_BASE_URL", "http://127.0.0.1:8000/v1")
+
+pytestmark = pytest.mark.skipif(
+    not _RUN_LIVE,
+    reason=(
+        "Live integration tests are disabled by default to avoid contaminating non-test databases. "
+        "Set RUN_LIVE_INTEGRATION_TESTS=1 to enable explicitly."
+    ),
+)
 
 
 def pretty_response(r):
@@ -112,11 +122,13 @@ def test_repository_management(api_client, authenticated_user):
     project_id = r.json().get("id")
     assert project_id
 
+    repo_id = f"test-repo-{uuid.uuid4().hex[:8]}"
+
     # Add repository
     r = api_client.post(
         f"{BASE}/projects/{project_id}/repositories",
         json={
-            "repo_id": "test-repo",
+            "repo_id": repo_id,
             "remote_url": "https://github.com/octocat/Hello-World.git",
             "default_branch": "main",
         },
@@ -124,7 +136,7 @@ def test_repository_management(api_client, authenticated_user):
     )
     assert r.status_code in (200, 201)
     repo = r.json()
-    assert repo.get("repo_id") == "test-repo"
+    assert repo.get("repo_id") == repo_id
 
     # List repositories
     r = api_client.get(f"{BASE}/projects/{project_id}/repositories", headers=headers)
@@ -145,19 +157,22 @@ def test_index_endpoint(api_client, authenticated_user):
     )
     project_id = r.json().get("id")
 
+    repo_id = f"index-test-repo-{uuid.uuid4().hex[:8]}"
+
     r = api_client.post(
         f"{BASE}/projects/{project_id}/repositories",
         json={
-            "repo_id": "index-test-repo",
+            "repo_id": repo_id,
             "remote_url": "https://github.com/octocat/Hello-World.git",
         },
         headers=headers,
     )
+    assert r.status_code in (200, 201)
 
     # Call index endpoint
     r = api_client.post(
         f"{BASE}/index",
-        json={"repo_id": "index-test-repo"},
+        json={"repo_id": repo_id},
         headers=headers,
         timeout=15.0,  # Indexing might take a while
     )

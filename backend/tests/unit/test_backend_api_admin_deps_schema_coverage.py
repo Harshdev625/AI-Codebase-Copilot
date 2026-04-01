@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -8,9 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 
 from app.api import dependencies
 from app.api.v1 import admin as admin_module
-from app.api.v1.tools import execute_tool
 from app.db import schema as schema_module
-from app.models.api_models import ToolRequest
 
 
 class _Result:
@@ -45,6 +43,11 @@ class _SessionQueue:
         self.commits += 1
 
 
+def _payload(response):
+    body = json.loads(response.body.decode("utf-8"))
+    return body.get("data")
+
+
 def test_get_current_user_all_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(HTTPException, match="Missing bearer token"):
         dependencies.get_current_user(credentials=None, session=_SessionQueue())
@@ -71,7 +74,7 @@ def test_get_current_user_all_branches(monkeypatch: pytest.MonkeyPatch) -> None:
             session=inactive_session,
         )
 
-    active_session = _SessionQueue(results=[[{"id": "u1", "email": "a@b.com", "role": "developer", "is_active": True}]])
+    active_session = _SessionQueue(results=[[{"id": "u1", "email": "a@b.com", "role": "USER", "is_active": True}]])
     current = dependencies.get_current_user(
         credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials="x"),
         session=active_session,
@@ -80,10 +83,10 @@ def test_get_current_user_all_branches(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_require_roles_and_repository_access() -> None:
-    checker = dependencies.require_roles({"admin"})
+    checker = dependencies.require_roles({"ADMIN"})
     with pytest.raises(HTTPException, match="Insufficient role"):
-        checker(current_user={"role": "developer"})
-    assert checker(current_user={"role": "admin", "id": "a1"})["id"] == "a1"
+        checker(current_user={"role": "USER"})
+    assert checker(current_user={"role": "ADMIN", "id": "a1"})["id"] == "a1"
 
     allowed_session = _SessionQueue(results=[[{"id": "rid", "repo_id": "demo"}]])
     allowed = dependencies.ensure_repository_access(allowed_session, "demo", "u1")
@@ -98,68 +101,47 @@ def test_require_roles_and_repository_access() -> None:
         dependencies.ensure_repository_access(forbidden_session, "demo", "u1")
 
 
-def test_tools_execute_all_supported_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    import app.api.v1.tools as tools_module
-
-    monkeypatch.setattr(tools_module, "read_file", lambda path: f"file:{path}")
-    monkeypatch.setattr(tools_module, "git_status", lambda repo_path: f"git:{repo_path}")
-    monkeypatch.setattr(tools_module, "is_command_allowed", lambda command: command == "echo ok")
-    monkeypatch.setattr(tools_module, "run_command", lambda command, cwd=None: f"run:{command}:{cwd}")
-
-    out_file = execute_tool(ToolRequest(tool_name="read_file", args={"path": "x.py"}))
-    assert out_file.success is True and out_file.output == "file:x.py"
-
-    out_git = execute_tool(ToolRequest(tool_name="git_status", args={"repo_path": "."}))
-    assert out_git.success is True and out_git.output == "git:."
-
-    blocked = execute_tool(ToolRequest(tool_name="run_command", args={"command": "rm -rf /"}))
-    assert blocked.success is False
-
-    allowed = execute_tool(ToolRequest(tool_name="run_command", args={"command": "echo ok", "cwd": "tmp"}))
-    assert allowed.success is True and "run:echo ok:tmp" in allowed.output
-
-    unsupported = execute_tool(SimpleNamespace(tool_name="something_else", args={}))
-    assert unsupported.success is False and "Unsupported" in unsupported.output
-
-
 def test_admin_list_and_update_routes() -> None:
     session = _SessionQueue(
         results=[
-            [{"id": "u1"}],
+            [{"id": "u1", "role": "ADMIN"}],
             [{"id": "r1"}],
             [{"id": "i1"}],
-            [{"id": "a1"}],
+            [{"id": "j1", "status": "running"}],
+            [{"id": "ru1", "email": "recent@example.com", "role": "USER", "is_active": True}],
             [],
-            [{"id": "u2", "email": "x@x.com", "full_name": "X", "role": "admin", "is_active": True}],
+            [{"id": "u2", "email": "x@x.com", "full_name": "X", "role": "ADMIN", "is_active": True}],
             [],
-            [{"id": "u3", "email": "y@y.com", "full_name": "Y", "role": "developer", "is_active": False}],
+            [{"id": "u3", "email": "y@y.com", "full_name": "Y", "role": "USER", "is_active": False}],
             [{"id": "u4", "email": "z@z.com"}],
         ]
     )
 
-    assert admin_module.admin_users(_={"id": "admin"}, session=session)[0]["id"] == "u1"
-    assert admin_module.admin_repositories(_={"id": "admin"}, session=session)[0]["id"] == "r1"
-    assert admin_module.admin_indexing_status(_={"id": "admin"}, session=session)[0]["id"] == "i1"
-    assert admin_module.admin_agent_runs(_={"id": "admin"}, session=session)[0]["id"] == "a1"
+    assert _payload(admin_module.admin_users(_={"id": "admin"}, session=session))[0]["id"] == "u1"
+    assert _payload(admin_module.admin_repositories(_={"id": "admin"}, session=session))[0]["id"] == "r1"
+    assert _payload(admin_module.admin_indexing_status(_={"id": "admin"}, session=session))[0]["id"] == "i1"
+    activity = _payload(admin_module.admin_recent_activity(_={"id": "admin"}, session=session))
+    assert activity["indexing_jobs"][0]["id"] == "j1"
+    assert activity["recent_users"][0]["role"] == "USER"
 
     updated_role = admin_module.update_user_role(
         "u2",
-        admin_module.UserRoleUpdate(user_id="u2", role="admin"),
+        admin_module.UserRoleUpdate(role="ADMIN"),
         current_admin={"id": "admin"},
         session=session,
     )
-    assert updated_role["role"] == "admin"
+    assert _payload(updated_role)["role"] == "ADMIN"
 
     updated_status = admin_module.update_user_status(
         "u3",
-        admin_module.UserActiveUpdate(user_id="u3", is_active=False),
+        admin_module.UserActiveUpdate(is_active=False),
         current_admin={"id": "admin"},
         session=session,
     )
-    assert updated_status["id"] == "u3"
+    assert _payload(updated_status)["id"] == "u3"
 
     deleted = admin_module.delete_user("u4", current_admin={"id": "admin"}, session=session)
-    assert deleted["deleted"] is True
+    assert _payload(deleted)["deleted"] is True
 
 
 def test_admin_guardrail_and_not_found_branches() -> None:
@@ -168,7 +150,7 @@ def test_admin_guardrail_and_not_found_branches() -> None:
     with pytest.raises(HTTPException, match="Invalid role"):
         admin_module.update_user_role(
             "u1",
-            admin_module.UserRoleUpdate(user_id="u1", role="wrong"),
+            admin_module.UserRoleUpdate(role="wrong"),
             current_admin={"id": "admin"},
             session=session,
         )
@@ -176,7 +158,7 @@ def test_admin_guardrail_and_not_found_branches() -> None:
     with pytest.raises(HTTPException, match="Cannot demote yourself"):
         admin_module.update_user_role(
             "admin",
-            admin_module.UserRoleUpdate(user_id="admin", role="developer"),
+            admin_module.UserRoleUpdate(role="USER"),
             current_admin={"id": "admin"},
             session=session,
         )
@@ -184,7 +166,7 @@ def test_admin_guardrail_and_not_found_branches() -> None:
     with pytest.raises(HTTPException, match="Cannot deactivate yourself"):
         admin_module.update_user_status(
             "admin",
-            admin_module.UserActiveUpdate(user_id="admin", is_active=False),
+            admin_module.UserActiveUpdate(is_active=False),
             current_admin={"id": "admin"},
             session=session,
         )
@@ -196,15 +178,58 @@ def test_admin_guardrail_and_not_found_branches() -> None:
         admin_module.delete_user("missing", current_admin={"id": "admin"}, session=session)
 
 
-def test_admin_system_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_admin_system_metrics() -> None:
     counts_session = _SessionQueue(results=[[{"users_count": 1}]])
-    assert admin_module.admin_system_metrics(_={"id": "admin"}, session=counts_session)["users_count"] == 1
+    assert _payload(admin_module.admin_system_metrics(_={"id": "admin"}, session=counts_session))["users_count"] == 1
 
     empty_session = _SessionQueue(results=[[]])
-    assert admin_module.admin_system_metrics(_={"id": "admin"}, session=empty_session) == {}
+    assert _payload(admin_module.admin_system_metrics(_={"id": "admin"}, session=empty_session)) == {}
 
 
-def test_ensure_app_schema_bootstrap_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_admin_service_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _OkResponse:
+        def raise_for_status(self):
+            return None
+
+    class _FailResponse:
+        def raise_for_status(self):
+            raise RuntimeError("down")
+
+    class _Client:
+        def __init__(self, timeout=3.0):
+            _ = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url: str):
+            if url.endswith("/collections"):
+                return _OkResponse()
+            return _FailResponse()
+
+    class _Redis:
+        def __init__(self, **kwargs):
+            _ = kwargs
+
+        def ping(self):
+            raise RuntimeError("redis down")
+
+    monkeypatch.setattr(admin_module.httpx, "Client", _Client)
+    monkeypatch.setattr(admin_module.redis, "Redis", _Redis)
+
+    statuses = _payload(admin_module.admin_service_health(_={"id": "admin"}, session=_SessionQueue(results=[[{"ok": 1}]])))
+    by_name = {item["name"]: item["status"] for item in statuses}
+    assert by_name["Backend API"] == "online"
+    assert by_name["PostgreSQL"] == "online"
+    assert by_name["Qdrant"] == "online"
+    assert by_name["Redis"] == "offline"
+    assert by_name["Ollama"] == "offline"
+
+
+def test_ensure_app_schema_role_normalization_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeConnection:
         def __init__(self, existing_rows):
             self.existing_rows = existing_rows
@@ -233,23 +258,7 @@ def test_ensure_app_schema_bootstrap_paths(monkeypatch: pytest.MonkeyPatch) -> N
         def begin(self):
             return FakeBegin(self.connection)
 
-    monkeypatch.setattr(schema_module.settings, "bootstrap_admin_email", "", raising=False)
-    monkeypatch.setattr(schema_module.settings, "bootstrap_admin_password", "", raising=False)
-    conn_no_bootstrap = FakeConnection(existing_rows=[])
-    monkeypatch.setattr(schema_module, "engine", FakeEngine(conn_no_bootstrap))
+    conn_noop = FakeConnection(existing_rows=[])
+    monkeypatch.setattr(schema_module, "engine", FakeEngine(conn_noop))
     schema_module.ensure_app_schema()
-    assert conn_no_bootstrap.exec_calls == 2
-
-    monkeypatch.setattr(schema_module.settings, "bootstrap_admin_email", "admin@example.com", raising=False)
-    monkeypatch.setattr(schema_module.settings, "bootstrap_admin_password", "pass12345", raising=False)
-    monkeypatch.setattr(schema_module.settings, "bootstrap_admin_full_name", "Admin", raising=False)
-
-    conn_insert = FakeConnection(existing_rows=[])
-    monkeypatch.setattr(schema_module, "engine", FakeEngine(conn_insert))
-    schema_module.ensure_app_schema()
-    assert conn_insert.exec_calls >= 4
-
-    conn_update = FakeConnection(existing_rows=[{"id": "u1", "role": "developer", "is_active": False}])
-    monkeypatch.setattr(schema_module, "engine", FakeEngine(conn_update))
-    schema_module.ensure_app_schema()
-    assert conn_update.exec_calls >= 4
+    assert conn_noop.exec_calls >= 4

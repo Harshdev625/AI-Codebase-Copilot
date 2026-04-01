@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy import text
@@ -9,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import ensure_repository_access, get_current_user
+from app.core.api_response import success_response
+from app.core.config import settings
 from app.db.database import get_db_session, SessionLocal
 from app.models.api_models import (
     AddRepositoryRequest,
@@ -21,6 +25,7 @@ from app.models.api_models import (
 from app.services.indexing_service import IndexingService
 
 router = APIRouter(tags=["repositories"])
+logger = logging.getLogger(__name__)
 
 
 def _to_payload(row: dict) -> dict:
@@ -77,7 +82,7 @@ def list_projects(
         ),
         {"user_id": current_user["id"]},
     ).mappings().all()
-    return [ProjectResponse(**_to_payload(row)) for row in rows]
+    return success_response([ProjectResponse(**_to_payload(row)).model_dump() for row in rows])
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -125,7 +130,7 @@ def create_project(
     if row is None:
         raise HTTPException(status_code=500, detail="Project creation failed")
 
-    return ProjectResponse(**_to_payload(row))
+    return success_response(ProjectResponse(**_to_payload(row)).model_dump(), status_code=status.HTTP_201_CREATED)
 
 
 @router.get("/projects/{project_id}/repositories", response_model=list[RepositoryResponse])
@@ -146,6 +151,13 @@ def list_repositories(
                             r.local_path,
                             r.default_branch,
                             r.created_at,
+                            (
+                                SELECT rs.id
+                                FROM repository_snapshots rs
+                                WHERE rs.repository_id = r.id
+                                ORDER BY rs.created_at DESC
+                                LIMIT 1
+                            ) AS latest_snapshot_id,
                             (
                                 SELECT rs.index_status
                                 FROM repository_snapshots rs
@@ -181,7 +193,7 @@ def list_repositories(
         ),
         {"project_id": project_id},
     ).mappings().all()
-    return [RepositoryResponse(**_to_payload(row)) for row in rows]
+    return success_response([RepositoryResponse(**_to_payload(row)).model_dump() for row in rows])
 
 
 @router.post(
@@ -233,7 +245,10 @@ def add_repository(
     if row is None:
         raise HTTPException(status_code=500, detail="Repository creation failed")
 
-    return RepositoryResponse(**_to_payload(row))
+    return success_response(
+        RepositoryResponse(**_to_payload(row)).model_dump(),
+        status_code=status.HTTP_201_CREATED,
+    )
 
 
 @router.post("/index", response_model=IndexResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -263,7 +278,7 @@ def index_repo(
             text(
                 """
                 INSERT INTO repository_snapshots (id, repository_id, commit_sha, branch, index_status)
-                VALUES (:id, :repository_id, :commit_sha, :branch, 'running')
+                VALUES (:id, :repository_id, :commit_sha, :branch, 'pending')
                 """
             ),
             {
@@ -277,7 +292,7 @@ def index_repo(
             text(
                 """
                 INSERT INTO indexing_jobs (id, repository_id, snapshot_id, status, message, started_at)
-                VALUES (:id, :repository_id, :snapshot_id, 'running', 'Indexing started', NOW())
+                VALUES (:id, :repository_id, :snapshot_id, 'pending', 'Indexing queued', NOW())
                 """
             ),
             {
@@ -300,6 +315,22 @@ def index_repo(
     ) -> None:
         db = SessionLocal()
         try:
+            if repository_db_id is not None and indexing_job_id is not None and snapshot_id is not None:
+                db.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs SET status = 'running', message = 'Indexing started', updated_at = NOW()
+                        WHERE id = :id
+                        """
+                    ),
+                    {"id": indexing_job_id},
+                )
+                db.execute(
+                    text("UPDATE repository_snapshots SET index_status = 'running' WHERE id = :id"),
+                    {"id": snapshot_id},
+                )
+                db.commit()
+
             total = IndexingService(db).index_repository(
                 repo_id=repo_id,
                 repo_path=repo_path,
@@ -307,10 +338,12 @@ def index_repo(
                 repo_ref=repo_ref,
                 commit_sha=commit_sha,
                 indexing_job_id=indexing_job_id,
+                snapshot_id=snapshot_id,
             )
         except Exception as exc:
             # Reset failed transaction before issuing status updates.
             db.rollback()
+            logger.exception("Indexing job failed repo_id=%s snapshot_id=%s", repo_id, snapshot_id)
             if repository_db_id is not None and indexing_job_id is not None and snapshot_id is not None:
                 db.execute(
                     text(
@@ -326,11 +359,21 @@ def index_repo(
                     text(
                         """
                         UPDATE repository_snapshots
-                        SET index_status = 'failed', stats = CAST(:stats AS jsonb), indexed_at = NOW()
+                        SET index_status = 'failed',
+                            stats = CAST(:stats AS jsonb),
+                            indexed_at = NOW()
                         WHERE id = :id
                         """
                     ),
-                    {"id": snapshot_id, "stats": json.dumps({"error": str(exc)})},
+                    {
+                        "id": snapshot_id,
+                        "stats": json.dumps(
+                            {
+                                "error": "Indexing failed",
+                                "error_detail": str(exc)[:300],
+                            }
+                        ),
+                    },
                 )
                 db.commit()
             return
@@ -360,23 +403,6 @@ def index_repo(
         finally:
             db.close()
 
-    def _background_embedding_job(repo_id: str) -> None:
-        """
-        Generate embeddings for chunks AFTER indexing completes.
-        This runs separately to avoid blocking the indexing job.
-        Chunks are already searchable lexically; embeddings enable vector search.
-        """
-        import time
-        db = SessionLocal()
-        try:
-            # Wait a bit to ensure chunk storage is fully committed
-            time.sleep(2)
-            IndexingService(db).generate_embeddings_for_chunks(repo_id=repo_id)
-        except Exception:
-            pass  # Embedding generation failure is non-critical
-        finally:
-            db.close()
-
     background_tasks.add_task(
         _background_index_job,
         req.repo_id,
@@ -389,10 +415,10 @@ def index_repo(
         indexing_job_id,
     )
 
-    # Schedule embedding generation to run after indexing completes
-    background_tasks.add_task(_background_embedding_job, req.repo_id)
-
-    return IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id)
+    return success_response(
+        IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id).model_dump(),
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
 
 @router.get("/index/progress/{snapshot_id}")
@@ -405,7 +431,7 @@ def get_index_progress(
     row = session.execute(
         text(
             """
-            SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at
+            SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
             FROM repository_snapshots rs
             LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
             WHERE rs.id = :snapshot_id
@@ -417,18 +443,147 @@ def get_index_progress(
     if not row:
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
+    # Timeout handling: mark long-running jobs as failed to avoid silent stuck states.
+    if row["status"] == "running" and row["started_at"] is not None:
+        started = row["started_at"]
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        elapsed_seconds = int((datetime.now(timezone.utc) - started).total_seconds())
+        if elapsed_seconds > settings.indexing_timeout_seconds:
+            session.execute(
+                text(
+                    """
+                    UPDATE indexing_jobs
+                    SET status = 'failed', message = :message, finished_at = NOW(), updated_at = NOW()
+                    WHERE snapshot_id = :snapshot_id AND status = 'running'
+                    """
+                ),
+                {
+                    "snapshot_id": snapshot_id,
+                    "message": "Indexing timed out",
+                },
+            )
+            session.execute(
+                text(
+                    """
+                    UPDATE repository_snapshots
+                    SET index_status = 'failed',
+                        stats = CAST(:stats AS jsonb),
+                        indexed_at = NOW()
+                    WHERE id = :snapshot_id
+                    """
+                ),
+                {
+                    "snapshot_id": snapshot_id,
+                    "stats": json.dumps(
+                        {
+                            "error": "Indexing timed out",
+                            "elapsed_seconds": elapsed_seconds,
+                        }
+                    ),
+                },
+            )
+            session.commit()
+
+            row = session.execute(
+                text(
+                    """
+                    SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
+                    FROM repository_snapshots rs
+                    LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
+                    WHERE rs.id = :snapshot_id
+                    """
+                ),
+                {"snapshot_id": snapshot_id},
+            ).mappings().first()
+
+    if row["status"] == "running":
+        heartbeat_at = row.get("updated_at") or row["started_at"]
+        if heartbeat_at is not None:
+            if heartbeat_at.tzinfo is None:
+                heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+            stalled_seconds = int((datetime.now(timezone.utc) - heartbeat_at).total_seconds())
+            if stalled_seconds > settings.indexing_stall_timeout_seconds:
+                session.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'failed', message = :message, finished_at = NOW(), updated_at = NOW()
+                        WHERE snapshot_id = :snapshot_id AND status = 'running'
+                        """
+                    ),
+                    {
+                        "snapshot_id": snapshot_id,
+                        "message": "Indexing stalled",
+                    },
+                )
+                session.execute(
+                    text(
+                        """
+                        UPDATE repository_snapshots
+                        SET index_status = 'failed',
+                            stats = CAST(:stats AS jsonb),
+                            indexed_at = NOW()
+                        WHERE id = :snapshot_id
+                        """
+                    ),
+                    {
+                        "snapshot_id": snapshot_id,
+                        "stats": json.dumps(
+                            {
+                                "error": "Indexing stalled",
+                                "stalled_seconds": stalled_seconds,
+                            }
+                        ),
+                    },
+                )
+                session.commit()
+
+                row = session.execute(
+                    text(
+                        """
+                        SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
+                        FROM repository_snapshots rs
+                        LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
+                        WHERE rs.id = :snapshot_id
+                        """
+                    ),
+                    {"snapshot_id": snapshot_id},
+                ).mappings().first()
+
     started_at = row["started_at"]
     if started_at is not None and hasattr(started_at, "isoformat"):
         started_at = started_at.isoformat()
 
-    return {
-        "snapshot_id": snapshot_id,
-        "index_status": row["index_status"],
-        "job_status": row["status"],
-        "message": row["message"] or "Indexing in progress...",
-        "stats": row["stats"] or {},
-        "started_at": started_at,
-    }
+    stats = row["stats"] or {}
+    if isinstance(stats, str):
+        try:
+            stats = json.loads(stats)
+        except json.JSONDecodeError:
+            stats = {}
+    if not isinstance(stats, dict):
+        stats = {}
+    total_files = int(stats.get("total_files") or 0)
+    processed_files = int(stats.get("processed_files") or 0)
+    percentage = int(stats.get("percentage") or 0)
+    current_file = stats.get("current_file")
+    eta_seconds = stats.get("eta_seconds")
+
+    return success_response(
+        {
+            "snapshot_id": snapshot_id,
+            "index_status": row["index_status"] or row["status"] or "pending",
+            "job_status": row["status"] or "pending",
+            "message": row["message"] or "Indexing in progress...",
+            "stats": stats,
+            "total_files": total_files,
+            "processed_files": processed_files,
+            "percentage": percentage,
+            "current_file": current_file,
+            "eta_seconds": eta_seconds,
+            "started_at": started_at,
+        }
+    )
 
 
 def _ensure_membership(session: Session, project_id: str, user_id: str) -> None:

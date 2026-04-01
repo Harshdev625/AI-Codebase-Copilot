@@ -10,8 +10,8 @@ The backend is a FastAPI service that powers:
 - authentication and authorization,
 - project/repository management,
 - indexing source code into chunk + vector stores,
-- search/chat over indexed repositories,
-- admin and tooling APIs.
+- chat over indexed repositories,
+- admin observability APIs.
 
 Primary entry point: `backend/app/main.py`
 
@@ -34,9 +34,8 @@ Main application package.
   - `dependencies.py` handles current-user auth, role checks, repository access checks.
   - `v1/auth` for login/register/me.
   - `v1/repositories` for projects/repos/indexing.
-  - `v1/chat` for chat + conversations/messages.
-  - `v1/search` for search.
-  - `v1/tools` for controlled tool execution.
+  - `v1/chat` for synchronous and streaming chat.
+  - `v1/dashboard` for user-scoped dashboard summaries.
   - `v1/admin` for admin operations and metrics.
 
 - `core/`
@@ -116,12 +115,12 @@ It is needed by Python packaging tooling for editable installs and package resol
 6. Embeddings/Qdrant writes are best-effort.
 7. Progress and final status are written to `indexing_jobs` and `repository_snapshots`.
 
-### Chat/search flow
+### Chat flow
 1. Repository access is validated.
-2. Retrieval runs (hybrid dense + lexical).
+2. Retrieval runs (hybrid dense + lexical) inside the query workflow.
 3. Graph workflow processes intent/state.
 4. LLM answer generation runs with assembled context.
-5. Conversation/message records + run metadata are persisted.
+5. Response is returned as normal JSON (`/chat`) or NDJSON stream (`/chat/stream`).
 
 ---
 
@@ -151,12 +150,11 @@ Also includes indices for common query paths and pgvector-enabled embedding stor
 Primary API models are in `app/models/api_models.py`.
 Additional admin request models are in `app/api/v1/admin/__init__.py`.
 
-Total API request/response schemas: **18**
+Total API request/response schemas: **10**
 
-- Chat/Search/Index/Tool: 8 models
+- Chat/Index: 4 models
 - Auth/User: 5 models
 - Project/Repository: 4 models
-- Conversation/Message: 4 models
 - Admin request models: 2 models
 
 (`api_models.py` and admin file together; some categories overlap by feature grouping.)
@@ -169,10 +167,20 @@ All routes are mounted under `/v1`.
 
 Total endpoints: **23**
 
-### Auth (3)
+### Auth (5)
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
+- `POST /v1/auth/admin/register`
+- `POST /v1/auth/admin/login`
 - `GET /v1/auth/me`
+
+Role assignment behavior:
+
+- `/v1/auth/register` always creates user with role `USER`.
+- `/v1/auth/login` only validates credentials and returns token; role is not passed by client.
+- `/v1/auth/admin/register` requires `admin_secret_key` and creates role `ADMIN` directly.
+- `/v1/auth/admin/login` authenticates only admin users.
+- Admin role comes from admin register or admin management routes.
 
 ### Repositories/Projects/Indexing (6)
 - `GET /v1/projects`
@@ -182,34 +190,28 @@ Total endpoints: **23**
 - `POST /v1/index`
 - `GET /v1/index/progress/{snapshot_id}`
 
-### Chat/Conversations/Messages (4)
+### Chat (2)
 - `POST /v1/chat`
-- `POST /v1/projects/{project_id}/conversations`
-- `GET /v1/conversations/{conversation_id}/messages`
-- `POST /v1/conversations/{conversation_id}/messages`
+- `POST /v1/chat/stream`
 
-### Search (1)
-- `POST /v1/search`
+### Dashboard (1)
+- `GET /v1/dashboard/me`
 
-### Tools (1)
-- `POST /v1/tools/execute`
-
-### Admin (8)
+### Admin (9)
 - `GET /v1/admin/users`
 - `GET /v1/admin/repositories`
 - `GET /v1/admin/indexing-status`
-- `GET /v1/admin/agent-runs`
 - `POST /v1/admin/users/{user_id}/role`
 - `POST /v1/admin/users/{user_id}/status`
 - `DELETE /v1/admin/users/{user_id}`
 - `GET /v1/admin/system-metrics`
-
----
+- `GET /v1/admin/recent-activity`
+- `GET /v1/admin/service-health`
 
 ## 7) External dependencies used at runtime
 
 - **Postgres + pgvector**: persistent relational + vector-aware storage.
-- **Qdrant**: optional vector index/search backend.
+- **Qdrant**: optional vector index backend for retrieval.
 - **Ollama**: local inference for chat/embeddings.
 - **Redis**: optional cache layer.
 
@@ -229,6 +231,12 @@ pip install -e .[dev]
 python run.py
 ```
 
+Set admin registration secret (recommended for dedicated admin signup):
+
+```powershell
+$Env:ADMIN_REGISTRATION_SECRET_KEY = "change-me"
+```
+
 Tests + coverage:
 
 ```powershell
@@ -240,11 +248,22 @@ OpenAPI:
 
 ---
 
-## 9) Current quality snapshot (latest local verification)
+## 9) Admin onboarding flow
 
-- Backend tests: **184 passed, 4 skipped**
-- Coverage: **91% total**
+Primary production path:
 
-Skips are integration tests that require a separately running live backend on `127.0.0.1:8000`.
+1. Set `ADMIN_REGISTRATION_SECRET_KEY` in backend environment.
+2. Register admin via `POST /v1/auth/admin/register` with `admin_secret_key`.
+3. Login via `POST /v1/auth/admin/login`.
+
+Legacy bootstrap options have been removed from routes; use the dedicated `/v1/auth/admin/register` flow.
+
+---
+
+## 10) Current quality snapshot (latest local verification)
+
+- Targeted backend route/auth checks are passing, including new admin register/login coverage.
+- Full-suite counts can vary by environment and optional integration dependencies.
+- Integration tests that expect a running live backend still require `127.0.0.1:8000`.
 
 

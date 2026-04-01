@@ -2,9 +2,14 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { storeSession } from "@/lib/auth";
+import { apiRequest, requireData } from "@/lib/http";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export default function RegisterPage() {
+  const router = useRouter();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,28 +21,22 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
     try {
-      const registerRes = await fetch("/api/auth/register", {
+      const registerResult = await apiRequest<{ id: string }>("/api/auth/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, full_name: fullName || null }),
+        body: { email, password, full_name: fullName || null },
+        withAuth: false,
       });
-      const registerData = await registerRes.json();
-      if (!registerRes.ok) {
-        throw new Error(registerData?.detail || "Registration failed");
-      }
+      requireData(registerResult, "Registration failed");
 
-      const loginRes = await fetch("/api/auth/login", {
+      const loginResult = await apiRequest<{ access_token: string }>("/api/auth/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: { email, password },
+        withAuth: false,
       });
-      const loginData = await loginRes.json();
-      if (!loginRes.ok) {
-        throw new Error(loginData?.detail || "Login failed");
-      }
+      const loginData = requireData(loginResult, "Login failed");
 
       await storeSession(loginData.access_token);
-      window.location.href = "/dashboard";
+      router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
     } finally {
@@ -54,9 +53,8 @@ export default function RegisterPage() {
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">Full name</label>
-            <input
+            <Input
               type="text"
-              className="input-base"
               placeholder="Your name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -65,10 +63,9 @@ export default function RegisterPage() {
 
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">Email</label>
-            <input
+            <Input
               type="email"
               required
-              className="input-base"
               placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -77,11 +74,10 @@ export default function RegisterPage() {
 
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">Password</label>
-            <input
+            <Input
               type="password"
               required
               minLength={8}
-              className="input-base"
               placeholder="At least 8 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -90,13 +86,16 @@ export default function RegisterPage() {
 
           {error && <div className="rounded-lg border border-danger/30 bg-danger-dim px-3 py-2 text-xs text-danger">{error}</div>}
 
-          <button type="submit" disabled={loading} className="btn-primary w-full justify-center">
+          <Button type="submit" disabled={loading} className="w-full justify-center">
             {loading ? "Creating account..." : "Create account"}
-          </button>
+          </Button>
         </form>
 
         <p className="mt-5 text-xs text-subtle">
           Already have an account? <Link href="/login" className="text-primary hover:text-primary-hover">Sign in</Link>
+        </p>
+        <p className="mt-2 text-xs text-subtle">
+          Admin account setup? <Link href="/admin/register" className="text-primary hover:text-primary-hover">Register admin</Link>
         </p>
       </div>
     </div>

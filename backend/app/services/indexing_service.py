@@ -4,7 +4,11 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
+import logging
+import json
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from pathspec import PathSpec
@@ -15,8 +19,13 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
+from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.rag.retrieval.code_graph import rebuild_code_graph
 from app.services.qdrant_service import QdrantService
+
+
+logger = logging.getLogger(__name__)
 
 
 class IndexingService:
@@ -59,6 +68,36 @@ class IndexingService:
         ".scss",
         ".less",
     }
+
+    NOISY_FILENAMES = {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "pipfile.lock",
+    }
+
+    NOISY_PATH_SEGMENTS = {
+        "node_modules",
+        "dist",
+        "build",
+        ".next",
+        "coverage",
+    }
+
+    def _is_low_signal_file(self, file_path: Path, repo_root: Path) -> bool:
+        if file_path.name.lower() in self.NOISY_FILENAMES:
+            return True
+
+        rel_parts = {part.lower() for part in file_path.relative_to(repo_root).parts}
+        if rel_parts.intersection(self.NOISY_PATH_SEGMENTS):
+            return True
+
+        lower_name = file_path.name.lower()
+        if lower_name.endswith(".min.js") or lower_name.endswith(".min.css"):
+            return True
+
+        return False
 
     def _slugify_repo_id(self, repo_id: str) -> str:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", repo_id).strip(".-")
@@ -165,6 +204,8 @@ class IndexingService:
                 continue
             if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
                 continue
+            if self._is_low_signal_file(file_path, repo_root):
+                continue
             if file_path.stat().st_size > settings.max_index_file_size_bytes:
                 continue
             yield file_path
@@ -210,6 +251,8 @@ class IndexingService:
                 if self._is_ignored(spec, repo_root, file_path):
                     continue
                 if file_path.suffix.lower() in self.SUPPORTED_SUFFIXES:
+                    if self._is_low_signal_file(file_path, repo_root):
+                        continue
                     if file_path.stat().st_size > settings.max_index_file_size_bytes:
                         continue
                     yield file_path
@@ -219,21 +262,70 @@ class IndexingService:
         self.embedder = get_embedding_provider()
         self.qdrant = QdrantService()
 
-    def _update_progress(self, indexing_job_id: str | None, current: int, total: int, message: str = "") -> None:
-        """Update indexing job progress in database."""
+    def _update_progress(
+        self,
+        indexing_job_id: str | None,
+        current: int,
+        total: int,
+        message: str = "",
+        current_file: str | None = None,
+        elapsed_seconds: float | None = None,
+        snapshot_id: str | None = None,
+    ) -> None:
+        """Update indexing progress in both indexing_jobs and snapshot stats."""
         if not indexing_job_id:
             return
+        percentage = int((current / total) * 100) if total > 0 else 0
+        eta_seconds: int | None = None
+        avg_seconds_per_file: float | None = None
+        if elapsed_seconds is not None and current > 0:
+            avg_seconds_per_file = elapsed_seconds / max(current, 1)
+            remaining = max(total - current, 0)
+            eta_seconds = int(avg_seconds_per_file * remaining)
+
+        stats_payload = {
+            "total_files": total,
+            "processed_files": current,
+            "percentage": percentage,
+            "current_file": current_file,
+            "eta_seconds": eta_seconds,
+            "avg_seconds_per_file": round(avg_seconds_per_file, 4) if avg_seconds_per_file is not None else None,
+            "updated_at_epoch": time.time(),
+        }
         try:
             self.session.execute(
                 text(
                     """
                     UPDATE indexing_jobs
-                    SET message = :message, updated_at = NOW()
+                    SET message = :message,
+                        updated_at = NOW(),
+                        status = CASE WHEN status = 'pending' THEN 'running' ELSE status END
                     WHERE id = :id
                     """
                 ),
                 {"id": indexing_job_id, "message": message or f"Processing: {current}/{total} files"},
             )
+
+            target_snapshot_id = snapshot_id
+            if not target_snapshot_id:
+                row = self.session.execute(
+                    text("SELECT snapshot_id FROM indexing_jobs WHERE id = :id"),
+                    {"id": indexing_job_id},
+                ).mappings().first()
+                target_snapshot_id = row["snapshot_id"] if row else None
+
+            if target_snapshot_id:
+                self.session.execute(
+                    text(
+                        """
+                        UPDATE repository_snapshots
+                        SET stats = CAST(:stats AS jsonb),
+                            index_status = CASE WHEN index_status = 'pending' THEN 'running' ELSE index_status END
+                        WHERE id = :snapshot_id
+                        """
+                    ),
+                    {"snapshot_id": target_snapshot_id, "stats": json.dumps(stats_payload)},
+                )
             self.session.commit()
         except Exception:
             # Non-critical update failure; rollback to avoid aborted transactions.
@@ -247,39 +339,128 @@ class IndexingService:
         repo_url: str | None = None,
         repo_ref: str | None = None,
         indexing_job_id: str | None = None,
+        snapshot_id: str | None = None,
     ) -> int:
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
         cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
+        started_at = time.perf_counter()
 
         try:
             ignore_spec = self._load_gitignore_spec(root)
-            self._update_progress(indexing_job_id, 0, 0, "Discovering files...")
+            self._update_progress(indexing_job_id, 0, 0, "Discovering files...", snapshot_id=snapshot_id)
 
             chunks: list[CodeChunk] = []
             file_list = list(self._iter_indexable_files(root, ignore_spec))
             total_files = len(file_list)
-            self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index")
+            self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index", snapshot_id=snapshot_id)
 
-            for idx, file_path in enumerate(file_list, 1):
+            def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
                 try:
                     source = file_path.read_text(encoding="utf-8", errors="ignore")
                     if file_path.suffix == ".py":
-                        chunks.extend(chunk_python_file(repo_id, commit_sha, file_path, source))
-                    else:
-                        chunks.extend(self.generic_chunk_file(repo_id, commit_sha, file_path, source))
+                        try:
+                            python_chunks = chunk_python_file(repo_id, commit_sha, file_path, source)
+                        except Exception:
+                            python_chunks = []
 
-                    if idx % 10 == 0 or idx == total_files:
-                        self._update_progress(indexing_job_id, idx, total_files, f"Indexed {idx}/{total_files} files ({len(chunks)} chunks)")
+                        if python_chunks:
+                            return file_path, python_chunks, None
+
+                        # Keep python files searchable even when AST parsing fails
+                        # or when a file has no function/class definitions.
+                        return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
+                    structured_chunks = chunk_with_tree_sitter(repo_id, commit_sha, file_path, source)
+                    if structured_chunks:
+                        return file_path, structured_chunks, None
+                    return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
                 except Exception as exc:
-                    self._update_progress(indexing_job_id, idx, total_files, f"Error in {file_path.name}: {str(exc)[:100]}")
-                    continue
+                    return file_path, [], exc
 
-            self._update_progress(indexing_job_id, total_files, total_files, f"Storing {len(chunks)} chunks...")
+            processed = 0
+            max_workers = max(1, min(4, (os.cpu_count() or 2)))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_chunk_single_file, fp): fp for fp in file_list}
+                pending = set(future_map.keys())
+                last_progress_update = time.perf_counter()
+
+                while pending:
+                    done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                    now = time.perf_counter()
+                    elapsed = now - started_at
+
+                    if not done:
+                        # Keep heartbeat fresh so polling clients can distinguish active work from stalled jobs.
+                        if now - last_progress_update >= 10:
+                            self._update_progress(
+                                indexing_job_id,
+                                processed,
+                                total_files,
+                                f"Indexing in progress ({processed}/{total_files} files)",
+                                elapsed_seconds=elapsed,
+                                snapshot_id=snapshot_id,
+                            )
+                            last_progress_update = now
+                        continue
+
+                    for future in done:
+                        file_path = future_map[future]
+                        _path, file_chunks, error = future.result()
+                        if error is None:
+                            chunks.extend(file_chunks)
+                        processed += 1
+                        elapsed = time.perf_counter() - started_at
+                        if error is not None:
+                            self._update_progress(
+                                indexing_job_id,
+                                processed,
+                                total_files,
+                                f"Error in {file_path.name}: {str(error)[:100]}",
+                                current_file=str(file_path),
+                                elapsed_seconds=elapsed,
+                                snapshot_id=snapshot_id,
+                            )
+                            last_progress_update = time.perf_counter()
+                            logger.warning("Indexing error for %s: %s", file_path, error)
+                            continue
+
+                        should_update = (
+                            processed % 5 == 0
+                            or processed == total_files
+                            or (time.perf_counter() - last_progress_update) >= 2
+                        )
+                        if should_update:
+                            self._update_progress(
+                                indexing_job_id,
+                                processed,
+                                total_files,
+                                f"Indexed {processed}/{total_files} files ({len(chunks)} chunks)",
+                                current_file=str(file_path),
+                                elapsed_seconds=elapsed,
+                                snapshot_id=snapshot_id,
+                            )
+                            last_progress_update = time.perf_counter()
+
+            self._update_progress(
+                indexing_job_id,
+                total_files,
+                total_files,
+                f"Storing {len(chunks)} chunks...",
+                elapsed_seconds=time.perf_counter() - started_at,
+                snapshot_id=snapshot_id,
+            )
             self._upsert_chunks(chunks)
+            self._rebuild_repo_graph(repo_id)
+            logger.info("Indexing completed for repo_id=%s files=%s chunks=%s", repo_id, total_files, len(chunks))
             return len(chunks)
         finally:
             if cleanup_cached_repo and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
+
+    def _rebuild_repo_graph(self, repo_id: str) -> None:
+        try:
+            rebuild_code_graph(self.session, repo_id)
+        except Exception:
+            self.session.rollback()
 
     def generic_chunk_file(self, repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
         # Simple chunking: split file into N-line chunks (e.g., 40 lines)
@@ -311,17 +492,11 @@ class IndexingService:
         return chunks
 
     def _upsert_chunks(self, chunks: list[CodeChunk]) -> None:
-        """Store chunks in PostgreSQL WITHOUT embeddings.
-        
-        Embeddings are generated separately in a non-blocking way.
-        This ensures chunks are persisted for lexical search immediately.
-        """
+        """Store chunks in PostgreSQL and upsert vectors when embeddings are available."""
         if not chunks:
             return
 
-        # Single SQL that works with NULL embedding values.
-        # Embedding is optional — chunks can be searched lexically without vectors.
-        stmt = text(
+        stmt_without_embedding = text(
             """
             INSERT INTO code_chunks (
               id, repo_id, commit_sha, path, language, symbol,
@@ -338,31 +513,81 @@ class IndexingService:
             """
         )
 
-        # Store all chunks without embeddings (blocking insert only)
-        stored_count = 0
-        for chunk in chunks:
-            try:
-                self.session.execute(
-                    stmt,
-                    {
-                        "id": chunk.id,
-                        "repo_id": chunk.repo_id,
-                        "commit_sha": chunk.commit_sha,
-                        "path": chunk.path,
-                        "language": chunk.language,
-                        "symbol": chunk.symbol,
-                        "chunk_type": chunk.chunk_type,
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "content": chunk.content,
-                        "metadata": "{}",
-                    },
-                )
-                stored_count += 1
-            except Exception:
-                # Roll back this failed insert and keep going with the rest.
-                self.session.rollback()
-                continue
+        stmt_with_embedding = text(
+            """
+            INSERT INTO code_chunks (
+              id, repo_id, commit_sha, path, language, symbol,
+              chunk_type, start_line, end_line, content, metadata, embedding
+            ) VALUES (
+              :id, :repo_id, :commit_sha, :path, :language, :symbol,
+              :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
+              CAST(:embedding AS vector)
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              commit_sha = EXCLUDED.commit_sha,
+              content    = EXCLUDED.content,
+              metadata   = EXCLUDED.metadata,
+              embedding  = EXCLUDED.embedding
+            """
+        )
+
+        qdrant_points: list[dict] = []
+
+        for idx in range(0, len(chunks), 16):
+            batch = chunks[idx : idx + 16]
+            embeddings_by_id: dict[str, list[float]] = {}
+
+            for chunk in batch:
+                try:
+                    embedding = self.embedder.embed_text(chunk.content)
+                    validate_embedding_dimension(embedding)
+                    embeddings_by_id[chunk.id] = embedding
+                except Exception:
+                    continue
+
+            for chunk in batch:
+                embedding = embeddings_by_id.get(chunk.id)
+                if embedding is not None:
+                    vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
+                    chunk.embedding = embedding
+                else:
+                    vector_literal = None
+
+                params = {
+                    "id": chunk.id,
+                    "repo_id": chunk.repo_id,
+                    "commit_sha": chunk.commit_sha,
+                    "path": chunk.path,
+                    "language": chunk.language,
+                    "symbol": chunk.symbol,
+                    "chunk_type": chunk.chunk_type,
+                    "start_line": chunk.start_line,
+                    "end_line": chunk.end_line,
+                    "content": chunk.content,
+                    "metadata": "{}",
+                }
+
+                try:
+                    if vector_literal is not None:
+                        params["embedding"] = vector_literal
+                        self.session.execute(stmt_with_embedding, params)
+                        qdrant_points.append(
+                            {
+                                "id": chunk.id,
+                                "vector": embedding,
+                                "payload": {
+                                    "repo_id": chunk.repo_id,
+                                    "path": chunk.path,
+                                    "symbol": chunk.symbol,
+                                    "chunk_type": chunk.chunk_type,
+                                },
+                            }
+                        )
+                    else:
+                        self.session.execute(stmt_without_embedding, params)
+                except Exception:
+                    self.session.rollback()
+                    continue
 
         try:
             self.session.commit()
@@ -370,46 +595,10 @@ class IndexingService:
             self.session.rollback()
             raise
 
-    def generate_embeddings_for_chunks(self, repo_id: str, chunk_ids: list[str] | None = None) -> dict[str, list[float]]:
-        """Generate embeddings for chunks in a non-blocking way.
-        
-        This is called separately after chunks are stored, allowing the indexing job
-        to complete quickly. Embeddings are optional for lexical search.
-        
-        Returns: dict mapping chunk_id -> embedding_vector
-        """
-        generated = {}
-        
-        if not chunk_ids:
-            # Get chunks without embeddings
-            chunks = self.session.execute(
-                text("SELECT id, content FROM code_chunks WHERE repo_id = :repo_id AND embedding IS NULL LIMIT 100"),
-                {"repo_id": repo_id},
-            ).fetchall()
-        else:
-            chunks = self.session.execute(
-                text("SELECT id, content FROM code_chunks WHERE id IN :ids"),
-                {"ids": chunk_ids},
-            ).fetchall()
-        
-        for chunk_id, content in chunks:
+        if qdrant_points:
             try:
-                embedding_list = self.embedder.embed_text(content)
-                validate_embedding_dimension(embedding_list)
-                vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding_list) + "]"
-                
-                self.session.execute(
-                    text("UPDATE code_chunks SET embedding = CAST(:embedding AS vector) WHERE id = :id"),
-                    {"id": chunk_id, "embedding": vector_literal},
-                )
-                generated[chunk_id] = embedding_list
-            except Exception:
-                # Skip failed embeddings; chunk remains searchable lexically
-                continue
-        
-        try:
-            self.session.commit()
-        except Exception:
-            self.session.rollback()
-        
-        return generated
+                self.qdrant.ensure_collection()
+                self.qdrant.upsert_points(qdrant_points)
+            except RuntimeError:
+                pass
+

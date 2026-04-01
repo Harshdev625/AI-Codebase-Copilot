@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.roles import normalize_role
 from app.core.security import decode_access_token
 from app.db.database import get_db_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 
 def get_current_user(
@@ -38,37 +42,57 @@ def get_current_user(
         {"user_id": user_id},
     ).mappings().first()
 
-    if row is None or not row["is_active"]:
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if not row["is_active"]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not active")
 
-    return dict(row)
+    user = dict(row)
+    user["role"] = normalize_role(user.get("role"))
+    return user
 
 
 def require_roles(allowed_roles: set[str]):
     def checker(current_user: dict = Depends(get_current_user)) -> dict:
-        user_role = str(current_user.get("role", ""))
-        if user_role not in allowed_roles:
+        normalized_allowed_roles = {normalize_role(role) for role in allowed_roles}
+        user_role = normalize_role(str(current_user.get("role", "")))
+        if user_role not in normalized_allowed_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+        current_user["role"] = user_role
         return current_user
 
     return checker
 
 
 def ensure_repository_access(session: Session, repo_id: str, user_id: str) -> dict:
-    row = session.execute(
+    rows = session.execute(
         text(
             """
             SELECT r.id, r.project_id, r.repo_id, r.remote_url, r.local_path, r.default_branch
             FROM repositories r
             JOIN project_memberships pm ON pm.project_id = r.project_id
             WHERE r.repo_id = :repo_id AND pm.user_id = :user_id
-            LIMIT 1
+            ORDER BY r.created_at DESC
+            LIMIT 2
             """
         ),
         {"repo_id": repo_id, "user_id": user_id},
-    ).mappings().first()
-    if row is not None:
-        return dict(row)
+    ).mappings().all()
+
+    if len(rows) == 1:
+        return dict(rows[0])
+
+    if len(rows) > 1:
+        logger.warning(
+            "Ambiguous repository access repo_id=%s user_id=%s count=%s",
+            repo_id,
+            user_id,
+            len(rows),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Repository identifier is ambiguous across multiple projects",
+        )
 
     repository_exists = session.execute(
         text("SELECT id FROM repositories WHERE repo_id = :repo_id LIMIT 1"),

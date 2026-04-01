@@ -34,6 +34,13 @@ This README is the single entry point for the project. Deep technical details li
 - Admin metrics and user visibility for platform oversight.
 - Local model support through Ollama.
 
+## Auth and Admin Flow
+
+- User signup/login: `/register`, `/login` (developer role by default).
+- Admin signup/login: `/register/admin`, `/login/admin`.
+- Admin registration requires backend `ADMIN_REGISTRATION_SECRET_KEY`.
+- Admin dashboard is available at `/admin` for users with role `admin`.
+
 ## Architecture
 
 ```mermaid
@@ -102,29 +109,31 @@ Frontend URL: `http://localhost:3000`
 
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
+- `POST /v1/auth/admin/register`
+- `POST /v1/auth/admin/login`
 - `GET /v1/auth/me`
 - `GET /v1/projects`
 - `POST /v1/projects`
 - `GET /v1/projects/{project_id}/repositories`
 - `POST /v1/projects/{project_id}/repositories`
-- `POST /v1/projects/{project_id}/conversations`
-- `GET /v1/conversations/{conversation_id}/messages`
-- `POST /v1/conversations/{conversation_id}/messages`
-- `POST /v1/search`
 - `POST /v1/chat`
+- `POST /v1/chat/stream`
 - `POST /v1/index`
-- `POST /v1/tools/execute`
+- `GET /v1/dashboard/me`
 - `GET /v1/admin/users`
 - `GET /v1/admin/repositories`
 - `GET /v1/admin/indexing-status`
-- `GET /v1/admin/agent-runs`
 - `GET /v1/admin/system-metrics`
+- `GET /v1/admin/recent-activity`
+- `GET /v1/admin/service-health`
 
 ### Frontend routes summary
 
 - `/` landing page
 - `/login` sign in
 - `/register` sign up
+- `/login/admin` admin sign in
+- `/register/admin` admin sign up
 - `/dashboard` authenticated dashboard
 - `/repositories` project and repository management
 - `/chat` repository-scoped AI chat
@@ -151,7 +160,8 @@ AI-Codebase-Copilot/
 │   ├── architecture.md
 │   ├── backend.md
 │   ├── frontend.md
-│   ├── project-spec.md
+│   ├── flow.md
+│   ├── Coverage.md
 │   └── testing.md
 └── infra/
 ```
@@ -187,7 +197,7 @@ See [docs/testing.md](docs/testing.md) for test scope and commands.
 - [docs/architecture.md](docs/architecture.md) system architecture and data flow
 - [docs/backend.md](docs/backend.md) backend setup, APIs, and operational notes
 - [docs/frontend.md](docs/frontend.md) frontend routes, proxies, and user flows
-- [docs/project-spec.md](docs/project-spec.md) internal project specification and roadmap
+- [Project.md](Project.md) product scope, implementation status, and roadmap
 - [docs/testing.md](docs/testing.md) test commands and coverage notes
 
 ---

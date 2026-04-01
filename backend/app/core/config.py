@@ -37,13 +37,13 @@ class Settings(BaseSettings):
     repo_cache_dir: str = ".repo_cache"
     repo_cache_persist: bool = False
     max_index_file_size_bytes: int = 1_000_000
+    indexing_timeout_seconds: int = 60 * 30
+    indexing_stall_timeout_seconds: int = 60 * 5
 
     jwt_secret_key: str = "change-me-in-production"
     jwt_issuer: str = "ai-codebase-copilot"
     jwt_access_token_expire_seconds: int = 60 * 60 * 8
-    bootstrap_admin_email: str = ""
-    bootstrap_admin_password: str = ""
-    bootstrap_admin_full_name: str = "Administrator"
+    admin_registration_secret_key: str = ""
 
     @property
     def postgres_dsn(self) -> str:

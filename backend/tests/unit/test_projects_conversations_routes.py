@@ -198,7 +198,14 @@ def _insert_user(session_factory: sessionmaker, user_id: str, email: str, role: 
 def _login(client: TestClient, email: str) -> str:
     response = client.post("/v1/auth/login", json={"email": email, "password": "password123"})
     assert response.status_code == 200
-    return response.json()["access_token"]
+    return _payload(response)["access_token"]
+
+
+def _payload(response):
+    body = response.json()
+    if isinstance(body, dict) and "success" in body and "data" in body:
+        return body.get("data")
+    return body
 
 
 def test_create_and_list_project_for_current_user(client: TestClient, session_factory: sessionmaker) -> None:
@@ -211,11 +218,11 @@ def test_create_and_list_project_for_current_user(client: TestClient, session_fa
         headers={"Authorization": f"Bearer {token}"},
     )
     assert create_response.status_code == 201
-    project_id = create_response.json()["id"]
+    project_id = _payload(create_response)["id"]
 
     list_response = client.get("/v1/projects", headers={"Authorization": f"Bearer {token}"})
     assert list_response.status_code == 200
-    assert any(project["id"] == project_id for project in list_response.json())
+    assert any(project["id"] == project_id for project in _payload(list_response))
 
 
 def test_add_and_list_repositories_for_project(client: TestClient, session_factory: sessionmaker) -> None:
@@ -227,7 +234,7 @@ def test_add_and_list_repositories_for_project(client: TestClient, session_facto
         json={"name": "RepoProject", "description": None},
         headers={"Authorization": f"Bearer {token}"},
     )
-    project_id = create_project.json()["id"]
+    project_id = _payload(create_project)["id"]
 
     add_repo = client.post(
         f"/v1/projects/{project_id}/repositories",
@@ -246,7 +253,7 @@ def test_add_and_list_repositories_for_project(client: TestClient, session_facto
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_repo.status_code == 200
-    assert list_repo.json()[0]["repo_id"] == "demo-repo"
+    assert _payload(list_repo)[0]["repo_id"] == "demo-repo"
 
 
 def test_add_repository_duplicate_repo_id_returns_conflict(
@@ -267,8 +274,8 @@ def test_add_repository_duplicate_repo_id_returns_conflict(
         json={"name": "RepoProjectTwo", "description": None},
         headers=headers,
     )
-    project_one_id = project_one.json()["id"]
-    project_two_id = project_two.json()["id"]
+    project_one_id = _payload(project_one)["id"]
+    project_two_id = _payload(project_two)["id"]
 
     first_add = client.post(
         f"/v1/projects/{project_one_id}/repositories",
@@ -295,43 +302,16 @@ def test_add_repository_duplicate_repo_id_returns_conflict(
     assert duplicate_add.status_code == 409
 
 
-def test_create_and_list_conversation(client: TestClient, session_factory: sessionmaker) -> None:
+def test_chat_stream_endpoint_exists(client: TestClient, session_factory: sessionmaker) -> None:
     _insert_user(session_factory, "u-3", "chat@example.com")
     token = _login(client, "chat@example.com")
 
-    create_project = client.post(
-        "/v1/projects",
-        json={"name": "ChatProject", "description": "chat flow"},
+    response = client.post(
+        "/v1/chat/stream",
+        json={"repo_id": "missing-repo", "query": "architecture"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    project_id = create_project.json()["id"]
-
-    add_repo = client.post(
-        f"/v1/projects/{project_id}/repositories",
-        json={
-            "repo_id": "chat-repo",
-            "remote_url": "https://github.com/example/chat-repo",
-            "local_path": None,
-            "default_branch": "main",
-        },
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert add_repo.status_code == 201
-
-    create_conversation = client.post(
-        f"/v1/projects/{project_id}/conversations",
-        json={"title": "Architecture chat"},
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert create_conversation.status_code == 201
-    conversation_id = create_conversation.json()["id"]
-
-    list_messages = client.get(
-        f"/v1/conversations/{conversation_id}/messages",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert list_messages.status_code == 200
-    assert list_messages.json() == []
+    assert response.status_code in {403, 404}
 
 
 def test_index_uses_repository_source_and_returns_progress(
@@ -351,7 +331,7 @@ def test_index_uses_repository_source_and_returns_progress(
         headers=headers,
     )
     assert create_project.status_code == 201
-    project_id = create_project.json()["id"]
+    project_id = _payload(create_project)["id"]
 
     repo_id = "index-repo"
     add_repo = client.post(
@@ -372,11 +352,8 @@ def test_index_uses_repository_source_and_returns_progress(
         captured.update(kwargs)
         return 7
 
-    def fake_generate_embeddings(self, **kwargs):  # type: ignore[no-untyped-def]
-        return {}
-
     monkeypatch.setattr(repositories_module.IndexingService, "index_repository", fake_index_repository)
-    monkeypatch.setattr(repositories_module.IndexingService, "generate_embeddings_for_chunks", fake_generate_embeddings)
+    monkeypatch.setattr(repositories_module, "SessionLocal", session_factory)
 
     index_response = client.post(
         "/v1/index",
@@ -384,7 +361,7 @@ def test_index_uses_repository_source_and_returns_progress(
         headers=headers,
     )
     assert index_response.status_code == 202
-    snapshot_id = index_response.json()["snapshot_id"]
+    snapshot_id = _payload(index_response)["snapshot_id"]
 
     assert captured["repo_id"] == repo_id
     assert captured["repo_url"] == "https://github.com/example/index-repo"
@@ -392,5 +369,6 @@ def test_index_uses_repository_source_and_returns_progress(
 
     progress_response = client.get(f"/v1/index/progress/{snapshot_id}", headers=headers)
     assert progress_response.status_code == 200
-    assert progress_response.json()["snapshot_id"] == snapshot_id
-    assert progress_response.json()["index_status"] in {"running", "completed", "failed"}
+    progress_payload = _payload(progress_response)
+    assert progress_payload["snapshot_id"] == snapshot_id
+    assert progress_payload["index_status"] in {"pending", "running", "completed", "failed"}

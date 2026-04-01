@@ -1,21 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useEffect, useState, type ElementType } from "react";
 import {
-  GitBranch, MessageSquare, ShieldCheck, Activity,
-  Database, Users, Layers, ArrowRight, TrendingUp, Star, Zap, Sparkles,
-  Code2, BarChart3, Rocket,
+  AlertCircle,
+  ArrowRight,
+  BarChart3,
+  Code2,
+  Database,
+  FolderOpen,
+  GitBranch,
+  Rocket,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  Users,
+  Zap,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { clearSession, getStoredUser, type CurrentUser } from "@/lib/auth";
+import { apiRequest, requireData } from "@/lib/http";
 
 type Metrics = {
   users_count?: number;
   projects_count?: number;
   repositories_count?: number;
-  conversations_count?: number;
-  messages_count?: number;
-  agent_runs_count?: number;
   indexed_chunks_count?: number;
 };
 
@@ -25,25 +41,34 @@ type Project = {
   description?: string | null;
 };
 
-// Modern quick action cards - inspired by GitHub, Vercel, Figma
+type DashboardMeResponse = {
+  user: CurrentUser;
+  metrics: Metrics;
+  recent_repositories: Array<{
+    id: string;
+    repo_id: string;
+    default_branch?: string;
+    latest_index_status?: string | null;
+    created_at?: string;
+  }>;
+};
+
 const QUICK_ACTIONS = [
   {
     href: "/repositories",
     icon: GitBranch,
     label: "Index Repositories",
     desc: "Connect GitHub repos and make code searchable",
-    color: "from-blue-600 to-blue-700",
+    color: "from-cyan-700 to-teal-700",
     badge: "Popular",
-    stats: "1K+ indexed",
   },
   {
     href: "/chat",
     icon: Sparkles,
     label: "AI Code Chat",
     desc: "Ask questions about your codebase instantly",
-    color: "from-purple-600 to-purple-700",
+    color: "from-amber-600 to-orange-700",
     badge: "New",
-    stats: "Real-time answers",
   },
   {
     href: "/admin",
@@ -52,63 +77,65 @@ const QUICK_ACTIONS = [
     desc: "Manage users, system health, and settings",
     color: "from-emerald-600 to-emerald-700",
     badge: "Admin",
-    stats: "Full control",
   },
 ];
 
-// Modern metric card with better visualization
+const USER_QUICK_ACTIONS = QUICK_ACTIONS.filter((item) => item.href !== "/admin");
+
 function MetricCard({
   label,
   value,
   icon: Icon,
-  trend,
   color,
 }: {
   label: string;
   value: number;
-  icon: React.ElementType;
-  trend?: number;
+  icon: ElementType;
   color: string;
 }) {
   return (
-    <div className="card group relative overflow-hidden p-6 transition-all hover:shadow-lg hover:scale-105">
-      <div className="absolute inset-0 opacity-0 group-hover:opacity-5 bg-gradient-to-br transition-opacity" />
-      <div className="relative z-10">
-        <div className="flex items-start justify-between mb-3">
+    <Card className="group relative overflow-hidden p-0 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl">
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/8 via-transparent to-accent/8 opacity-0 transition-opacity group-hover:opacity-100" />
+      <CardContent className="relative z-10 p-5">
+        <div className="mb-3 flex items-start justify-between">
           <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${color}`}>
             <Icon className="h-6 w-6 text-white" />
           </div>
-          {trend !== undefined && (
-            <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${trend > 0 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"}`}>
-              <TrendingUp className="h-3 w-3" />
-              {Math.abs(trend)}%
-            </div>
-          )}
         </div>
         <p className="text-3xl font-bold text-text">{value.toLocaleString()}</p>
-        <p className="text-xs text-muted mt-2">{label}</p>
-      </div>
-    </div>
+        <p className="mt-2 text-xs text-muted">{label}</p>
+      </CardContent>
+    </Card>
   );
 }
 
-const METRIC_META = [
-  { key: "users_count" as keyof Metrics, label: "Active Users", icon: Users, color: "bg-blue-600", trend: 12 },
-  { key: "repositories_count" as keyof Metrics, label: "Repositories", icon: GitBranch, color: "bg-purple-600", trend: 8 },
-  { key: "indexed_chunks_count" as keyof Metrics, label: "Indexed Chunks", icon: Database, color: "bg-emerald-600", trend: 24 },
-  { key: "conversations_count" as keyof Metrics, label: "Conversations", icon: MessageSquare, color: "bg-orange-600", trend: 5 },
-  { key: "agent_runs_count" as keyof Metrics, label: "Agent Runs", icon: Activity, color: "bg-pink-600", trend: 18 },
-  { key: "messages_count" as keyof Metrics, label: "Messages", icon: Layers, color: "bg-indigo-600", trend: 32 },
+const ADMIN_METRIC_META = [
+  { key: "projects_count" as keyof Metrics, label: "Projects", icon: FolderOpen, color: "bg-cyan-600" },
+  { key: "users_count" as keyof Metrics, label: "Active Users", icon: Users, color: "bg-blue-600" },
+  { key: "repositories_count" as keyof Metrics, label: "Repositories", icon: GitBranch, color: "bg-teal-700" },
+  { key: "indexed_chunks_count" as keyof Metrics, label: "Indexed Chunks", icon: Database, color: "bg-emerald-600" },
+];
+
+const USER_METRIC_META = [
+  { key: "projects_count" as keyof Metrics, label: "My Projects", icon: FolderOpen, color: "bg-cyan-600" },
+  { key: "repositories_count" as keyof Metrics, label: "My Repositories", icon: GitBranch, color: "bg-teal-700" },
+  { key: "indexed_chunks_count" as keyof Metrics, label: "Indexed Chunks", icon: Database, color: "bg-emerald-600" },
 ];
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = useState<Metrics>({});
   const [projects, setProjects] = useState<Project[]>([]);
   const [user, setUser] = useState<CurrentUser | null>(null);
+  const [recentRepositories, setRecentRepositories] = useState<DashboardMeResponse["recent_repositories"]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem("aicc_token") || "";
-    if (!token) { window.location.href = "/login"; return; }
+    if (!token) {
+      window.location.href = "/login";
+      return;
+    }
     const stored = getStoredUser();
     if (!stored) {
       clearSession();
@@ -117,170 +144,222 @@ export default function DashboardPage() {
     }
     setUser(stored);
 
-    fetch("/api/projects", { headers: { Authorization: `Bearer ${token}` } })
-      .then((r) => r.json())
-      .then((data) => {
-        const projectList = Array.isArray(data) ? data : [];
-        setProjects(projectList);
-        if (stored.role !== "admin") {
-          setMetrics({
-            projects_count: projectList.length,
-            repositories_count: 0,
-          });
-          // Fetch repos for all projects and sum them
-          Promise.all(
-            projectList.map((p: Project) =>
-              fetch(`/api/projects/${p.id}/repositories`, { headers: { Authorization: `Bearer ${token}` } })
-                .then((r) => (r.ok ? r.json() : []))
-                .then((repos: unknown[]) => (Array.isArray(repos) ? repos.length : 0))
-                .catch(() => 0)
-            )
-          ).then((counts) => {
-            const total = counts.reduce((a: number, b: number) => a + b, 0);
-            setMetrics((prev) => ({ ...prev, repositories_count: total }));
-          });
+    const loadData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        let hasDashboardSummary = false;
+        const dashboardResult = await apiRequest<DashboardMeResponse>("/api/dashboard/me");
+        if (dashboardResult.success && dashboardResult.data) {
+          const dashboardData = dashboardResult.data;
+          setMetrics(dashboardData.metrics || {});
+          setRecentRepositories(dashboardData.recent_repositories || []);
+          hasDashboardSummary = true;
         }
-      })
-      .catch(() => null);
 
-    if (stored.role === "admin") {
-      fetch("/api/admin/system-metrics", { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => r.json()).then(setMetrics).catch(() => null);
-      return;
-    }
+        if (stored.role === "ADMIN") {
+          const adminMetricsResult = await apiRequest<Metrics>("/api/admin/system-metrics");
+          setMetrics(requireData(adminMetricsResult, "Failed to load admin metrics"));
+        } else {
+          const projectsResult = await apiRequest<Project[]>("/api/projects");
+          if (projectsResult.success && projectsResult.data) {
+            const projectList = projectsResult.data;
+            const normalizedProjects = Array.isArray(projectList) ? projectList : [];
+            setProjects(normalizedProjects);
+            if (!hasDashboardSummary) {
+              setMetrics((prev) => ({ ...prev, projects_count: normalizedProjects.length }));
+            }
+          }
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadData();
   }, []);
 
-  const quickActions = user?.role === "admin"
-    ? QUICK_ACTIONS
-    : QUICK_ACTIONS.filter((item) => item.href !== "/admin");
+  const quickActions = user?.role === "ADMIN" ? QUICK_ACTIONS : USER_QUICK_ACTIONS;
 
-  const metricMeta = user?.role === "admin"
-    ? METRIC_META
-    : METRIC_META.filter((item) => item.key !== "users_count");
+  const metricMeta = user?.role === "ADMIN" ? ADMIN_METRIC_META : USER_METRIC_META;
 
   return (
-    <div className="animate-fade-in space-y-12">
-      {/* Modern Hero Banner */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 p-8 text-white sm:p-12">
-        <div className="absolute inset-0 opacity-20 bg-grid-white/25" />
-        <div className="absolute -right-40 -top-40 h-80 w-80 bg-white/10 rounded-full blur-3xl" />
-        <div className="absolute -left-40 -bottom-40 h-80 w-80 bg-white/10 rounded-full blur-3xl" />
-        
-        <div className="relative z-10">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/20 backdrop-blur-sm px-4 py-2 text-sm font-medium">
+    <div className="animate-fade-in space-y-8">
+      <Card className="relative overflow-hidden border border-primary/25 bg-gradient-to-br from-primary/20 via-surface to-accent/10 p-0">
+        <div className="pointer-events-none absolute inset-0 bg-hero-glow" />
+        <CardContent className="relative z-10 p-6 sm:p-10">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/30 bg-primary-dim px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.08em] text-primary">
             <Rocket className="h-4 w-4" />
             AI-Powered Code Intelligence
           </div>
-          <h1 className="text-4xl font-bold tracking-tight mb-3">Welcome back, {user?.full_name || "Developer"}! 👋</h1>
-          <p className="text-lg text-white/90 max-w-2xl">Index repositories, ask questions about your codebase, and get instant AI-powered insights powered by local LLMs.</p>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Link href="/repositories" className="inline-flex items-center gap-2 bg-white text-blue-600 hover:bg-blue-50 px-6 py-3 rounded-lg font-semibold transition-all">
+          <h1 className="text-3xl font-bold tracking-tight text-text sm:text-4xl">
+            Welcome back, {user?.full_name || "Developer"}!
+          </h1>
+          <p className="mt-3 max-w-2xl text-sm text-muted sm:text-base">
+            Index repositories, ask questions about your codebase, and get instant AI-powered insights powered by local LLMs.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-2 sm:gap-3">
+            <Link
+              href="/repositories"
+              className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-hover"
+            >
               <Code2 className="h-5 w-5" />
               Index Repository
             </Link>
-            <Link href="/chat" className="inline-flex items-center gap-2 bg-white/20 text-white hover:bg-white/30 px-6 py-3 rounded-lg font-semibold backdrop-blur-sm transition-all border border-white/30">
+            <Link
+              href="/chat"
+              className="inline-flex items-center gap-2 rounded-xl border border-border bg-surface/70 px-5 py-2.5 text-sm font-semibold text-text transition-colors hover:bg-surface"
+            >
               <Sparkles className="h-5 w-5" />
               Start Chat
             </Link>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      {/* Modern Metrics Grid */}
       <section>
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-text flex items-center gap-2">
+        <div className="mb-4">
+          <h2 className="flex items-center gap-2 text-xl font-bold text-text">
             <BarChart3 className="h-6 w-6 text-blue-600" />
-            System Metrics
+            {user?.role === "ADMIN" ? "Platform Insights" : "My Workspace Insights"}
           </h2>
-          <p className="text-sm text-muted mt-1">Real-time analytics of your AI Copilot platform</p>
+          <p className="mt-1 text-sm text-muted">
+            {user?.role === "ADMIN"
+              ? "System-wide analytics for all users and projects"
+              : "Your own projects and repositories summary"}
+          </p>
         </div>
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {metricMeta.map(({ key, label, icon: Icon, color, trend }) => (
-            <MetricCard key={key} label={label} value={metrics[key] ?? 0} icon={Icon} color={color} trend={trend} />
+        {error && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-danger/30 bg-danger-dim px-4 py-3 text-sm text-danger">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+          </div>
+        )}
+        {loading ? (
+          <Card>
+            <CardContent className="p-5 text-sm text-muted">Loading dashboard data...</CardContent>
+          </Card>
+        ) : null}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {metricMeta.map(({ key, label, icon: Icon, color }) => (
+            <MetricCard key={key} label={label} value={metrics[key] ?? 0} icon={Icon} color={color} />
           ))}
         </div>
       </section>
 
-      {/* Modern Quick Actions */}
       <section>
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-text flex items-center gap-2">
+        <div className="mb-4">
+          <h2 className="flex items-center gap-2 text-xl font-bold text-text">
             <Zap className="h-6 w-6 text-amber-600" />
             Quick Actions
           </h2>
-          <p className="text-sm text-muted mt-1">Get started in seconds</p>
+          <p className="mt-1 text-sm text-muted">Get started in seconds</p>
         </div>
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {quickActions.map(({ href, icon: Icon, label, desc, color, badge, stats }) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {quickActions.map(({ href, icon: Icon, label, desc, color, badge }) => (
             <Link
               key={href}
               href={href}
-              className="group card relative overflow-hidden p-6 hover:shadow-xl transition-all hover:scale-105 cursor-pointer"
+              className="group"
             >
-              <div className={`absolute inset-0 opacity-0 group-hover:opacity-10 bg-gradient-to-br ${color} transition-opacity`} />
-              
-              <div className="relative z-10">
-                <div className="flex items-start justify-between mb-4">
-                  <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${color} text-white shadow-lg`}>
-                    <Icon className="h-6 w-6" />
+              <Card className="relative h-full overflow-hidden p-0 transition-all duration-300 group-hover:-translate-y-0.5 group-hover:shadow-xl">
+                <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${color} opacity-0 transition-opacity group-hover:opacity-10`} />
+
+                <CardContent className="relative z-10 p-5">
+                  <div className="mb-4 flex items-start justify-between">
+                    <div className={`flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br ${color} text-white shadow-lg`}>
+                      <Icon className="h-6 w-6" />
+                    </div>
+                    <span className="badge badge-cyan gap-1">
+                      <Star className="h-3 w-3" />
+                      {badge}
+                    </span>
                   </div>
-                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 text-xs font-semibold rounded-full">
-                    <Star className="h-3 w-3" />
-                    {badge}
-                  </span>
-                </div>
-                
-                <h3 className="font-bold text-lg text-text mb-2">{label}</h3>
-                <p className="text-sm text-muted mb-4">{desc}</p>
-                
-                <div className="flex items-center justify-between pt-4 border-t border-border">
-                  <span className="text-xs font-medium text-blue-600">{stats}</span>
-                  <ArrowRight className="h-4 w-4 text-muted group-hover:text-blue-600 transition-colors" />
-                </div>
-              </div>
+
+                  <h3 className="text-lg font-bold text-text">{label}</h3>
+                  <p className="mt-2 text-sm text-muted">{desc}</p>
+
+                  <div className="mt-5 flex items-center justify-between border-t border-border pt-3">
+                    <span className="text-xs font-semibold text-primary">Open {label}</span>
+                    <ArrowRight className="h-4 w-4 text-muted transition-colors group-hover:text-primary" />
+                  </div>
+                </CardContent>
+              </Card>
             </Link>
           ))}
         </div>
       </section>
 
-      {/* Your Projects */}
-      {user?.role !== "admin" && projects.length > 0 && (
+      <section>
+        <Card>
+          <CardHeader className="mb-0">
+            <CardTitle>Recent Repositories</CardTitle>
+            <CardDescription>Most recent repositories in your accessible projects</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {recentRepositories.length === 0 ? <p className="text-xs text-muted">No recent repositories.</p> : null}
+            {recentRepositories.map((repo) => (
+              <div key={repo.id} className="rounded-xl border border-border bg-surface2/70 p-3">
+                <p className="text-sm font-medium text-text">{repo.repo_id}</p>
+                <p className="mt-1 text-xs text-muted">
+                  Branch: {repo.default_branch || "main"} · Status: {(repo.latest_index_status || "pending").toUpperCase()}
+                </p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      </section>
+
+      {user?.role !== "ADMIN" && projects.length > 0 && (
         <section>
-          <div className="mb-6">
+          <div className="mb-4">
             <h2 className="text-xl font-bold text-text">Your Projects</h2>
-            <p className="text-sm text-muted mt-1">{projects.length} active {projects.length === 1 ? "project" : "projects"}</p>
+            <p className="mt-1 text-sm text-muted">
+              {projects.length} active {projects.length === 1 ? "project" : "projects"}
+            </p>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((project) => (
-              <div key={project.id} className="card hover:shadow-md transition-all group">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-text group-hover:text-blue-600 transition-colors">{project.name}</h3>
-                    <p className="mt-2 text-sm text-muted">{project.description || "No description added yet"}</p>
+              <Card key={project.id} className="group transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl">
+                <CardContent>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold text-text transition-colors group-hover:text-primary">{project.name}</h3>
+                      <p className="mt-2 text-sm text-muted">{project.description || "No description added yet"}</p>
+                    </div>
+                    <Star className="h-4 w-4 text-muted transition-colors group-hover:text-accent" />
                   </div>
-                  <Star className="h-5 w-5 text-muted group-hover:text-amber-500 transition-colors" />
-                </div>
-                <Link href={`/repositories?project=${project.id}`} className="mt-4 inline-flex text-xs font-semibold text-blue-600 hover:text-blue-700">
-                  View Project <ArrowRight className="h-3 w-3 ml-1" />
-                </Link>
-              </div>
+                  <Link
+                    href={`/repositories?project=${project.id}`}
+                    className="mt-4 inline-flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary-hover"
+                  >
+                    View Project
+                    <ArrowRight className="h-3 w-3" />
+                  </Link>
+                </CardContent>
+              </Card>
             ))}
           </div>
         </section>
       )}
 
-      {/* Empty State */}
-      {user?.role !== "admin" && projects.length === 0 && (
-        <section className="rounded-2xl border-2 border-dashed border-border bg-surface2/50 p-12 text-center">
-          <Code2 className="mx-auto h-16 w-16 text-muted opacity-40 mb-4" />
-          <h3 className="text-lg font-semibold text-text mb-2">No projects yet</h3>
-          <p className="text-muted mb-6">Create your first project and start indexing repositories</p>
-          <Link href="/repositories" className="inline-flex items-center gap-2 bg-blue-600 text-white hover:bg-blue-700 px-6 py-3 rounded-lg font-semibold transition-all">
-            <Code2 className="h-5 w-5" />
-            Create First Project
-          </Link>
-        </section>
+      {user?.role !== "ADMIN" && projects.length === 0 && (
+        <Card className="border-dashed bg-surface2/50 p-0 text-center">
+          <CardContent className="p-10">
+            <Code2 className="mx-auto mb-4 h-14 w-14 text-muted/60" />
+            <h3 className="text-lg font-semibold text-text">No projects yet</h3>
+            <p className="mt-2 text-sm text-muted">Create your first project and start indexing repositories.</p>
+            <div className="mt-5">
+              <Link href="/repositories">
+                <Button className="gap-2">
+                  <Code2 className="h-4 w-4" />
+                  Create First Project
+                </Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

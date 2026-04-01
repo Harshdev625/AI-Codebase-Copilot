@@ -1,11 +1,21 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class ChatRequest(BaseModel):
-    repo_id: str = Field(..., min_length=1)
-    query: str = Field(..., min_length=3)
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+REPO_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$"
+BRANCH_PATTERN = r"^[A-Za-z0-9._/-]{1,128}$"
+COMMIT_PATTERN = r"^[A-Za-z0-9._/-]{3,80}$"
+
+
+class StrictRequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class ChatRequest(StrictRequestModel):
+    repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    query: str = Field(..., min_length=3, max_length=4000)
 
 
 class ChatResponse(BaseModel):
@@ -14,22 +24,12 @@ class ChatResponse(BaseModel):
     sources: list[dict[str, Any]] = []
 
 
-class SearchRequest(BaseModel):
-    repo_id: str
-    query: str
-    top_k: int = Field(default=8, ge=1, le=50)
-
-
-class SearchResponse(BaseModel):
-    results: list[dict[str, Any]]
-
-
-class IndexRequest(BaseModel):
-    repo_id: str
-    repo_path: str | None = None
-    repo_url: str | None = None
-    repo_ref: str | None = None
-    commit_sha: str = "local-working-copy"
+class IndexRequest(StrictRequestModel):
+    repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    repo_path: str | None = Field(default=None, max_length=1024)
+    repo_url: str | None = Field(default=None, max_length=1024)
+    repo_ref: str | None = Field(default=None, max_length=128, pattern=BRANCH_PATTERN)
+    commit_sha: str = Field(default="local-working-copy", min_length=3, max_length=80, pattern=COMMIT_PATTERN)
 
 
 class IndexResponse(BaseModel):
@@ -38,25 +38,22 @@ class IndexResponse(BaseModel):
     snapshot_id: str | None = None
 
 
-class ToolRequest(BaseModel):
-    tool_name: Literal["read_file", "git_status", "run_command"]
-    args: dict[str, Any] = Field(default_factory=dict)
+class AuthRegisterRequest(StrictRequestModel):
+    email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
+    password: str = Field(..., min_length=8, max_length=256)
+    full_name: str | None = Field(default=None, max_length=120)
 
 
-class ToolResponse(BaseModel):
-    success: bool
-    output: str
+class AuthAdminRegisterRequest(StrictRequestModel):
+    email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
+    password: str = Field(..., min_length=8, max_length=256)
+    full_name: str | None = Field(default=None, max_length=120)
+    admin_secret_key: str = Field(..., min_length=1, max_length=256)
 
 
-class AuthRegisterRequest(BaseModel):
-    email: str
-    password: str = Field(..., min_length=8)
-    full_name: str | None = None
-
-
-class AuthLoginRequest(BaseModel):
-    email: str
-    password: str
+class AuthLoginRequest(StrictRequestModel):
+    email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
+    password: str = Field(..., min_length=1, max_length=256)
 
 
 class AuthTokenResponse(BaseModel):
@@ -72,9 +69,9 @@ class UserResponse(BaseModel):
     is_active: bool
 
 
-class CreateProjectRequest(BaseModel):
-    name: str = Field(..., min_length=2)
-    description: str | None = None
+class CreateProjectRequest(StrictRequestModel):
+    name: str = Field(..., min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
 
 
 class ProjectResponse(BaseModel):
@@ -85,11 +82,11 @@ class ProjectResponse(BaseModel):
     created_at: str
 
 
-class AddRepositoryRequest(BaseModel):
-    repo_id: str = Field(..., min_length=2)
-    remote_url: str | None = None
-    local_path: str | None = None
-    default_branch: str = "main"
+class AddRepositoryRequest(StrictRequestModel):
+    repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    remote_url: str | None = Field(default=None, max_length=1024)
+    local_path: str | None = Field(default=None, max_length=1024)
+    default_branch: str = Field(default="main", min_length=1, max_length=128, pattern=BRANCH_PATTERN)
 
     @model_validator(mode="after")
     def validate_source(self) -> "AddRepositoryRequest":
@@ -106,34 +103,10 @@ class RepositoryResponse(BaseModel):
     local_path: str | None = None
     default_branch: str
     created_at: str
+    latest_snapshot_id: str | None = None
     latest_index_status: str | None = None
     latest_index_stats: dict[str, Any] | None = None
     latest_indexed_chunks: int | None = None
     has_completed_index: bool = False
     latest_completed_index_stats: dict[str, Any] | None = None
     latest_completed_indexed_chunks: int | None = None
-
-
-class CreateConversationRequest(BaseModel):
-    title: str | None = None
-
-
-class ConversationResponse(BaseModel):
-    id: str
-    project_id: str
-    user_id: str
-    title: str | None = None
-    created_at: str
-
-
-class MessageCreateRequest(BaseModel):
-    repo_id: str
-    query: str = Field(..., min_length=3)
-
-
-class MessageResponse(BaseModel):
-    id: str
-    conversation_id: str
-    role: str
-    content: str
-    created_at: str

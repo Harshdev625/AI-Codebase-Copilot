@@ -13,10 +13,6 @@ from app.graph.nodes.verifier import verifier_node
 from app.graph.state import CopilotState
 
 
-def route_after_plan(state: CopilotState) -> str:
-    return "tool_execution" if state.get("intent") == "tool" else "retrieval"
-
-
 def route_after_retrieval(state: CopilotState) -> str:
     intent = state.get("intent")
     if intent == "debug":
@@ -42,14 +38,8 @@ def build_graph():
     graph.add_node("answer", answer_node)
 
     graph.set_entry_point("planner")
-    graph.add_conditional_edges(
-        "planner",
-        route_after_plan,
-        {
-            "retrieval": "retrieval",
-            "tool_execution": "tool_execution",
-        },
-    )
+    # Project.md source-of-truth flow: planner -> retrieval -> reasoning -> tool_execution -> response.
+    graph.add_edge("planner", "retrieval")
 
     graph.add_conditional_edges(
         "retrieval",
@@ -62,22 +52,12 @@ def build_graph():
         },
     )
 
-    graph.add_edge("tool_execution", "code_understanding")
-    graph.add_conditional_edges(
-        "code_understanding",
-        route_after_retrieval,
-        {
-            "debugger": "verifier",
-            "refactor_advisor": "patch_generation",
-            "documentation": "verifier",
-            "code_understanding": "verifier",
-        },
-    )
-
-    graph.add_edge("debugger", "verifier")
-    graph.add_edge("documentation", "verifier")
+    graph.add_edge("code_understanding", "tool_execution")
+    graph.add_edge("debugger", "tool_execution")
+    graph.add_edge("documentation", "tool_execution")
     graph.add_edge("refactor_advisor", "patch_generation")
-    graph.add_edge("patch_generation", "verifier")
+    graph.add_edge("patch_generation", "tool_execution")
+    graph.add_edge("tool_execution", "verifier")
     graph.add_edge("verifier", "answer")
     graph.add_edge("answer", END)
     return graph.compile()

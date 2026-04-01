@@ -20,7 +20,7 @@ from app.graph.nodes.refactor_advisor import refactor_advisor_node
 from app.graph.nodes.retrieval import retrieval_node
 from app.graph.nodes.tool_execution import tool_execution_node
 from app.graph.nodes.verifier import verifier_node
-from app.graph.workflow import build_graph, route_after_plan, route_after_retrieval
+from app.graph.workflow import build_graph, route_after_retrieval
 from app.llm.model_router import OllamaModelRouter, get_model_router
 from app.services.cache_service import CacheService
 from app.services.qdrant_service import QdrantService
@@ -54,8 +54,8 @@ def test_main_create_app_registers_routes_and_startup(monkeypatch: pytest.Monkey
     paths = {route.path for route in app.routes}
     assert "/v1/auth/register" in paths
     assert "/v1/projects" in paths
-    assert "/v1/search" in paths
-    assert "/v1/tools/execute" in paths
+    assert "/v1/chat" in paths
+    assert "/v1/admin/system-metrics" in paths
 
     with TestClient(app):
         pass
@@ -63,10 +63,7 @@ def test_main_create_app_registers_routes_and_startup(monkeypatch: pytest.Monkey
     assert called["schema"] == 1
 
 
-def test_route_after_plan_and_retrieval_branches() -> None:
-    assert route_after_plan({"intent": "tool"}) == "tool_execution"
-    assert route_after_plan({"intent": "debug"}) == "retrieval"
-
+def test_route_after_retrieval_branches() -> None:
     assert route_after_retrieval({"intent": "debug"}) == "debugger"
     assert route_after_retrieval({"intent": "refactor"}) == "refactor_advisor"
     assert route_after_retrieval({"intent": "docs"}) == "documentation"

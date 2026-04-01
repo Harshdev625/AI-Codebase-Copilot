@@ -43,6 +43,17 @@ flowchart TD
 
 ## Typical interactions
 
+- Admin authentication:
+  1. Admin registration uses `/register/admin` with `admin_secret_key`.
+  2. Frontend proxy forwards to backend `/v1/auth/admin/register`.
+  3. Admin login uses `/login/admin` and backend enforces role `admin`.
+  4. Admin dashboard calls admin-only endpoints through `/api/admin/*` proxies.
+
+- Session validation:
+  1. Protected routes are gated by frontend app shell checks.
+  2. Session is revalidated via `/api/auth/me` on interval.
+  3. Unauthorized responses clear local session and redirect to `/login`.
+
 - Chat:
   1. User asks a question scoped to a repository.
   2. Backend creates a ChatRequest, retrieves top documents via vector DB + hybrid heuristics.

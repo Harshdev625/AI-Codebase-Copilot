@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 import DashboardPage from "@/app/dashboard/page";
 
@@ -16,7 +16,7 @@ describe("DashboardPage", () => {
         id: "u1",
         email: "dev@example.com",
         full_name: "Dev User",
-        role: "developer",
+        role: "USER",
         is_active: true,
       })
     );
@@ -25,15 +25,22 @@ describe("DashboardPage", () => {
     fetchSpy
       .mockResolvedValueOnce(
         new Response(
+          JSON.stringify({
+            metrics: { projects_count: 2, repositories_count: 3 },
+            recent_repositories: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
           JSON.stringify([
             { id: "p1", name: "Project One", description: "First" },
             { id: "p2", name: "Project Two", description: "Second" },
           ]),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
-      )
-      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: "r1" }, { id: "r2" }]), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: "r3" }]), { status: 200, headers: { "Content-Type": "application/json" } }));
+      );
 
     render(<DashboardPage />);
 
@@ -52,7 +59,7 @@ describe("DashboardPage", () => {
         id: "u2",
         email: "admin@example.com",
         full_name: "Admin User",
-        role: "admin",
+        role: "ADMIN",
         is_active: true,
       })
     );
@@ -60,7 +67,10 @@ describe("DashboardPage", () => {
     const fetchSpy = jest.spyOn(global, "fetch");
     fetchSpy
       .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ id: "p1", name: "Project One" }]), {
+        new Response(JSON.stringify({
+          metrics: { projects_count: 1, repositories_count: 1 },
+          recent_repositories: [],
+        }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })
@@ -69,11 +79,9 @@ describe("DashboardPage", () => {
         new Response(
           JSON.stringify({
             users_count: 10,
+            projects_count: 4,
             repositories_count: 5,
             indexed_chunks_count: 100,
-            conversations_count: 7,
-            agent_runs_count: 8,
-            messages_count: 42,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )

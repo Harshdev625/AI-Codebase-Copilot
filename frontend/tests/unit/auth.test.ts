@@ -46,15 +46,19 @@ describe("auth session helpers", () => {
 
     const sessionUser = await storeSession("token-xyz");
 
-    expect(global.fetch).toHaveBeenCalledWith("/api/auth/me", {
-      headers: { Authorization: "Bearer token-xyz" },
-    });
-    expect(sessionUser).toEqual(user);
+    expect(global.fetch).toHaveBeenCalledWith(
+      "/api/auth/me",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({ Authorization: "Bearer token-xyz" }),
+      })
+    );
+    expect(sessionUser).toEqual({ ...user, role: "USER" });
     expect(window.localStorage.getItem("aicc_token")).toBe("token-xyz");
-    expect(getStoredUser()).toEqual(user);
+    expect(getStoredUser()).toEqual({ ...user, role: "USER" });
   });
 
-  it("clears session and throws backend detail when /api/auth/me fails", async () => {
+  it("clears session and throws session-expired message when /api/auth/me returns 401", async () => {
     window.localStorage.setItem("aicc_user", JSON.stringify({ id: "stale" }));
 
     jest.spyOn(global, "fetch").mockResolvedValue(
@@ -64,7 +68,7 @@ describe("auth session helpers", () => {
       })
     );
 
-    await expect(storeSession("expired-token")).rejects.toThrow("Token expired");
+    await expect(storeSession("expired-token")).rejects.toThrow("Session expired. Please login again.");
     expect(window.localStorage.getItem("aicc_token")).toBeNull();
     expect(window.localStorage.getItem("aicc_user")).toBeNull();
   });
@@ -89,7 +93,7 @@ describe("getStoredUser", () => {
     };
     window.localStorage.setItem("aicc_user", JSON.stringify(user));
 
-    expect(getStoredUser()).toEqual(user);
+    expect(getStoredUser()).toEqual({ ...user, role: "USER" });
   });
 
   it("handles missing optional fields in stored user", () => {
@@ -169,9 +173,9 @@ describe("storeSession edge cases", () => {
 
     const result = await storeSession("my-token");
 
-    expect(result).toEqual(user);
+    expect(result).toEqual({ ...user, role: "USER" });
     expect(window.localStorage.getItem("aicc_token")).toBe("my-token");
-    expect(getStoredUser()).toEqual(user);
+    expect(getStoredUser()).toEqual({ ...user, role: "USER" });
   });
 
   it("handles network errors and clears stored token", async () => {
@@ -183,7 +187,7 @@ describe("storeSession edge cases", () => {
     // This reflects the actual code behavior
   });
 
-  it("clears session when auth/me fails with non-ok response", async () => {
+  it("clears session when auth/me returns 401", async () => {
     jest.spyOn(global, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ detail: "Unauthorized" }), {
         status: 401,
@@ -191,7 +195,7 @@ describe("storeSession edge cases", () => {
       })
     );
 
-    await expect(storeSession("invalid-token")).rejects.toThrow("Unauthorized");
+    await expect(storeSession("invalid-token")).rejects.toThrow("Session expired. Please login again.");
     expect(window.localStorage.getItem("aicc_token")).toBeNull();
     expect(window.localStorage.getItem("aicc_user")).toBeNull();
   });
