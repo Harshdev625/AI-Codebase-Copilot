@@ -10,7 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import ensure_repository_access, get_current_user
+from app.api.dependencies import ensure_repository_access, ensure_repository_access_by_id, get_current_user
 from app.core.api_response import success_response
 from app.core.config import settings
 from app.db.database import get_db_session, SessionLocal
@@ -261,7 +261,12 @@ def index_repo(
     snapshot_id = str(uuid.uuid4())
     indexing_job_id = str(uuid.uuid4())
 
-    repository_row = ensure_repository_access(session, req.repo_id, current_user["id"])
+    if req.repository_id:
+        repository_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+        effective_repo_id = str(repository_row.get("repo_id") or repository_row["id"])
+    else:
+        effective_repo_id = str(req.repo_id)
+        repository_row = ensure_repository_access(session, effective_repo_id, current_user["id"])
     repository_db_id = repository_row["id"]
     effective_repo_path = req.repo_path or repository_row.get("local_path")
     effective_repo_url = req.repo_url or repository_row.get("remote_url")
@@ -333,6 +338,7 @@ def index_repo(
 
             total = IndexingService(db).index_repository(
                 repo_id=repo_id,
+                repository_id=repository_db_id,
                 repo_path=repo_path,
                 repo_url=repo_url,
                 repo_ref=repo_ref,
@@ -405,7 +411,7 @@ def index_repo(
 
     background_tasks.add_task(
         _background_index_job,
-        req.repo_id,
+        effective_repo_id,
         effective_repo_path,
         effective_repo_url,
         effective_repo_ref,

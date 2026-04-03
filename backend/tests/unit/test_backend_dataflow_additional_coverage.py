@@ -84,29 +84,35 @@ def test_embedding_provider_validation() -> None:
 def test_ollama_embedding_provider_success_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.rag.embeddings.ollama_provider as module
 
-    monkeypatch.setattr(
-        module.httpx,
-        "post",
-        lambda *args, **kwargs: _Response({"embedding": [1, 2.5, 3]}),
-    )
+    class _FakeClient:
+        def __init__(self, response):
+            self._response = response
+
+        def post(self, *_args, **_kwargs):
+            return self._response
+
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"embedding": [1, 2.5, 3]})))
     provider = module.OllamaEmbeddingProvider()
     assert provider.embed_text("x") == [1.0, 2.5, 3.0]
 
-    monkeypatch.setattr(
-        module.httpx,
-        "post",
-        lambda *args, **kwargs: _Response({"embeddings": [[4, 5]]}),
-    )
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"embeddings": [[4, 5]]})))
     assert provider.embed_text("y") == [4.0, 5.0]
 
 
 def test_ollama_embedding_provider_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.rag.embeddings.ollama_provider as module
 
+    class _FakeClient:
+        def __init__(self, response):
+            self._response = response
+
+        def post(self, *_args, **_kwargs):
+            return self._response
+
     provider = module.OllamaEmbeddingProvider()
 
     connect_exc = httpx.ConnectError("no", request=httpx.Request("POST", "http://x"))
-    monkeypatch.setattr(module.httpx, "post", lambda *args, **kwargs: _Response(should_raise=connect_exc))
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response(should_raise=connect_exc)))
     with pytest.raises(RuntimeError, match="Could not connect to Ollama"):
         provider.embed_text("z")
 
@@ -115,11 +121,11 @@ def test_ollama_embedding_provider_error_paths(monkeypatch: pytest.MonkeyPatch) 
         request=httpx.Request("POST", "http://x"),
         response=httpx.Response(500),
     )
-    monkeypatch.setattr(module.httpx, "post", lambda *args, **kwargs: _Response(should_raise=status_exc))
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response(should_raise=status_exc)))
     with pytest.raises(RuntimeError, match="embedding request failed"):
         provider.embed_text("z")
 
-    monkeypatch.setattr(module.httpx, "post", lambda *args, **kwargs: _Response({"foo": "bar"}))
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"foo": "bar"})))
     with pytest.raises(ValueError, match="did not include an embedding"):
         provider.embed_text("z")
 
@@ -151,7 +157,8 @@ def test_hybrid_utilities_and_dense_paths(monkeypatch: pytest.MonkeyPatch) -> No
     assert out[0]["id"] == "1"
 
     class Qdrant:
-        def search(self, vector: list[float], repo_id: str, limit: int):
+        def search(self, vector: list[float], repository_id: str, limit: int):
+            _ = (vector, repository_id, limit)
             return [{"id": "1", "score": 0.8}]
 
     monkeypatch.setattr(hybrid, "QdrantService", lambda: Qdrant())
@@ -169,14 +176,15 @@ def test_hybrid_dense_fallback_and_lexical_and_merge(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(hybrid, "get_embedding_provider", lambda: Embedder())
 
     class BrokenQdrant:
-        def search(self, vector: list[float], repo_id: str, limit: int):
+        def search(self, vector: list[float], repository_id: str, limit: int):
+            _ = repository_id
             raise RuntimeError("qdrant down")
 
     monkeypatch.setattr(hybrid, "QdrantService", lambda: BrokenQdrant())
     monkeypatch.setattr(
         hybrid,
         "_dense_search_postgres",
-        lambda session, repo_id, query, top_k=20: [{"id": "d1", "path": "a", "symbol": "s", "content": "c", "score": 0.7}],
+        lambda session, repository_id, query, top_k=20: [{"id": "d1", "path": "a", "symbol": "s", "content": "c", "score": 0.7}],
     )
 
     session = _Session(rows=[{"id": "l1", "path": "b", "symbol": "s", "content": "c", "score": 0.5}])
@@ -387,6 +395,12 @@ def test_upsert_chunks_and_index_repository_orchestration(monkeypatch: pytest.Mo
         seen["count"] = len(items)
 
     monkeypatch.setattr(service, "_upsert_chunks", fake_upsert)
-    total = service.index_repository("r", "s", repo_path=str(repo), indexing_job_id="job")
+    total = service.index_repository(
+        repo_id="r",
+        repository_id="repository-uuid",
+        commit_sha="s",
+        repo_path=str(repo),
+        indexing_job_id="job",
+    )
     assert total == 1
     assert seen["count"] == 1

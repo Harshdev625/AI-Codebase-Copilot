@@ -139,7 +139,8 @@ def test_chat_route_success_and_runtime_error(monkeypatch: pytest.MonkeyPatch) -
         def __init__(self, session):
             self.session = session
 
-        def run(self, repo_id: str, query: str):
+        def run(self, repository_id: str, repo_id: str, query: str):
+            _ = repository_id
             return {"answer": "hello", "intent": "explain", "retrieved_context": [{"path": "x"}]}
 
     monkeypatch.setattr(chat_module, "QueryService", FakeQueryService)
@@ -148,7 +149,8 @@ def test_chat_route_success_and_runtime_error(monkeypatch: pytest.MonkeyPatch) -
     assert _payload(response)["answer"] == "hello"
 
     class FailingQueryService(FakeQueryService):
-        def run(self, repo_id: str, query: str):
+        def run(self, repository_id: str, repo_id: str, query: str):
+            _ = (repository_id, repo_id, query)
             raise RuntimeError("llm unavailable")
 
     monkeypatch.setattr(chat_module, "QueryService", FailingQueryService)

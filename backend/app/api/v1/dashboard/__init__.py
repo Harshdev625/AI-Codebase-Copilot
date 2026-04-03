@@ -30,8 +30,8 @@ def user_dashboard_summary(
                JOIN project_memberships pm ON pm.project_id = r.project_id
                WHERE pm.user_id = :user_id) AS repositories_count,
                             (SELECT COUNT(*) FROM code_chunks cc
-                             WHERE cc.repo_id IN (
-                                 SELECT r.repo_id
+                             WHERE cc.repository_id IN (
+                                 SELECT r.id
                                  FROM repositories r
                                  JOIN project_memberships pm ON pm.project_id = r.project_id
                                  WHERE pm.user_id = :user_id

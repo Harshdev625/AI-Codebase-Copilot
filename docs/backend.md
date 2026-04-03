@@ -15,6 +15,10 @@ The backend is a FastAPI service that powers:
 
 Primary entry point: `backend/app/main.py`
 
+Swagger/OpenAPI:
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- OpenAPI JSON: `http://127.0.0.1:8000/openapi.json`
+
 ---
 
 ## 2) Backend folder-by-folder guide
@@ -121,6 +125,13 @@ It is needed by Python packaging tooling for editable installs and package resol
 3. Graph workflow processes intent/state.
 4. LLM answer generation runs with assembled context.
 5. Response is returned as normal JSON (`/chat`) or NDJSON stream (`/chat/stream`).
+
+Notes on recent robustness fixes:
+- Retrieval: dense search now falls back to Postgres pgvector when Qdrant is empty/stale (prevents false "No indexed context" errors).
+- Indexing: Qdrant upserts are batched and failures are logged; indexing still completes with Postgres-only retrieval.
+- AI timeouts: Ollama chat uses a higher minimum timeout and streaming disables read timeouts to handle slow model load.
+- Repo identifiers: `repo_id` is normalized (lowercased, optional `.git` stripped) and repository access checks are case-insensitive.
+- UUID-first identifiers: chat/index requests can use `repository_id` (UUID) instead of `repo_id` (string). The Postman collection stores this as `{{repositoryId}}` after Add Repository.
 
 ---
 

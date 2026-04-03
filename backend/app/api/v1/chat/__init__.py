@@ -8,14 +8,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import ensure_repository_access, get_current_user
+from app.api.dependencies import ensure_repository_access, ensure_repository_access_by_id, get_current_user
 from app.core.api_response import success_response
+from app.core.config import settings
 from app.db.database import get_db_session
 from app.models.api_models import (
     ChatRequest,
     ChatResponse,
 )
 from app.services.query_service import QueryService
+from app.services.query_service import (
+    EmptyLLMResponseError,
+    LLMUnavailableError,
+    NoIndexedContextError,
+    WorkflowExecutionError,
+)
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -27,9 +34,30 @@ def chat(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ChatResponse:
-    ensure_repository_access(session, req.repo_id, current_user["id"])
+    if req.repository_id:
+        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+    else:
+        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
     try:
-        result = QueryService(session).run(repo_id=req.repo_id, query=req.query)
+        result = QueryService(session).run(
+            repository_id=repo_row["id"],
+            repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            query=req.query,
+        )
+    except NoIndexedContextError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except (LLMUnavailableError, EmptyLLMResponseError) as exc:
+        logger.exception("Chat request failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
+        detail = "AI service is temporarily unavailable. Please retry shortly."
+        if str(settings.app_env).lower() != "production":
+            detail = str(exc)
+        raise HTTPException(status_code=503, detail=detail) from exc
+    except WorkflowExecutionError as exc:
+        logger.exception("Chat workflow failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
+        raise HTTPException(status_code=500, detail="Agent workflow failed. Please retry.") from exc
     except RuntimeError as exc:
         logger.exception("Chat request failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
         raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
@@ -48,11 +76,26 @@ def chat_stream(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> StreamingResponse:
-    ensure_repository_access(session, req.repo_id, current_user["id"])
+    if req.repository_id:
+        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+    else:
+        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
     service = QueryService(session)
 
     try:
-        result, assembled_context, cache_key, from_cache = service.prepare_generation(req.repo_id, req.query)
+        result, assembled_context, cache_key, from_cache = service.prepare_generation(
+            repo_row["id"],
+            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            req.query,
+        )
+    except NoIndexedContextError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (LLMUnavailableError, EmptyLLMResponseError) as exc:
+        logger.exception("Streaming chat preparation failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
+        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
+    except WorkflowExecutionError as exc:
+        logger.exception("Streaming chat workflow failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
+        raise HTTPException(status_code=500, detail="Agent workflow failed. Please retry.") from exc
     except RuntimeError as exc:
         logger.exception("Streaming chat preparation failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
         raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
@@ -83,14 +126,22 @@ def chat_stream(
                     continue
                 generated_parts.append(delta)
                 yield _event_success({"type": "chunk", "delta": delta})
-        except RuntimeError:
+        except RuntimeError as exc:
             logger.exception("Streaming chat failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-            yield _event_error("AI service is temporarily unavailable. Please retry shortly.")
+            message = "AI service is temporarily unavailable. Please retry shortly."
+            if str(settings.app_env).lower() != "production":
+                message = str(exc)
+            yield _event_error(message)
             return
 
         result["answer"] = "".join(generated_parts)
         try:
-            service.finalize_result(req.repo_id, result, cache_key)
+            service.finalize_result(
+                repo_row["id"],
+                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                result,
+                cache_key,
+            )
         except RuntimeError:
             yield _event_error("AI service returned an empty response. Please retry.")
             return

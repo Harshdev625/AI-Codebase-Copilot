@@ -4,9 +4,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-REPO_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$"
+# Accept either a single slug (e.g. "my-repo") or a GitHub-style owner/repo key.
+# Deliberately disallow multiple '/' to avoid path-like identifiers.
+REPO_ID_PATTERN = r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{1,127}|[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63})$"
 BRANCH_PATTERN = r"^[A-Za-z0-9._/-]{1,128}$"
 COMMIT_PATTERN = r"^[A-Za-z0-9._/-]{3,80}$"
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
 class StrictRequestModel(BaseModel):
@@ -14,8 +17,17 @@ class StrictRequestModel(BaseModel):
 
 
 class ChatRequest(StrictRequestModel):
-    repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
     query: str = Field(..., min_length=3, max_length=4000)
+
+    @model_validator(mode="after")
+    def normalize_repo_id(self) -> "ChatRequest":
+        if bool(self.repository_id) == bool(self.repo_id):
+            raise ValueError("Provide exactly one of repository_id or repo_id")
+        if self.repo_id is not None:
+            self.repo_id = _normalize_repo_id(self.repo_id)
+        return self
 
 
 class ChatResponse(BaseModel):
@@ -25,11 +37,20 @@ class ChatResponse(BaseModel):
 
 
 class IndexRequest(StrictRequestModel):
-    repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
     repo_path: str | None = Field(default=None, max_length=1024)
     repo_url: str | None = Field(default=None, max_length=1024)
     repo_ref: str | None = Field(default=None, max_length=128, pattern=BRANCH_PATTERN)
     commit_sha: str = Field(default="local-working-copy", min_length=3, max_length=80, pattern=COMMIT_PATTERN)
+
+    @model_validator(mode="after")
+    def normalize_repo_id(self) -> "IndexRequest":
+        if bool(self.repository_id) == bool(self.repo_id):
+            raise ValueError("Provide exactly one of repository_id or repo_id")
+        if self.repo_id is not None:
+            self.repo_id = _normalize_repo_id(self.repo_id)
+        return self
 
 
 class IndexResponse(BaseModel):
@@ -90,9 +111,28 @@ class AddRepositoryRequest(StrictRequestModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> "AddRepositoryRequest":
+        self.repo_id = _normalize_repo_id(self.repo_id)
         if not self.remote_url and not self.local_path:
             raise ValueError("Provide either remote_url or local_path")
         return self
+
+
+def _normalize_repo_id(repo_id: str) -> str:
+    value = (repo_id or "").strip()
+    if value.lower().endswith(".git"):
+        value = value[:-4]
+    value = value.strip("/")
+    value = value.lower()
+
+    # Reject path traversal or accidental path-like strings.
+    if "//" in value:
+        raise ValueError("repo_id must not contain '//'" )
+    parts = value.split("/")
+    if any(part in {".", "..", ""} for part in parts):
+        raise ValueError("repo_id must not contain '.' or '..' segments")
+    if len(parts) > 2:
+        raise ValueError("repo_id must be a single slug or 'owner/repo'")
+    return value
 
 
 class RepositoryResponse(BaseModel):

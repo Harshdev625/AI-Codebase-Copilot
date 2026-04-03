@@ -9,13 +9,7 @@ import pytest
 _RUN_LIVE = os.getenv("RUN_LIVE_INTEGRATION_TESTS", "").strip().lower() in {"1", "true", "yes"}
 BASE = os.getenv("LIVE_API_BASE_URL", "http://127.0.0.1:8000/v1")
 
-pytestmark = pytest.mark.skipif(
-    not _RUN_LIVE,
-    reason=(
-        "Live integration tests are disabled by default to avoid contaminating non-test databases. "
-        "Set RUN_LIVE_INTEGRATION_TESTS=1 to enable explicitly."
-    ),
-)
+pytestmark = pytest.mark.live_integration
 
 
 def pretty_response(r):
@@ -31,15 +25,22 @@ def pretty_response(r):
 def api_client():
     """Create HTTP client for API tests."""
     client = httpx.Client(timeout=10.0)
+    if not _RUN_LIVE:
+        client.close()
+        pytest.fail(
+            "Live integration tests require RUN_LIVE_INTEGRATION_TESTS=1. "
+            "Run with: RUN_LIVE_INTEGRATION_TESTS=1 pytest -m live_integration"
+        )
+
     try:
         health = client.get("http://127.0.0.1:8000/docs")
     except httpx.HTTPError:
         client.close()
-        pytest.skip("Integration backend is not running on 127.0.0.1:8000")
+        pytest.fail("Integration backend is not running on 127.0.0.1:8000")
 
     if health.status_code >= 500:
         client.close()
-        pytest.skip("Integration backend is unavailable")
+        pytest.fail("Integration backend is unavailable")
 
     try:
         yield client

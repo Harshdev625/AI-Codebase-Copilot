@@ -1,19 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getBackendUrl } from "@/lib/backend-url";
+import { NextRequest } from "next/server";
+import { proxyRequest } from "@/lib/proxy";
 
 export async function POST(request: NextRequest) {
-  const payload = await request.json();
-  const backend = getBackendUrl();
-
-  const response = await fetch(`${backend}/auth/admin/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  const data = await response.text();
-  return new NextResponse(data, {
-    status: response.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  return proxyRequest(request, "/auth/admin/register");
 }

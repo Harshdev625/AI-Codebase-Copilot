@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 
@@ -7,44 +8,67 @@ from sqlalchemy.orm import Session
 
 from app.graph.workflow import compiled_graph
 from app.llm.model_router import get_model_router
-from app.services.cache_service import CacheService
+from app.services.cache_service import get_cache_service
 
 
 logger = logging.getLogger(__name__)
 
 
+class QueryServiceError(RuntimeError):
+    """Base error for QueryService failures."""
+
+
+class NoIndexedContextError(QueryServiceError):
+    """Raised when retrieval returns no usable context (likely not indexed yet)."""
+
+
+class LLMUnavailableError(QueryServiceError):
+    """Raised when the LLM backend cannot be reached or returns an error."""
+
+
+class WorkflowExecutionError(QueryServiceError):
+    """Raised when the LangGraph workflow fails."""
+
+
+class EmptyLLMResponseError(QueryServiceError):
+    """Raised when the LLM returns an empty response."""
+
+
 class QueryService:
     def __init__(self, session: Session) -> None:
         self.session = session
-        self.cache = CacheService()
+        self.cache = get_cache_service()
         self.model_router = get_model_router()
 
-    def run(self, repo_id: str, query: str) -> dict:
-        result, assembled_context, cache_key, from_cache = self.prepare_generation(repo_id, query)
+    def run(self, repository_id: str, repo_id: str, query: str) -> dict:
+        result, assembled_context, cache_key, from_cache = self.prepare_generation(repository_id, repo_id, query)
         if from_cache:
             return result
 
         try:
             llm_answer = self.model_router.chat(prompt=query, context=assembled_context)
         except RuntimeError as exc:
-            logger.exception("LLM call failed repo_id=%s", repo_id)
-            raise RuntimeError(f"Language model unavailable: {exc}") from exc
+            logger.exception("LLM call failed repo_id=%s repository_id=%s", repo_id, repository_id)
+            raise LLMUnavailableError(f"Language model unavailable: {exc}") from exc
 
         if not llm_answer.strip():
-            raise RuntimeError("Language model returned an empty response")
+            raise EmptyLLMResponseError("Language model returned an empty response")
 
         result["answer"] = llm_answer
-        return self.finalize_result(repo_id, result, cache_key)
+        return self.finalize_result(repository_id, repo_id, result, cache_key)
 
-    def prepare_generation(self, repo_id: str, query: str) -> tuple[dict, str, str, bool]:
-        cache_key = f"chat:{repo_id}:{query.strip().lower()}"
+    def prepare_generation(self, repository_id: str, repo_id: str, query: str) -> tuple[dict, str, str, bool]:
+        normalized = query.strip().lower()
+        query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+        cache_key = f"chat:{repository_id}:{query_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
-            logger.debug("QueryService cache hit repo_id=%s", repo_id)
+            logger.debug("QueryService cache hit repo_id=%s repository_id=%s", repo_id, repository_id)
             return cached, "", cache_key, True
 
         state = {
             "repo_id": repo_id,
+            "repository_id": repository_id,
             "query": query,
             "session": self.session,
         }
@@ -52,7 +76,9 @@ class QueryService:
 
         snippets = result.get("retrieved_context", [])[:6]
         if not snippets:
-            raise RuntimeError("No relevant indexed context found for this query")
+            raise NoIndexedContextError(
+                "No indexed context found for this query. Index the repository first and retry."
+            )
 
         context_parts = []
         for snippet in snippets:
@@ -63,15 +89,16 @@ class QueryService:
         assembled_context = "\n\n---\n\n".join(context_parts)
         return result, assembled_context, cache_key, False
 
-    def finalize_result(self, repo_id: str, result: dict, cache_key: str) -> dict:
+    def finalize_result(self, repository_id: str, repo_id: str, result: dict, cache_key: str) -> dict:
         if not str(result.get("answer", "")).strip():
-            raise RuntimeError("Language model returned an empty response")
+            raise EmptyLLMResponseError("Language model returned an empty response")
 
         safe_result = json.loads(json.dumps(result, default=str))
         self.cache.set_json(cache_key, safe_result)
         logger.info(
-            "QueryService completed repo_id=%s intent=%s retrieved=%s",
+            "QueryService completed repo_id=%s repository_id=%s intent=%s retrieved=%s",
             repo_id,
+            repository_id,
             safe_result.get("intent", "unknown"),
             len(safe_result.get("retrieved_context", []) or []),
         )
@@ -107,7 +134,7 @@ class QueryService:
         try:
             result = compiled_graph.invoke(state)
         except Exception as exc:
-            raise RuntimeError(f"Agent workflow execution failed: {exc}") from exc
+            raise WorkflowExecutionError(f"Agent workflow execution failed: {exc}") from exc
 
         if isinstance(result, dict):
             result.setdefault("run_trace", run_trace)

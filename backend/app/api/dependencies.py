@@ -71,7 +71,7 @@ def ensure_repository_access(session: Session, repo_id: str, user_id: str) -> di
             SELECT r.id, r.project_id, r.repo_id, r.remote_url, r.local_path, r.default_branch
             FROM repositories r
             JOIN project_memberships pm ON pm.project_id = r.project_id
-            WHERE r.repo_id = :repo_id AND pm.user_id = :user_id
+            WHERE LOWER(r.repo_id) = LOWER(:repo_id) AND pm.user_id = :user_id
             ORDER BY r.created_at DESC
             LIMIT 2
             """
@@ -95,8 +95,34 @@ def ensure_repository_access(session: Session, repo_id: str, user_id: str) -> di
         )
 
     repository_exists = session.execute(
-        text("SELECT id FROM repositories WHERE repo_id = :repo_id LIMIT 1"),
+        text("SELECT id FROM repositories WHERE LOWER(repo_id) = LOWER(:repo_id) LIMIT 1"),
         {"repo_id": repo_id},
+    ).first()
+    if repository_exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized for this repository")
+
+
+def ensure_repository_access_by_id(session: Session, repository_id: str, user_id: str) -> dict:
+    row = session.execute(
+        text(
+            """
+            SELECT r.id, r.project_id, r.repo_id, r.remote_url, r.local_path, r.default_branch
+            FROM repositories r
+            JOIN project_memberships pm ON pm.project_id = r.project_id
+            WHERE r.id = :repository_id AND pm.user_id = :user_id
+            LIMIT 1
+            """
+        ),
+        {"repository_id": repository_id, "user_id": user_id},
+    ).mappings().first()
+
+    if row is not None:
+        return dict(row)
+
+    repository_exists = session.execute(
+        text("SELECT id FROM repositories WHERE id = :repository_id LIMIT 1"),
+        {"repository_id": repository_id},
     ).first()
     if repository_exists is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")

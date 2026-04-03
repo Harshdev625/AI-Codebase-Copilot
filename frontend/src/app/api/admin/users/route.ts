@@ -1,17 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getBackendUrl } from "@/lib/backend-url";
+import { NextRequest } from "next/server";
+import { proxyRequest } from "@/lib/proxy";
 
 export async function GET(request: NextRequest) {
-  const backend       = getBackendUrl();
-  const authorization = request.headers.get("authorization") ?? "";
-
-  const response = await fetch(`${backend}/admin/users`, {
-    headers: { Authorization: authorization },
-  });
-
-  const data = await response.text();
-  return new NextResponse(data, {
-    status: response.status,
-    headers: { "Content-Type": "application/json" },
-  });
+  return proxyRequest(request, "/admin/users");
 }

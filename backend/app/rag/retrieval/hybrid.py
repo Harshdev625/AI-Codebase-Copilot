@@ -40,7 +40,33 @@ def _to_vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{v:.8f}" for v in values) + "]"
 
 
-def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+def _dense_search_postgres_with_embedding(
+    session: Session,
+    repository_id: str,
+    embedding: list[float],
+    top_k: int = 20,
+) -> list[dict]:
+    validate_embedding_dimension(embedding)
+    vector_literal = _to_vector_literal(embedding)
+    stmt = text(
+        """
+        SELECT id, path, symbol, content,
+               1 - (embedding <=> CAST(:embedding AS vector)) AS score
+        FROM code_chunks
+        WHERE repository_id = :repository_id
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> CAST(:embedding AS vector)
+        LIMIT :top_k
+        """
+    )
+    rows = session.execute(
+        stmt,
+        {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
+    ).mappings()
+    return [dict(row) for row in rows]
+
+
+def _dense_search_postgres(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     try:
         embedding = get_embedding_provider().embed_text(query)
     except RuntimeError:
@@ -52,7 +78,7 @@ def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: in
         SELECT id, path, symbol, content,
                1 - (embedding <=> CAST(:embedding AS vector)) AS score
         FROM code_chunks
-        WHERE repo_id = :repo_id
+        WHERE repository_id = :repository_id
           AND embedding IS NOT NULL
         ORDER BY embedding <=> CAST(:embedding AS vector)
         LIMIT :top_k
@@ -60,12 +86,12 @@ def _dense_search_postgres(session: Session, repo_id: str, query: str, top_k: in
     )
     rows = session.execute(
         stmt,
-        {"embedding": vector_literal, "repo_id": repo_id, "top_k": top_k},
+        {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
     ).mappings()
     return [dict(row) for row in rows]
 
 
-def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     try:
         embedding = get_embedding_provider().embed_text(query)
     except RuntimeError:
@@ -73,12 +99,14 @@ def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) ->
     validate_embedding_dimension(embedding)
 
     try:
-        matches = QdrantService().search(vector=embedding, repo_id=repo_id, limit=top_k)
+        matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k)
     except RuntimeError:
-        return _dense_search_postgres(session, repo_id, query, top_k=top_k)
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     if not matches:
-        return []
+        # Qdrant can be reachable but missing points/payload indexes.
+        # Fall back to Postgres dense search if embeddings are stored there.
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     matched_ids = [str(item.get("id")) for item in matches]
     score_map = {str(item.get("id")): float(item.get("score", 0.0)) for item in matches}
@@ -101,10 +129,14 @@ def dense_search(session: Session, repo_id: str, query: str, top_k: int = 20) ->
         if _is_noisy_path(str(row.get("path", ""))):
             continue
         merged.append(row)
-    return merged
+    if merged:
+        return merged
+
+    # Qdrant returned matches, but none could be hydrated (e.g., stale IDs).
+    return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
 
-def lexical_search(session: Session, repo_id: str, query: str, top_k: int = 20) -> list[dict]:
+def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     if not query.strip():
         return []
 
@@ -113,13 +145,16 @@ def lexical_search(session: Session, repo_id: str, query: str, top_k: int = 20) 
         SELECT id, path, symbol, content,
                ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
         FROM code_chunks
-        WHERE repo_id = :repo_id
+        WHERE repository_id = :repository_id
           AND to_tsvector('english', content) @@ plainto_tsquery('english', :query)
         ORDER BY score DESC
         LIMIT :top_k
         """
     )
-    rows = session.execute(stmt, {"query": query, "repo_id": repo_id, "top_k": top_k}).mappings()
+    rows = session.execute(
+        stmt,
+        {"query": query, "repository_id": repository_id, "top_k": top_k},
+    ).mappings()
     filtered: list[dict] = []
     for row in rows:
         item = dict(row)
@@ -129,9 +164,9 @@ def lexical_search(session: Session, repo_id: str, query: str, top_k: int = 20) 
     return filtered
 
 
-def hybrid_retrieve(session: Session, repo_id: str, query: str, top_k: int = 8) -> list[dict]:
-    dense = dense_search(session, repo_id, query, top_k=25)
-    lexical = lexical_search(session, repo_id, query, top_k=25)
+def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8) -> list[dict]:
+    dense = dense_search(session, repository_id, query, top_k=25)
+    lexical = lexical_search(session, repository_id, query, top_k=25)
 
     dense_ids = [item["id"] for item in dense]
     lexical_ids = [item["id"] for item in lexical]
@@ -144,7 +179,7 @@ def hybrid_retrieve(session: Session, repo_id: str, query: str, top_k: int = 8) 
         return ordered_items[:top_k]
 
     try:
-        graph_items = graph_expand_context(session, repo_id, merged_ids, limit=max(top_k * 2, 8))
+        graph_items = graph_expand_context(session, repository_id, merged_ids, limit=max(top_k * 2, 8))
     except Exception:
         graph_items = []
 

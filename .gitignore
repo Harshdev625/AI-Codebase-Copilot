@@ -6,6 +6,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 
@@ -38,6 +39,9 @@ lcov-report/
 
 # Backend clone cache
 backend/.repo_cache/
+
+# Backend tool caches
+backend/.ruff_cache/
 
 # Internal planning/spec notes
 Project.md

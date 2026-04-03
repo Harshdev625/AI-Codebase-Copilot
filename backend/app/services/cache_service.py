@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Any
 
 from app.core.config import settings
@@ -13,9 +14,7 @@ except Exception:  # pragma: no cover
 
 class CacheService:
     def __init__(self) -> None:
-        self._client = None
-        if redis is not None:
-            self._client = redis.Redis.from_url(settings.redis_dsn, decode_responses=True)
+        self._client = _get_redis_client()
 
     def get_json(self, key: str) -> dict[str, Any] | None:
         if self._client is None:
@@ -36,3 +35,18 @@ class CacheService:
             self._client.set(key, json.dumps(value), ex=ttl)
         except Exception:
             return
+
+
+@lru_cache
+def _get_redis_client():
+    if redis is None:
+        return None
+    try:
+        return redis.Redis.from_url(settings.redis_dsn, decode_responses=True)
+    except Exception:
+        return None
+
+
+@lru_cache
+def get_cache_service() -> CacheService:
+    return CacheService()

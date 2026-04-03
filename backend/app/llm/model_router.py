@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.http_client import get_http_client
 from app.rag.embeddings.provider import get_embedding_provider
 
 
@@ -35,10 +36,11 @@ class OllamaModelRouter:
                 "stream": False,
             }
             try:
-                response = httpx.post(
+                response = get_http_client().post(
                     f"{self.base_url}/api/chat",
                     json=payload,
-                    timeout=self.timeout,
+                    # First-token/model-load can be slow on CPU.
+                    timeout=max(self.timeout, 180.0),
                 )
                 response.raise_for_status()
                 body = response.json()
@@ -74,11 +76,12 @@ class OllamaModelRouter:
         }
 
         try:
-            with httpx.stream(
+            with get_http_client().stream(
                 "POST",
                 f"{self.base_url}/api/chat",
                 json=payload,
-                timeout=self.timeout,
+                # Streaming responses can take arbitrarily long; disable read timeout.
+                timeout=httpx.Timeout(connect=max(self.timeout, 30.0), read=None, write=max(self.timeout, 30.0), pool=max(self.timeout, 30.0)),
             ) as response:
                 response.raise_for_status()
                 for line in response.iter_lines():
@@ -105,4 +108,13 @@ class OllamaModelRouter:
 
 
 def get_model_router() -> OllamaModelRouter:
+    # Safe to reuse across requests: http client is pooled and embedder is stateless.
+    return _get_model_router_singleton()
+
+
+from functools import lru_cache
+
+
+@lru_cache
+def _get_model_router_singleton() -> OllamaModelRouter:
     return OllamaModelRouter()

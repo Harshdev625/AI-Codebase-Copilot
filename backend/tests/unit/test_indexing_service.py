@@ -100,7 +100,7 @@ def test_index_repository_falls_back_to_generic_for_python_without_ast_chunks(
 
     monkeypatch.setattr(indexing_module, "chunk_python_file", lambda *args, **kwargs: [])
 
-    total = service.index_repository(repo_id="repo", commit_sha="commit", repo_path=str(tmp_path))
+    total = service.index_repository(repo_id="repo", repository_id=None, commit_sha="commit", repo_path=str(tmp_path))
 
     assert total == 1
     assert len(captured_chunks) == 1
@@ -142,7 +142,7 @@ def test_index_repository_falls_back_to_generic_for_python_ast_errors(
 
     monkeypatch.setattr(indexing_module, "chunk_python_file", _raise_parse_error)
 
-    total = service.index_repository(repo_id="repo", commit_sha="commit", repo_path=str(tmp_path))
+    total = service.index_repository(repo_id="repo", repository_id=None, commit_sha="commit", repo_path=str(tmp_path))
 
     assert total == 1
     assert len(captured_chunks) == 1

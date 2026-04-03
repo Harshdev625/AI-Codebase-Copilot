@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 CREATE TABLE IF NOT EXISTS code_chunks (
   id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL,
+  repository_id TEXT,
   commit_sha TEXT NOT NULL DEFAULT 'local',
   path TEXT NOT NULL,
   language TEXT NOT NULL DEFAULT '',
@@ -121,12 +122,13 @@ CREATE TABLE IF NOT EXISTS code_chunks (
 CREATE TABLE IF NOT EXISTS code_graph_edges (
   id TEXT PRIMARY KEY,
   repo_id TEXT NOT NULL,
+  repository_id TEXT,
   source_chunk_id TEXT NOT NULL,
   target_chunk_id TEXT NOT NULL,
   edge_type TEXT NOT NULL,
   weight DOUBLE PRECISION NOT NULL DEFAULT 1.0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE(repo_id, source_chunk_id, target_chunk_id, edge_type)
+  UNIQUE(repository_id, source_chunk_id, target_chunk_id, edge_type)
 );
 
 CREATE INDEX IF NOT EXISTS idx_code_chunks_repo_id ON code_chunks(repo_id);
@@ -156,9 +158,88 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_repo_id ON agent_runs(repo_id);
 """
 
 
+def _iter_sql_statements(sql: str) -> list[str]:
+    statements: list[str] = []
+    for part in sql.split(";"):
+        stmt = part.strip()
+        if stmt:
+            statements.append(stmt)
+    return statements
+
+
 def ensure_app_schema() -> None:
     with engine.begin() as connection:
-        connection.execute(text(APP_SCHEMA_SQL))
+        for stmt in _iter_sql_statements(APP_SCHEMA_SQL):
+            connection.execute(text(stmt))
+
+        # Migration: introduce repository_id columns for multi-tenant safety.
+        connection.execute(
+            text(
+                "ALTER TABLE IF EXISTS code_chunks "
+                "ADD COLUMN IF NOT EXISTS repository_id TEXT"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE IF EXISTS code_graph_edges "
+                "ADD COLUMN IF NOT EXISTS repository_id TEXT"
+            )
+        )
+
+        # Migration: backfill repository_id only when the repo_id maps to a single repository.
+        # Avoids ambiguous updates if multiple projects share the same repo_id.
+        connection.execute(
+            text(
+                """
+                UPDATE code_chunks cc
+                SET repository_id = r.id
+                FROM repositories r
+                WHERE cc.repository_id IS NULL
+                  AND cc.repo_id = r.repo_id
+                  AND r.repo_id IN (
+                    SELECT repo_id FROM repositories GROUP BY repo_id HAVING COUNT(*) = 1
+                  )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                UPDATE code_graph_edges e
+                SET repository_id = r.id
+                FROM repositories r
+                WHERE e.repository_id IS NULL
+                  AND e.repo_id = r.repo_id
+                  AND r.repo_id IN (
+                    SELECT repo_id FROM repositories GROUP BY repo_id HAVING COUNT(*) = 1
+                  )
+                """
+            )
+        )
+
+        # Migration: update code_graph_edges uniqueness to scope by repository_id.
+        connection.execute(
+            text(
+                "ALTER TABLE IF EXISTS code_graph_edges "
+                "DROP CONSTRAINT IF EXISTS code_graph_edges_repo_id_source_chunk_id_target_chunk_id_edge_type_key"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_code_graph_edges_repository_edge_unique "
+                "ON code_graph_edges(repository_id, source_chunk_id, target_chunk_id, edge_type)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_code_chunks_repository_id ON code_chunks(repository_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_code_graph_edges_repository_id ON code_graph_edges(repository_id)"
+            )
+        )
 
         # Migration: make code_chunks.embedding nullable so indexing can proceed
         # even when Ollama is unavailable.  Safe to run on any existing schema —

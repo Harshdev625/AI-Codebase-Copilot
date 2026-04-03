@@ -63,7 +63,7 @@ def _create_schema(session: Session) -> None:
         "CREATE TABLE conversations (id TEXT PRIMARY KEY, project_id TEXT, user_id TEXT, title TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT, role TEXT, content TEXT, metadata TEXT DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP)",
         "CREATE TABLE agent_runs (id TEXT PRIMARY KEY, conversation_id TEXT, user_id TEXT, project_id TEXT, repo_id TEXT, query TEXT, intent TEXT, status TEXT, diagnostics TEXT DEFAULT '{}', started_at TEXT DEFAULT CURRENT_TIMESTAMP, finished_at TEXT)",
-        "CREATE TABLE code_chunks (id TEXT PRIMARY KEY, repo_id TEXT)",
+        "CREATE TABLE code_chunks (id TEXT PRIMARY KEY, repo_id TEXT, repository_id TEXT)",
     ]
     for statement in statements:
         session.execute(text(statement))

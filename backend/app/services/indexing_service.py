@@ -8,6 +8,8 @@ import time
 import uuid
 import logging
 import json
+import hashlib
+from contextlib import nullcontext
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -261,6 +263,12 @@ class IndexingService:
         self.session = session
         self.embedder = get_embedding_provider()
         self.qdrant = QdrantService()
+        # Progress context for long-running store phase (set by index_repository).
+        self._active_indexing_job_id: str | None = None
+        self._active_snapshot_id: str | None = None
+        self._active_total_files: int | None = None
+        self._active_started_at_perf: float | None = None
+        self._active_repository_id: str | None = None
 
     def _update_progress(
         self,
@@ -271,6 +279,7 @@ class IndexingService:
         current_file: str | None = None,
         elapsed_seconds: float | None = None,
         snapshot_id: str | None = None,
+        extra_stats: dict | None = None,
     ) -> None:
         """Update indexing progress in both indexing_jobs and snapshot stats."""
         if not indexing_job_id:
@@ -292,6 +301,11 @@ class IndexingService:
             "avg_seconds_per_file": round(avg_seconds_per_file, 4) if avg_seconds_per_file is not None else None,
             "updated_at_epoch": time.time(),
         }
+        if extra_stats:
+            try:
+                stats_payload.update(extra_stats)
+            except Exception:
+                pass
         try:
             self.session.execute(
                 text(
@@ -334,6 +348,7 @@ class IndexingService:
     def index_repository(
         self,
         repo_id: str,
+        repository_id: str | None,
         commit_sha: str,
         repo_path: str | None = None,
         repo_url: str | None = None,
@@ -344,6 +359,10 @@ class IndexingService:
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
         cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
         started_at = time.perf_counter()
+        self._active_indexing_job_id = indexing_job_id
+        self._active_snapshot_id = snapshot_id
+        self._active_started_at_perf = started_at
+        self._active_repository_id = repository_id
 
         try:
             ignore_spec = self._load_gitignore_spec(root)
@@ -352,6 +371,7 @@ class IndexingService:
             chunks: list[CodeChunk] = []
             file_list = list(self._iter_indexable_files(root, ignore_spec))
             total_files = len(file_list)
+            self._active_total_files = total_files
             self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index", snapshot_id=snapshot_id)
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
@@ -447,20 +467,51 @@ class IndexingService:
                 f"Storing {len(chunks)} chunks...",
                 elapsed_seconds=time.perf_counter() - started_at,
                 snapshot_id=snapshot_id,
+                extra_stats={
+                    "stage": "storing",
+                    "total_chunks": len(chunks),
+                    "stored_chunks": 0,
+                },
             )
+
+            if repository_id:
+                self._assign_repository_ids_and_chunk_ids(repository_id, chunks)
+
             self._upsert_chunks(chunks)
-            self._rebuild_repo_graph(repo_id)
-            logger.info("Indexing completed for repo_id=%s files=%s chunks=%s", repo_id, total_files, len(chunks))
+            if repository_id:
+                self._rebuild_repo_graph(repo_id, repository_id)
+            logger.info(
+                "Indexing completed repo_id=%s repository_id=%s files=%s chunks=%s",
+                repo_id,
+                repository_id,
+                total_files,
+                len(chunks),
+            )
             return len(chunks)
         finally:
             if cleanup_cached_repo and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
+            self._active_indexing_job_id = None
+            self._active_snapshot_id = None
+            self._active_total_files = None
+            self._active_started_at_perf = None
+            self._active_repository_id = None
 
-    def _rebuild_repo_graph(self, repo_id: str) -> None:
+    def _rebuild_repo_graph(self, repo_id: str, repository_id: str) -> None:
         try:
-            rebuild_code_graph(self.session, repo_id)
+            rebuild_code_graph(self.session, repository_id, repo_id)
         except Exception:
             self.session.rollback()
+
+    def _assign_repository_ids_and_chunk_ids(self, repository_id: str, chunks: list[CodeChunk]) -> None:
+        for chunk in chunks:
+            chunk.repository_id = repository_id
+            content_hash = hashlib.sha256((chunk.content or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+            raw_key = (
+                f"{repository_id}|{chunk.commit_sha}|{chunk.path}|{chunk.symbol}|{chunk.chunk_type}"
+                f"|{chunk.start_line}|{chunk.end_line}|{content_hash}"
+            )
+            chunk.id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
     def generic_chunk_file(self, repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
         # Simple chunking: split file into N-line chunks (e.g., 40 lines)
@@ -492,17 +543,32 @@ class IndexingService:
         return chunks
 
     def _upsert_chunks(self, chunks: list[CodeChunk]) -> None:
-        """Store chunks in PostgreSQL and upsert vectors when embeddings are available."""
+        """Store chunks in PostgreSQL and upsert vectors when embeddings are available.
+
+        Notes:
+        - Inserts are committed in small batches to avoid holding a huge transaction.
+        - Row-level failures use savepoints so one bad row does not erase prior work.
+        - Progress heartbeat is updated during the storing phase to avoid false "stalled" marking.
+        """
         if not chunks:
             return
+
+        indexing_job_id = self._active_indexing_job_id
+        snapshot_id = self._active_snapshot_id
+        total_files = self._active_total_files
+        elapsed_seconds = (
+            (time.perf_counter() - self._active_started_at_perf)
+            if self._active_started_at_perf is not None
+            else None
+        )
 
         stmt_without_embedding = text(
             """
             INSERT INTO code_chunks (
-              id, repo_id, commit_sha, path, language, symbol,
+                            id, repo_id, repository_id, commit_sha, path, language, symbol,
               chunk_type, start_line, end_line, content, metadata, embedding
             ) VALUES (
-              :id, :repo_id, :commit_sha, :path, :language, :symbol,
+                            :id, :repo_id, :repository_id, :commit_sha, :path, :language, :symbol,
               :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
               NULL
             )
@@ -516,10 +582,10 @@ class IndexingService:
         stmt_with_embedding = text(
             """
             INSERT INTO code_chunks (
-              id, repo_id, commit_sha, path, language, symbol,
+                            id, repo_id, repository_id, commit_sha, path, language, symbol,
               chunk_type, start_line, end_line, content, metadata, embedding
             ) VALUES (
-              :id, :repo_id, :commit_sha, :path, :language, :symbol,
+                            :id, :repo_id, :repository_id, :commit_sha, :path, :language, :symbol,
               :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
               CAST(:embedding AS vector)
             )
@@ -532,6 +598,12 @@ class IndexingService:
         )
 
         qdrant_points: list[dict] = []
+        total_chunks = len(chunks)
+        stored_chunks = 0
+        last_store_heartbeat = time.perf_counter()
+
+        supports_begin = callable(getattr(self.session, "begin", None))
+        supports_nested = callable(getattr(self.session, "begin_nested", None))
 
         for idx in range(0, len(chunks), 16):
             batch = chunks[idx : idx + 16]
@@ -545,60 +617,117 @@ class IndexingService:
                 except Exception:
                     continue
 
-            for chunk in batch:
-                embedding = embeddings_by_id.get(chunk.id)
-                if embedding is not None:
-                    vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding) + "]"
-                    chunk.embedding = embedding
-                else:
-                    vector_literal = None
-
-                params = {
-                    "id": chunk.id,
-                    "repo_id": chunk.repo_id,
-                    "commit_sha": chunk.commit_sha,
-                    "path": chunk.path,
-                    "language": chunk.language,
-                    "symbol": chunk.symbol,
-                    "chunk_type": chunk.chunk_type,
-                    "start_line": chunk.start_line,
-                    "end_line": chunk.end_line,
-                    "content": chunk.content,
-                    "metadata": "{}",
-                }
-
-                try:
-                    if vector_literal is not None:
-                        params["embedding"] = vector_literal
-                        self.session.execute(stmt_with_embedding, params)
-                        qdrant_points.append(
-                            {
-                                "id": chunk.id,
-                                "vector": embedding,
-                                "payload": {
-                                    "repo_id": chunk.repo_id,
-                                    "path": chunk.path,
-                                    "symbol": chunk.symbol,
-                                    "chunk_type": chunk.chunk_type,
-                                },
-                            }
-                        )
+            # Commit per batch so progress is durable and large transactions are avoided.
+            batch_ctx = self.session.begin() if supports_begin else nullcontext()
+            with batch_ctx:
+                for chunk in batch:
+                    embedding_vec = embeddings_by_id.get(chunk.id)
+                    if embedding_vec is not None:
+                        vector_literal = "[" + ",".join(f"{v:.8f}" for v in embedding_vec) + "]"
+                        chunk.embedding = embedding_vec
                     else:
-                        self.session.execute(stmt_without_embedding, params)
+                        vector_literal = None
+
+                    params = {
+                        "id": chunk.id,
+                        "repo_id": chunk.repo_id,
+                        "repository_id": chunk.repository_id,
+                        "commit_sha": chunk.commit_sha,
+                        "path": chunk.path,
+                        "language": chunk.language,
+                        "symbol": chunk.symbol,
+                        "chunk_type": chunk.chunk_type,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                        "content": chunk.content,
+                        "metadata": "{}",
+                    }
+
+                    try:
+                        if vector_literal is not None:
+                            params["embedding"] = vector_literal
+                            try:
+                                nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
+                                with nested_ctx:
+                                    self.session.execute(stmt_with_embedding, params)
+                            except Exception:
+                                # If vector insert fails (e.g., pgvector not installed), fall back to storing without embedding.
+                                try:
+                                    if not supports_nested:
+                                        self.session.rollback()
+                                    nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
+                                    with nested_ctx:
+                                        self.session.execute(stmt_without_embedding, params)
+                                except Exception:
+                                    if not supports_nested:
+                                        self.session.rollback()
+                                    continue
+                            else:
+                                qdrant_points.append(
+                                    {
+                                        "id": chunk.id,
+                                        "vector": embedding_vec,
+                                        "payload": {
+                                            "repo_id": chunk.repo_id,
+                                            "repository_id": chunk.repository_id,
+                                            "path": chunk.path,
+                                            "symbol": chunk.symbol,
+                                            "chunk_type": chunk.chunk_type,
+                                        },
+                                    }
+                                )
+                        else:
+                            try:
+                                nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
+                                with nested_ctx:
+                                    self.session.execute(stmt_without_embedding, params)
+                            except Exception:
+                                if not supports_nested:
+                                    self.session.rollback()
+                                continue
+                        stored_chunks += 1
+                    except Exception:
+                        # If we can't even store without embedding, skip this row.
+                        if not supports_nested:
+                            self.session.rollback()
+                        continue
+
+            if not supports_begin:
+                try:
+                    self.session.commit()
                 except Exception:
                     self.session.rollback()
-                    continue
+                    raise
 
-        try:
-            self.session.commit()
-        except Exception:
-            self.session.rollback()
-            raise
+            # Keep progress heartbeat fresh during storing.
+            if indexing_job_id and (time.perf_counter() - last_store_heartbeat) >= 2:
+                self._update_progress(
+                    indexing_job_id,
+                    total_files or 0,
+                    total_files or 0,
+                    f"Storing chunks... ({stored_chunks}/{total_chunks})",
+                    elapsed_seconds=elapsed_seconds,
+                    snapshot_id=snapshot_id,
+                    extra_stats={
+                        "stage": "storing",
+                        "total_chunks": total_chunks,
+                        "stored_chunks": stored_chunks,
+                    },
+                )
+                last_store_heartbeat = time.perf_counter()
+
+        if stored_chunks == 0:
+            raise RuntimeError(
+                "Indexing produced chunks, but none were stored to PostgreSQL. "
+                "Check that the backend is connected to the expected database and that schema initialization succeeded."
+            )
 
         if qdrant_points:
             try:
                 self.qdrant.ensure_collection()
-                self.qdrant.upsert_points(qdrant_points)
-            except RuntimeError:
-                pass
+                for start in range(0, len(qdrant_points), 64):
+                    batch_points = qdrant_points[start : start + 64]
+                    self.qdrant.upsert_points(batch_points)
+            except RuntimeError as exc:
+                logger.warning("Qdrant upsert failed; continuing without vectors: %s", exc)
 

@@ -67,15 +67,15 @@ def _extract_references(content: str) -> list[tuple[str, str, float]]:
     return references[:48]
 
 
-def rebuild_code_graph(session: Session, repo_id: str) -> int:
+def rebuild_code_graph(session: Session, repository_id: str, repo_id: str) -> int:
     rows = session.execute(
-        text("SELECT id, symbol, content FROM code_chunks WHERE repo_id = :repo_id"),
-        {"repo_id": repo_id},
+        text("SELECT id, symbol, content FROM code_chunks WHERE repository_id = :repository_id"),
+        {"repository_id": repository_id},
     ).mappings().all()
 
     session.execute(
-        text("DELETE FROM code_graph_edges WHERE repo_id = :repo_id"),
-        {"repo_id": repo_id},
+        text("DELETE FROM code_graph_edges WHERE repository_id = :repository_id"),
+        {"repository_id": repository_id},
     )
 
     symbol_to_chunk_ids: dict[str, set[str]] = {}
@@ -88,11 +88,11 @@ def rebuild_code_graph(session: Session, repo_id: str) -> int:
     insert_stmt = text(
         """
         INSERT INTO code_graph_edges (
-          id, repo_id, source_chunk_id, target_chunk_id, edge_type, weight
+                    id, repo_id, repository_id, source_chunk_id, target_chunk_id, edge_type, weight
         ) VALUES (
-          :id, :repo_id, :source_chunk_id, :target_chunk_id, :edge_type, :weight
+                    :id, :repo_id, :repository_id, :source_chunk_id, :target_chunk_id, :edge_type, :weight
         )
-        ON CONFLICT (repo_id, source_chunk_id, target_chunk_id, edge_type)
+                ON CONFLICT (repository_id, source_chunk_id, target_chunk_id, edge_type)
         DO UPDATE SET weight = GREATEST(code_graph_edges.weight, EXCLUDED.weight)
         """
     )
@@ -115,17 +115,13 @@ def rebuild_code_graph(session: Session, repo_id: str) -> int:
                     continue
                 seen_pairs.add(pair)
 
-                edge_id = str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_OID,
-                        f"{repo_id}|{source_chunk_id}|{target_chunk_id}|{edge_type}",
-                    )
-                )
+                edge_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{repository_id}|{source_chunk_id}|{target_chunk_id}|{edge_type}"))
                 session.execute(
                     insert_stmt,
                     {
                         "id": edge_id,
                         "repo_id": repo_id,
+                        "repository_id": repository_id,
                         "source_chunk_id": source_chunk_id,
                         "target_chunk_id": target_chunk_id,
                         "edge_type": edge_type,
@@ -143,7 +139,7 @@ def rebuild_code_graph(session: Session, repo_id: str) -> int:
     return inserted
 
 
-def graph_expand_context(session: Session, repo_id: str, seed_chunk_ids: list[str], limit: int = 12) -> list[dict]:
+def graph_expand_context(session: Session, repository_id: str, seed_chunk_ids: list[str], limit: int = 12) -> list[dict]:
     if not seed_chunk_ids:
         return []
 
@@ -158,7 +154,7 @@ def graph_expand_context(session: Session, repo_id: str, seed_chunk_ids: list[st
               MAX(e.weight) AS score
             FROM code_graph_edges e
             JOIN code_chunks c ON c.id = e.target_chunk_id
-            WHERE e.repo_id = :repo_id
+            WHERE e.repository_id = :repository_id
               AND e.source_chunk_id IN :seed_ids
               AND e.target_chunk_id NOT IN :seed_ids
             GROUP BY c.id, c.path, c.symbol, c.content
@@ -171,7 +167,7 @@ def graph_expand_context(session: Session, repo_id: str, seed_chunk_ids: list[st
     rows = session.execute(
         stmt,
         {
-            "repo_id": repo_id,
+            "repository_id": repository_id,
             "seed_ids": seed_chunk_ids,
             "limit": limit,
         },

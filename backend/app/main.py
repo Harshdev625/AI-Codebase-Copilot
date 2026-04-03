@@ -20,13 +20,20 @@ from app.db.schema import ensure_app_schema
 
 def _configure_logging() -> None:
     root = logging.getLogger()
+    log_level = getattr(logging, str(settings.log_level).upper(), logging.INFO)
     if not root.handlers:
         logging.basicConfig(
-            level=logging.INFO,
+            level=log_level,
             format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         )
     else:
-        root.setLevel(logging.INFO)
+        root.setLevel(log_level)
+
+    # Third-party libraries can be very chatty at INFO (notably httpx/httpcore).
+    # Keep them quiet unless the app is explicitly running in DEBUG.
+    if log_level > logging.DEBUG:
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 _configure_logging()
@@ -37,7 +44,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000"],
+        allow_origins=settings.cors_allow_origins_list or ["http://localhost:3000"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

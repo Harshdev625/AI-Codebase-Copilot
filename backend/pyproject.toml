@@ -41,6 +41,9 @@ target-version = "py311"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "--cov=app --cov-report=term-missing --cov-report=xml"
+markers = [
+  "live_integration: tests that hit a running backend and real services; opt-in via -m live_integration",
+]
 
 [tool.coverage.run]
 branch = true

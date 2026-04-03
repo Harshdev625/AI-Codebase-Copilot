@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
 
+    cors_allow_origins: str = "http://localhost:3000"
+
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "mxbai-embed-large"
     ollama_chat_model: str = "qwen2.5-coder"
@@ -20,6 +22,7 @@ class Settings(BaseSettings):
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
     qdrant_collection: str = "code_chunks"
+    qdrant_timeout_seconds: float = 30.0
 
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -31,6 +34,10 @@ class Settings(BaseSettings):
     postgres_db: str = "aicc"
     postgres_user: str = "postgres"
     postgres_password: str = "mypassword"
+
+    postgres_pool_size: int = 5
+    postgres_max_overflow: int = 10
+    postgres_pool_timeout_seconds: int = 30
 
     vector_dim: int = 1024
     max_retrieval_k: int = 12
@@ -55,6 +62,13 @@ class Settings(BaseSettings):
     @property
     def qdrant_url(self) -> str:
         return f"http://{self.qdrant_host}:{self.qdrant_port}"
+
+    @property
+    def cors_allow_origins_list(self) -> list[str]:
+        raw = (self.cors_allow_origins or "").strip()
+        if not raw:
+            return []
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
     @property
     def redis_dsn(self) -> str:

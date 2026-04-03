@@ -30,13 +30,23 @@ from app.tools.terminal_tools import run_command
 
 
 class _DummyResponse:
-    def __init__(self, payload: dict | None = None, should_raise: bool = False) -> None:
+    def __init__(
+        self,
+        payload: dict | None = None,
+        should_raise: bool = False,
+        status_code: int = 200,
+    ) -> None:
         self._payload = payload or {}
         self._should_raise = should_raise
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:
         if self._should_raise:
-            raise httpx.HTTPStatusError("boom", request=httpx.Request("GET", "http://x"), response=httpx.Response(500))
+            raise httpx.HTTPStatusError(
+                "boom",
+                request=httpx.Request("GET", "http://x"),
+                response=httpx.Response(self.status_code or 500),
+            )
 
     def json(self) -> dict:
         return self._payload
@@ -158,19 +168,19 @@ def test_retrieval_node_delegates_hybrid_retrieve(monkeypatch: pytest.MonkeyPatc
 
     calls: dict[str, object] = {}
 
-    def fake_retrieve(session, repo_id: str, query: str, top_k: int):
+    def fake_retrieve(session, repository_id: str, query: str, top_k: int):
         calls["session"] = session
-        calls["repo_id"] = repo_id
+        calls["repository_id"] = repository_id
         calls["query"] = query
         calls["top_k"] = top_k
         return [{"path": "a.py"}]
 
     monkeypatch.setattr(retrieval_module, "hybrid_retrieve", fake_retrieve)
     session = object()
-    out = retrieval_node({"session": session, "repo_id": "r1", "query": "q"})
+    out = retrieval_node({"session": session, "repo_id": "r1", "repository_id": "rid1", "query": "q"})
 
     assert out["retrieved_context"] == [{"path": "a.py"}]
-    assert calls == {"session": session, "repo_id": "r1", "query": "q", "top_k": 8}
+    assert calls == {"session": session, "repository_id": "rid1", "query": "q", "top_k": 8}
 
 
 def test_tool_execution_node_branches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,14 +222,16 @@ def test_ollama_model_router_chat_and_embed(monkeypatch: pytest.MonkeyPatch) -> 
 
     captured: dict[str, object] = {}
 
-    def fake_post(url: str, json: dict, timeout: float):
-        captured["url"] = url
-        captured["json"] = json
-        captured["timeout"] = timeout
-        return _DummyResponse({"message": {"content": "  hello  "}})
+    class _FakeClient:
+        def post(self, url: str, json: dict, timeout: float):
+            captured["url"] = url
+            captured["json"] = json
+            captured["timeout"] = timeout
+            return _DummyResponse({"message": {"content": "  hello  "}})
 
     monkeypatch.setattr(model_router, "get_embedding_provider", lambda: DummyEmbedder())
-    monkeypatch.setattr(model_router.httpx, "post", fake_post)
+    monkeypatch.setattr(model_router, "get_http_client", lambda: _FakeClient())
+    model_router._get_model_router_singleton.cache_clear()
 
     router = OllamaModelRouter()
     assert router.chat("What?", context="ctx") == "hello"
@@ -234,11 +246,13 @@ def test_ollama_model_router_chat_http_error(monkeypatch: pytest.MonkeyPatch) ->
         def embed_text(self, text: str) -> list[float]:
             return [0.0]
 
-    def fake_post(url: str, json: dict, timeout: float):
-        return _DummyResponse(should_raise=True)
+    class _FakeClient:
+        def post(self, url: str, json: dict, timeout: float):
+            return _DummyResponse(should_raise=True)
 
     monkeypatch.setattr(model_router, "get_embedding_provider", lambda: DummyEmbedder())
-    monkeypatch.setattr(model_router.httpx, "post", fake_post)
+    monkeypatch.setattr(model_router, "get_http_client", lambda: _FakeClient())
+    model_router._get_model_router_singleton.cache_clear()
 
     router = OllamaModelRouter()
     with pytest.raises(RuntimeError, match="Ollama chat request failed"):
@@ -253,6 +267,7 @@ def test_get_model_router_returns_router(monkeypatch: pytest.MonkeyPatch) -> Non
             return [0.0]
 
     monkeypatch.setattr(model_router, "get_embedding_provider", lambda: DummyEmbedder())
+    model_router._get_model_router_singleton.cache_clear()
     router = get_model_router()
     assert isinstance(router, OllamaModelRouter)
 
@@ -281,6 +296,8 @@ def test_cache_service_get_set_json_with_and_without_client(monkeypatch: pytest.
                 return fake_client
 
     monkeypatch.setattr(cache_module, "redis", FakeRedisModule)
+    cache_module._get_redis_client.cache_clear()
+    cache_module.get_cache_service.cache_clear()
     service = CacheService()
 
     assert service.get_json("missing") is None
@@ -293,6 +310,8 @@ def test_cache_service_get_set_json_with_and_without_client(monkeypatch: pytest.
     assert service.get_json("bad") is None
 
     monkeypatch.setattr(cache_module, "redis", None)
+    cache_module._get_redis_client.cache_clear()
+    cache_module.get_cache_service.cache_clear()
     no_client = CacheService()
     assert no_client.get_json("x") is None
     no_client.set_json("x", {"ok": True})
@@ -309,7 +328,7 @@ def test_query_service_cache_hit_and_miss(monkeypatch: pytest.MonkeyPatch) -> No
         def get_json(self, key: str):
             return self.cached
 
-        def set_json(self, key: str, value: dict):
+        def set_json(self, key: str, value: dict, ttl_seconds: int | None = None):
             self.set_calls.append((key, value))
 
     class FakeGraph:
@@ -332,14 +351,14 @@ def test_query_service_cache_hit_and_miss(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(query_module, "get_model_router", lambda: FakeRouter())
 
     hit_cache = FakeCache(cached={"answer": "cached"})
-    monkeypatch.setattr(query_module, "CacheService", lambda: hit_cache)
+    monkeypatch.setattr(query_module, "get_cache_service", lambda: hit_cache)
     cached_service = QueryService(session=object())
-    assert cached_service.run("repo", "What is this?") == {"answer": "cached"}
+    assert cached_service.run("repo-uuid", "repo", "What is this?") == {"answer": "cached"}
 
     miss_cache = FakeCache(cached=None)
-    monkeypatch.setattr(query_module, "CacheService", lambda: miss_cache)
+    monkeypatch.setattr(query_module, "get_cache_service", lambda: miss_cache)
     miss_service = QueryService(session=object())
-    out = miss_service.run("repo", "What is this?")
+    out = miss_service.run("repo-uuid", "repo", "What is this?")
     assert out["answer"] == "llm answer"
     assert len(miss_cache.set_calls) == 1
 
@@ -349,20 +368,20 @@ def test_qdrant_service_paths_and_errors(monkeypatch: pytest.MonkeyPatch) -> Non
 
     calls: dict[str, object] = {}
 
-    def fake_put(url: str, json: dict, timeout: float):
-        calls["put_url"] = url
-        calls["put_payload"] = json
-        calls["put_timeout"] = timeout
-        return _DummyResponse()
+    class _FakeClient:
+        def put(self, url: str, json: dict, timeout: float):
+            calls["put_url"] = url
+            calls["put_payload"] = json
+            calls["put_timeout"] = timeout
+            return _DummyResponse()
 
-    def fake_post(url: str, json: dict, timeout: float):
-        calls["post_url"] = url
-        calls["post_payload"] = json
-        calls["post_timeout"] = timeout
-        return _DummyResponse({"result": [{"id": "1"}]})
+        def post(self, url: str, json: dict, timeout: float):
+            calls["post_url"] = url
+            calls["post_payload"] = json
+            calls["post_timeout"] = timeout
+            return _DummyResponse({"result": [{"id": "1"}]})
 
-    monkeypatch.setattr(qdrant_module.httpx, "put", fake_put)
-    monkeypatch.setattr(qdrant_module.httpx, "post", fake_post)
+    monkeypatch.setattr(qdrant_module, "get_http_client", lambda: _FakeClient())
 
     svc = QdrantService()
     svc.ensure_collection()
@@ -371,26 +390,26 @@ def test_qdrant_service_paths_and_errors(monkeypatch: pytest.MonkeyPatch) -> Non
     svc.upsert_points([{"id": 1, "vector": [0.1], "payload": {}}])
     assert "/points" in str(calls["put_url"])
 
-    assert svc.search([0.1], repo_id="r1", limit=3) == [{"id": "1"}]
+    assert svc.search([0.1], repository_id="r1", limit=3) == [{"id": "1"}]
     assert calls["post_payload"]["limit"] == 3
 
     svc.upsert_points([])
 
-    def raising_put(url: str, json: dict, timeout: float):
-        return _DummyResponse(should_raise=True)
+    class _RaisingClient:
+        def put(self, url: str, json: dict, timeout: float):
+            return _DummyResponse(should_raise=True)
 
-    def raising_post(url: str, json: dict, timeout: float):
-        return _DummyResponse(should_raise=True)
+        def post(self, url: str, json: dict, timeout: float):
+            return _DummyResponse(should_raise=True)
 
-    monkeypatch.setattr(qdrant_module.httpx, "put", raising_put)
-    monkeypatch.setattr(qdrant_module.httpx, "post", raising_post)
+    monkeypatch.setattr(qdrant_module, "get_http_client", lambda: _RaisingClient())
 
     with pytest.raises(RuntimeError, match="ensure Qdrant"):
         svc.ensure_collection()
     with pytest.raises(RuntimeError, match="upsert vectors"):
         svc.upsert_points([{"id": 1}])
     with pytest.raises(RuntimeError, match="search Qdrant"):
-        svc.search([0.1], repo_id="r1", limit=1)
+        svc.search([0.1], repository_id="r1", limit=1)
 
 
 def test_git_status_and_run_command(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,33 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getBackendUrl } from "@/lib/backend-url";
+import { NextRequest } from "next/server";
+import { proxyRequest } from "@/lib/proxy";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ snapshotId: string }> }
-) {
-  const { snapshotId } = await params;
-  const backend = getBackendUrl();
-  const authorization = request.headers.get("authorization") ?? "";
+type Params = { params: Promise<{ snapshotId: string }> };
 
-  try {
-    const response = await fetch(`${backend}/index/progress/${snapshotId}`, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authorization,
-      },
-    });
-
-    const data = await response.json();
-    return new NextResponse(JSON.stringify(data), {
-      status: response.status,
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (error) {
-    console.error("Progress fetch error:", error);
-    return new NextResponse(JSON.stringify({ error: "Failed to fetch progress" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+export async function GET(request: NextRequest, context: Params) {
+  const { snapshotId } = await context.params;
+  return proxyRequest(request, `/index/progress/${snapshotId}`);
 }
