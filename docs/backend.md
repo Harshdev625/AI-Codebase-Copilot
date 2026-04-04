@@ -133,6 +133,11 @@ Notes on recent robustness fixes:
 - Repo identifiers: `repo_id` is normalized (lowercased, optional `.git` stripped) and repository access checks are case-insensitive.
 - UUID-first identifiers: chat/index requests can use `repository_id` (UUID) instead of `repo_id` (string). The Postman collection stores this as `{{repositoryId}}` after Add Repository.
 
+Ollama note (common dev issue):
+- If you see `model requires more system memory than is available`, your selected `OLLAMA_CHAT_MODEL` is too large/too-high quantization for the available RAM.
+- For low-memory machines, a small chat model like `tinyllama:latest` is typically the most reliable.
+- When running infra via `infra/compose.yaml`, Ollama models live in the `ollama_data` volume and are only downloaded when you explicitly pull them (they are not baked into the container image).
+
 ---
 
 ## 4) Schema inventory (DB tables)

@@ -164,13 +164,58 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
     return filtered
 
 
+HIGH_LEVEL_QUERY_TOKENS = {
+    "architecture",
+    "design",
+    "structure",
+    "overview",
+    "how does it work",
+    "project layout",
+}
+
+
+DOC_PATH_TOKENS = (
+    "readme",
+    "architecture",
+    "design",
+    "docs/",
+    "documentation",
+    "getting-started",
+    "contributing",
+    "manifest.json",
+    "package.json",
+    "pyproject.toml",
+    "dockerfile",
+    "compose.yaml",
+)
+
+
+def _is_high_level_query(query: str) -> bool:
+    q = " ".join(query.lower().split())
+    return any(token in q for token in HIGH_LEVEL_QUERY_TOKENS)
+
+
+def _looks_like_docs_path(path: str) -> bool:
+    lower = str(path or "").lower().replace("\\", "/")
+    return any(token in lower for token in DOC_PATH_TOKENS)
+
+
 def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8) -> list[dict]:
     dense = dense_search(session, repository_id, query, top_k=25)
     lexical = lexical_search(session, repository_id, query, top_k=25)
 
+    # For "architecture" and similar high-level questions, boost documentation-ish files
+    # so the model sees entrypoints/README/docs, not just arbitrary constructors.
+    extra_rankings: list[list[str]] = []
+    if _is_high_level_query(query):
+        doc_candidates = [*lexical, *dense]
+        doc_ids = [str(item["id"]) for item in doc_candidates if _looks_like_docs_path(str(item.get("path", "")))]
+        if doc_ids:
+            extra_rankings.append(doc_ids)
+
     dense_ids = [item["id"] for item in dense]
     lexical_ids = [item["id"] for item in lexical]
-    merged_ids = reciprocal_rank_fusion([dense_ids, lexical_ids])[:top_k]
+    merged_ids = reciprocal_rank_fusion([dense_ids, lexical_ids, *extra_rankings])[:top_k]
 
     items_by_id = {str(item["id"]): item for item in [*dense, *lexical]}
     ordered_items = [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]

@@ -29,10 +29,22 @@ class OllamaModelRouter:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are AI Codebase Copilot. Answer using provided code context.",
+                        "content": (
+                            "You are AI Codebase Copilot."
+                            "\n\nRules:"
+                            "\n- Use ONLY the provided code context."
+                            "\n- Do NOT assume files or features that are not in the context."
+                            "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
+                            "\n- If the context is insufficient, say so and list what is missing."
+                            "\n- When explaining architecture, output a short module-by-module outline."
+                            "\n- For every major claim, include at least one file path that appears in the provided context."
+                        ),
                     },
                     {"role": "user", "content": user_prompt},
                 ],
+                "options": {
+                    "temperature": 0.0,
+                },
                 "stream": False,
             }
             try:
@@ -68,10 +80,22 @@ class OllamaModelRouter:
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are AI Codebase Copilot. Answer using provided code context.",
+                    "content": (
+                        "You are AI Codebase Copilot."
+                        "\n\nRules:"
+                        "\n- Use ONLY the provided code context."
+                        "\n- Do NOT assume files or features that are not in the context."
+                        "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
+                        "\n- If the context is insufficient, say so and list what is missing."
+                        "\n- When explaining architecture, output a short module-by-module outline."
+                        "\n- For every major claim, include at least one file path that appears in the provided context."
+                    ),
                 },
                 {"role": "user", "content": user_prompt},
             ],
+            "options": {
+                "temperature": 0.0,
+            },
             "stream": True,
         }
 

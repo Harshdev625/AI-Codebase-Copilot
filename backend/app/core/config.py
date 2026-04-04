@@ -1,10 +1,18 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", _BACKEND_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     app_name: str = "AI Codebase Copilot API"
     app_env: str = "development"
@@ -15,8 +23,8 @@ class Settings(BaseSettings):
     cors_allow_origins: str = "http://localhost:3000"
 
     ollama_base_url: str = "http://localhost:11434"
-    ollama_embedding_model: str = "mxbai-embed-large"
-    ollama_chat_model: str = "qwen2.5-coder"
+    ollama_embedding_model: str = "mxbai-embed-large:latest"
+    ollama_chat_model: str = "tinyllama:latest"
     ollama_timeout_seconds: float = 60.0
 
     qdrant_host: str = "localhost"

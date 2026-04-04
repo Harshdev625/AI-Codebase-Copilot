@@ -109,6 +109,12 @@ def admin_register(req: AuthAdminRegisterRequest, session: Session = Depends(get
     )
 
 
+@router.post("/admin/auth/register", tags=["admin"], status_code=status.HTTP_201_CREATED)
+def admin_register_alias(req: AuthAdminRegisterRequest, session: Session = Depends(get_db_session)) -> UserResponse:
+    """Alias for admin registration under /admin/* to keep admin functionality grouped."""
+    return admin_register(req, session)
+
+
 @router.post("/auth/login")
 def login(req: AuthLoginRequest, session: Session = Depends(get_db_session)) -> AuthTokenResponse:
     row = session.execute(
@@ -153,6 +159,12 @@ def admin_login(req: AuthLoginRequest, session: Session = Depends(get_db_session
 
     token = create_access_token(subject=row["id"])
     return success_response(AuthTokenResponse(access_token=token).model_dump())
+
+
+@router.post("/admin/auth/login", tags=["admin"])
+def admin_login_alias(req: AuthLoginRequest, session: Session = Depends(get_db_session)) -> AuthTokenResponse:
+    """Alias for admin login under /admin/* to keep admin functionality grouped."""
+    return admin_login(req, session)
 
 
 @router.get("/auth/me")

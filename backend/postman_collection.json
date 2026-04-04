@@ -83,6 +83,202 @@
 			]
 		},
 		{
+			"name": "Admin Auth",
+			"item": [
+				{
+					"name": "Admin Register",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"admin@aicc.dev\",\n    \"password\": \"password123\",\n    \"full_name\": \"Admin User\",\n    \"admin_secret_key\": \"adminsecretkey\"\n}",
+							"options": {"raw": {"language": "json"}}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v1/admin/auth/register",
+							"host": ["{{baseUrl}}"],
+							"path": ["v1", "admin", "auth", "register"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Admin Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if (jsonData && jsonData.success && jsonData.data && jsonData.data.access_token) {",
+									"    pm.collectionVariables.set(\"adminToken\", jsonData.data.access_token);",
+									"    pm.environment.set(\"adminToken\", jsonData.data.access_token);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"admin@aicc.dev\",\n    \"password\": \"password123\"\n}",
+							"options": {"raw": {"language": "json"}}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v1/admin/auth/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["v1", "admin", "auth", "login"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"item": [
+				{
+					"name": "Service Health",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/service-health", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "service-health"]}
+					},
+					"response": []
+				},
+				{
+					"name": "System Metrics",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/system-metrics", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "system-metrics"]}
+					},
+					"response": []
+				},
+				{
+					"name": "Recent Activity",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/recent-activity", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "recent-activity"]}
+					},
+					"response": []
+				},
+				{
+					"name": "List Users",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"var rows = (jsonData && jsonData.success && jsonData.data) ? jsonData.data : [];",
+									"if (Array.isArray(rows) && rows.length > 0 && rows[0].id) {",
+									"    pm.collectionVariables.set(\"targetUserId\", rows[0].id);",
+									"    pm.environment.set(\"targetUserId\", rows[0].id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/users", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "users"]}
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Role",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "POST",
+						"header": [],
+						"body": {"mode": "raw", "raw": "{\n  \"role\": \"USER\"\n}", "options": {"raw": {"language": "json"}}},
+						"url": {"raw": "{{baseUrl}}/v1/admin/users/{{targetUserId}}/role", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "users", "{{targetUserId}}", "role"]}
+					},
+					"response": []
+				},
+				{
+					"name": "Update User Status",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "POST",
+						"header": [],
+						"body": {"mode": "raw", "raw": "{\n  \"is_active\": true\n}", "options": {"raw": {"language": "json"}}},
+						"url": {"raw": "{{baseUrl}}/v1/admin/users/{{targetUserId}}/status", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "users", "{{targetUserId}}", "status"]}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete User",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "DELETE",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/users/{{targetUserId}}", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "users", "{{targetUserId}}"]}
+					},
+					"response": []
+				},
+				{
+					"name": "List Repositories",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/repositories", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "repositories"]}
+					},
+					"response": []
+				},
+				{
+					"name": "Indexing Status",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [{"key": "token", "value": "{{adminToken}}", "type": "string"}]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {"raw": "{{baseUrl}}/v1/admin/indexing-status", "host": ["{{baseUrl}}"], "path": ["v1", "admin", "indexing-status"]}
+					},
+					"response": []
+				}
+			]
+		},
+		{
 			"name": "Projects",
 			"item": [
 				{
@@ -390,7 +586,17 @@
 			"type": "string"
 		},
 		{
+			"key": "adminToken",
+			"value": "",
+			"type": "string"
+		},
+		{
 			"key": "projectId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "targetUserId",
 			"value": "",
 			"type": "string"
 		},

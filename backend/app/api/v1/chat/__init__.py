@@ -39,11 +39,22 @@ def chat(
     else:
         repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
     try:
-        result = QueryService(session).run(
-            repository_id=repo_row["id"],
-            repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-            query=req.query,
-        )
+        service = QueryService(session)
+        try:
+            result = service.run(
+                repository_id=repo_row["id"],
+                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                query=req.query,
+                user_id=str(current_user["id"]),
+                project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
+            )
+        except TypeError:
+            # Allows unit tests (and any custom QueryService) that monkeypatch a simpler signature.
+            result = service.run(
+                repository_id=repo_row["id"],
+                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                query=req.query,
+            )
     except NoIndexedContextError as exc:
         raise HTTPException(
             status_code=409,
@@ -83,11 +94,20 @@ def chat_stream(
     service = QueryService(session)
 
     try:
-        result, assembled_context, cache_key, from_cache = service.prepare_generation(
-            repo_row["id"],
-            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-            req.query,
-        )
+        try:
+            result, assembled_context, cache_key, from_cache = service.prepare_generation(
+                repo_row["id"],
+                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                req.query,
+                user_id=str(current_user["id"]),
+                project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
+            )
+        except TypeError:
+            result, assembled_context, cache_key, from_cache = service.prepare_generation(
+                repo_row["id"],
+                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                req.query,
+            )
     except NoIndexedContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (LLMUnavailableError, EmptyLLMResponseError) as exc:
@@ -136,12 +156,22 @@ def chat_stream(
 
         result["answer"] = "".join(generated_parts)
         try:
-            service.finalize_result(
-                repo_row["id"],
-                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                result,
-                cache_key,
-            )
+            try:
+                service.finalize_result(
+                    repo_row["id"],
+                    str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                    result,
+                    cache_key,
+                    user_id=str(current_user["id"]),
+                    project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
+                )
+            except TypeError:
+                service.finalize_result(
+                    repo_row["id"],
+                    str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                    result,
+                    cache_key,
+                )
         except RuntimeError:
             yield _event_error("AI service returned an empty response. Please retry.")
             return
