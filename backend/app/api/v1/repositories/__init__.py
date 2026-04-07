@@ -70,6 +70,7 @@ def list_projects(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[ProjectResponse]:
+    logger.info("projects_list - request received user_id=%s", current_user["id"])
     rows = session.execute(
         text(
             """
@@ -82,7 +83,9 @@ def list_projects(
         ),
         {"user_id": current_user["id"]},
     ).mappings().all()
-    return success_response([ProjectResponse(**_to_payload(row)).model_dump() for row in rows])
+    payload = [ProjectResponse(**_to_payload(row)).model_dump() for row in rows]
+    logger.info("projects_list - response sent user_id=%s count=%s", current_user["id"], len(payload))
+    return success_response(payload)
 
 
 @router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -91,6 +94,7 @@ def create_project(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ProjectResponse:
+    logger.info("projects_create - request received user_id=%s", current_user["id"])
     project_id = str(uuid.uuid4())
     membership_id = str(uuid.uuid4())
 
@@ -130,6 +134,7 @@ def create_project(
     if row is None:
         raise HTTPException(status_code=500, detail="Project creation failed")
 
+    logger.info("projects_create - success user_id=%s project_id=%s", current_user["id"], project_id)
     return success_response(ProjectResponse(**_to_payload(row)).model_dump(), status_code=status.HTTP_201_CREATED)
 
 
@@ -139,6 +144,11 @@ def list_repositories(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> list[RepositoryResponse]:
+    logger.info(
+        "repositories_list - request received user_id=%s project_id=%s",
+        current_user["id"],
+        project_id,
+    )
     _ensure_membership(session, project_id, current_user["id"])
     rows = session.execute(
         text(
@@ -193,7 +203,14 @@ def list_repositories(
         ),
         {"project_id": project_id},
     ).mappings().all()
-    return success_response([RepositoryResponse(**_to_payload(row)).model_dump() for row in rows])
+    payload = [RepositoryResponse(**_to_payload(row)).model_dump() for row in rows]
+    logger.info(
+        "repositories_list - response sent user_id=%s project_id=%s count=%s",
+        current_user["id"],
+        project_id,
+        len(payload),
+    )
+    return success_response(payload)
 
 
 @router.post(
@@ -207,6 +224,12 @@ def add_repository(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> RepositoryResponse:
+    logger.info(
+        "repository_add - request received user_id=%s project_id=%s repo_id=%s",
+        current_user["id"],
+        project_id,
+        req.repo_id,
+    )
     _ensure_membership(session, project_id, current_user["id"])
 
     repository_id = str(uuid.uuid4())
@@ -230,6 +253,12 @@ def add_repository(
         session.commit()
     except IntegrityError:
         session.rollback()
+        logger.warning(
+            "repository_add - duplicate repo user_id=%s project_id=%s repo_id=%s",
+            current_user["id"],
+            project_id,
+            req.repo_id,
+        )
         raise HTTPException(status_code=409, detail="Repository already exists") from None
 
     row = session.execute(
@@ -245,6 +274,13 @@ def add_repository(
     if row is None:
         raise HTTPException(status_code=500, detail="Repository creation failed")
 
+    logger.info(
+        "repository_add - success user_id=%s project_id=%s repository_id=%s repo_id=%s",
+        current_user["id"],
+        project_id,
+        repository_id,
+        req.repo_id,
+    )
     return success_response(
         RepositoryResponse(**_to_payload(row)).model_dump(),
         status_code=status.HTTP_201_CREATED,
@@ -258,6 +294,12 @@ def index_repo(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> IndexResponse:
+    logger.info(
+        "index_start - request received user_id=%s repository_id=%s repo_id=%s",
+        current_user["id"],
+        req.repository_id,
+        req.repo_id,
+    )
     snapshot_id = str(uuid.uuid4())
     indexing_job_id = str(uuid.uuid4())
 
@@ -273,6 +315,12 @@ def index_repo(
     effective_repo_ref = req.repo_ref or repository_row.get("default_branch") or "main"
 
     if not effective_repo_path and not effective_repo_url:
+        logger.warning(
+            "index_start - missing repository source user_id=%s repository_id=%s repo_id=%s",
+            current_user["id"],
+            repository_db_id,
+            effective_repo_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Repository source missing: set local_path or remote_url on repository, or pass repo_path/repo_url in request",
@@ -307,6 +355,13 @@ def index_repo(
             },
         )
         session.commit()
+        logger.info(
+            "index_start - queued user_id=%s repository_id=%s snapshot_id=%s job_id=%s",
+            current_user["id"],
+            repository_db_id,
+            snapshot_id,
+            indexing_job_id,
+        )
 
     def _background_index_job(
         repo_id: str,
@@ -406,6 +461,12 @@ def index_repo(
                     {"id": snapshot_id, "stats": json.dumps({"indexed_chunks": total})},
                 )
                 db.commit()
+                logger.info(
+                    "index_job - completed repository_id=%s snapshot_id=%s indexed_chunks=%s",
+                    repository_db_id,
+                    snapshot_id,
+                    total,
+                )
         finally:
             db.close()
 
@@ -421,8 +482,15 @@ def index_repo(
         indexing_job_id,
     )
 
+    response_payload = IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id).model_dump()
+    logger.info(
+        "index_start - response sent user_id=%s repository_id=%s snapshot_id=%s",
+        current_user["id"],
+        repository_db_id,
+        snapshot_id,
+    )
     return success_response(
-        IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id).model_dump(),
+        response_payload,
         status_code=status.HTTP_202_ACCEPTED,
     )
 
@@ -434,19 +502,35 @@ def get_index_progress(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Get indexing progress for a snapshot."""
+    logger.info("index_progress - request received user_id=%s snapshot_id=%s", current_user["id"], snapshot_id)
     row = session.execute(
         text(
             """
-            SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
+                        SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
             FROM repository_snapshots rs
+            JOIN repositories r ON r.id = rs.repository_id
+            JOIN project_memberships pm ON pm.project_id = r.project_id
             LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
             WHERE rs.id = :snapshot_id
+              AND pm.user_id = :user_id
             """
         ),
-        {"snapshot_id": snapshot_id},
+        {"snapshot_id": snapshot_id, "user_id": current_user["id"]},
     ).mappings().first()
 
     if not row:
+        exists = session.execute(
+            text("SELECT id FROM repository_snapshots WHERE id = :snapshot_id"),
+            {"snapshot_id": snapshot_id},
+        ).first()
+        if exists:
+            logger.warning(
+                "index_progress - forbidden snapshot access user_id=%s snapshot_id=%s",
+                current_user["id"],
+                snapshot_id,
+            )
+            raise HTTPException(status_code=403, detail="Not authorized for this repository")
+        logger.warning("index_progress - snapshot not found snapshot_id=%s", snapshot_id)
         raise HTTPException(status_code=404, detail="Snapshot not found")
 
     # Timeout handling: mark long-running jobs as failed to avoid silent stuck states.
@@ -456,6 +540,7 @@ def get_index_progress(
             started = started.replace(tzinfo=timezone.utc)
         elapsed_seconds = int((datetime.now(timezone.utc) - started).total_seconds())
         if elapsed_seconds > settings.indexing_timeout_seconds:
+            logger.error("index_progress - timeout snapshot_id=%s elapsed_seconds=%s", snapshot_id, elapsed_seconds)
             session.execute(
                 text(
                     """
@@ -510,6 +595,7 @@ def get_index_progress(
                 heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
             stalled_seconds = int((datetime.now(timezone.utc) - heartbeat_at).total_seconds())
             if stalled_seconds > settings.indexing_stall_timeout_seconds:
+                logger.error("index_progress - stalled snapshot_id=%s stalled_seconds=%s", snapshot_id, stalled_seconds)
                 session.execute(
                     text(
                         """
@@ -575,24 +661,33 @@ def get_index_progress(
     current_file = stats.get("current_file")
     eta_seconds = stats.get("eta_seconds")
 
+    payload = {
+        "snapshot_id": snapshot_id,
+        "index_status": row["index_status"] or row["status"] or "pending",
+        "job_status": row["status"] or "pending",
+        "message": row["message"] or "Indexing in progress...",
+        "stats": stats,
+        "total_files": total_files,
+        "processed_files": processed_files,
+        "percentage": percentage,
+        "current_file": current_file,
+        "eta_seconds": eta_seconds,
+        "started_at": started_at,
+    }
+    logger.info(
+        "index_progress - response sent user_id=%s snapshot_id=%s status=%s percentage=%s",
+        current_user["id"],
+        snapshot_id,
+        payload["index_status"],
+        payload["percentage"],
+    )
     return success_response(
-        {
-            "snapshot_id": snapshot_id,
-            "index_status": row["index_status"] or row["status"] or "pending",
-            "job_status": row["status"] or "pending",
-            "message": row["message"] or "Indexing in progress...",
-            "stats": stats,
-            "total_files": total_files,
-            "processed_files": processed_files,
-            "percentage": percentage,
-            "current_file": current_file,
-            "eta_seconds": eta_seconds,
-            "started_at": started_at,
-        }
+        payload
     )
 
 
 def _ensure_membership(session: Session, project_id: str, user_id: str) -> None:
+    logger.debug("membership_check - request project_id=%s user_id=%s", project_id, user_id)
     membership = session.execute(
         text(
             """
@@ -604,4 +699,5 @@ def _ensure_membership(session: Session, project_id: str, user_id: str) -> None:
         {"project_id": project_id, "user_id": user_id},
     ).first()
     if membership is None:
+        logger.warning("membership_check - forbidden project_id=%s user_id=%s", project_id, user_id)
         raise HTTPException(status_code=403, detail="Not authorized for this project")

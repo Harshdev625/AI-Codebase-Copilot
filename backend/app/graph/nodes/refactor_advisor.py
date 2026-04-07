@@ -1,8 +1,14 @@
+import logging
+
 from app.graph.state import CopilotState
 from app.graph.nodes.common import build_context, llm_try
 
 
+logger = logging.getLogger(__name__)
+
+
 def refactor_advisor_node(state: CopilotState) -> CopilotState:
+    logger.debug("graph_refactor_advisor - request")
     snippets = state.get("retrieved_context", [])
     if not snippets:
         return {
@@ -33,4 +39,5 @@ def refactor_advisor_node(state: CopilotState) -> CopilotState:
     else:
         confidence = 0.74
 
+    logger.debug("graph_refactor_advisor - response confidence=%s plan_chars=%s", confidence, len(plan))
     return {"refactor_plan": plan, "confidence": confidence}

@@ -1,38 +1,40 @@
-import { ButtonHTMLAttributes, forwardRef } from "react";
-import { cn } from "@/lib/cn";
+import * as React from "react";
+import { cva, type VariantProps } from "class-variance-authority";
 
-type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
-type ButtonSize = "sm" | "md" | "lg";
+import { cn } from "@/lib/utils";
 
-const variantClasses: Record<ButtonVariant, string> = {
-  primary: "btn-primary",
-  secondary: "btn-secondary",
-  ghost: "inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-muted transition-colors hover:bg-surface2 hover:text-text",
-  danger: "inline-flex items-center gap-2 rounded-xl bg-danger px-4 py-2.5 text-sm font-medium text-white transition-colors hover:opacity-90",
-};
+const buttonVariants = cva(
+  "inline-flex items-center justify-center rounded-xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 focus-visible:ring-primary",
+        secondary: "bg-card text-card-foreground border border-border hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring",
+        ghost: "text-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring",
+        danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90 focus-visible:ring-destructive",
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-9 px-3",
+        lg: "h-11 px-5 text-base",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+);
 
-const sizeClasses: Record<ButtonSize, string> = {
-  sm: "px-3 py-1.5 text-xs",
-  md: "px-4 py-2.5 text-sm",
-  lg: "px-5 py-3 text-base",
-};
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {}
 
-export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: ButtonVariant;
-  size?: ButtonSize;
-};
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, ...props }, ref) => {
+    return <button className={cn(buttonVariants({ variant, size }), className)} ref={ref} {...props} />;
+  }
+);
+Button.displayName = "Button";
 
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = "primary", size = "md", type = "button", ...props },
-  ref,
-) {
-  const useDefaultSize = variant === "primary" || variant === "secondary";
-  return (
-    <button
-      ref={ref}
-      type={type}
-      className={cn(variantClasses[variant], useDefaultSize ? sizeClasses[size] : "", className)}
-      {...props}
-    />
-  );
-});
+export { Button, buttonVariants };

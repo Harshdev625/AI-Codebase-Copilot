@@ -1,8 +1,14 @@
+import logging
+
 from app.graph.state import CopilotState
 from app.graph.nodes.common import build_context, llm_try
 
 
+logger = logging.getLogger(__name__)
+
+
 def debugger_node(state: CopilotState) -> CopilotState:
+    logger.debug("graph_debugger - request")
     snippets = state.get("retrieved_context", [])
     if not snippets:
         return {
@@ -32,4 +38,5 @@ def debugger_node(state: CopilotState) -> CopilotState:
     else:
         confidence = 0.78
 
+    logger.debug("graph_debugger - response confidence=%s analysis_chars=%s", confidence, len(summary))
     return {"analysis": summary, "confidence": confidence}

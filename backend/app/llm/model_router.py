@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -8,6 +9,9 @@ import httpx
 from app.core.config import settings
 from app.core.http_client import get_http_client
 from app.rag.embeddings.provider import get_embedding_provider
+
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaModelRouter:
@@ -18,6 +22,7 @@ class OllamaModelRouter:
         self.embedder = get_embedding_provider()
 
     def chat(self, prompt: str, context: str = "") -> str:
+        logger.debug("ollama_chat - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         full_context = context
         short_context = context[:6000] if context else ""
         last_error: RuntimeError | None = None
@@ -57,23 +62,29 @@ class OllamaModelRouter:
                 response.raise_for_status()
                 body = response.json()
                 message = body.get("message", {})
-                return str(message.get("content", "")).strip()
+                text = str(message.get("content", "")).strip()
+                logger.info("ollama_chat - response received chars=%s", len(text))
+                return text
             except httpx.HTTPStatusError as exc:
                 body_excerpt = exc.response.text[:200] if exc.response is not None else ""
                 last_error = RuntimeError(
                     f"Ollama chat request failed: {exc}. Response: {body_excerpt}"
                 )
+                logger.warning("ollama_chat - http status failure error=%s", exc)
             except httpx.HTTPError as exc:
                 last_error = RuntimeError(f"Ollama chat request failed: {exc}")
+                logger.warning("ollama_chat - transport failure error=%s", exc)
 
             if not candidate_context or candidate_context == short_context:
                 break
 
         if last_error is not None:
+            logger.exception("ollama_chat - failed after retries")
             raise last_error
         raise RuntimeError("Ollama chat request failed")
 
     def stream_chat(self, prompt: str, context: str = ""):
+        logger.debug("ollama_stream - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         user_prompt = prompt if not context else f"Context:\n{context}\n\nQuestion:\n{prompt}"
         payload: dict[str, Any] = {
             "model": self.chat_model,
@@ -108,6 +119,7 @@ class OllamaModelRouter:
                 timeout=httpx.Timeout(connect=max(self.timeout, 30.0), read=None, write=max(self.timeout, 30.0), pool=max(self.timeout, 30.0)),
             ) as response:
                 response.raise_for_status()
+                yielded = 0
                 for line in response.iter_lines():
                     if not line:
                         continue
@@ -118,13 +130,17 @@ class OllamaModelRouter:
                     message = body.get("message", {})
                     delta = str(message.get("content", ""))
                     if delta:
+                        yielded += 1
                         yield delta
                     if body.get("done"):
                         break
+                logger.info("ollama_stream - completed chunks=%s", yielded)
         except httpx.HTTPStatusError as exc:
             body_excerpt = exc.response.text[:200] if exc.response is not None else ""
+            logger.exception("ollama_stream - http status failure")
             raise RuntimeError(f"Ollama stream request failed: {exc}. Response: {body_excerpt}") from exc
         except httpx.HTTPError as exc:
+            logger.exception("ollama_stream - transport failure")
             raise RuntimeError(f"Ollama stream request failed: {exc}") from exc
 
     def embed(self, text: str) -> list[float]:

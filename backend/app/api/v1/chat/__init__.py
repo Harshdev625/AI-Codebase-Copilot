@@ -34,6 +34,12 @@ def chat(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ChatResponse:
+    logger.info(
+        "chat - request received user_id=%s repository_id=%s repo_id=%s",
+        current_user["id"],
+        req.repository_id,
+        req.repo_id,
+    )
     if req.repository_id:
         repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
@@ -72,6 +78,13 @@ def chat(
     except RuntimeError as exc:
         logger.exception("Chat request failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
         raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
+    logger.info(
+        "chat - response sent user_id=%s repository_id=%s intent=%s sources=%s",
+        current_user["id"],
+        repo_row["id"],
+        result.get("intent", "unknown"),
+        len(result.get("retrieved_context", []) or []),
+    )
     return success_response(
         ChatResponse(
             answer=result.get("answer", ""),
@@ -87,6 +100,12 @@ def chat_stream(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> StreamingResponse:
+    logger.info(
+        "chat_stream - request received user_id=%s repository_id=%s repo_id=%s",
+        current_user["id"],
+        req.repository_id,
+        req.repo_id,
+    )
     if req.repository_id:
         repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
@@ -122,6 +141,13 @@ def chat_stream(
 
     intent = str(result.get("intent", "unknown"))
     sources = result.get("retrieved_context", [])
+    logger.debug(
+        "chat_stream - generation prepared user_id=%s repository_id=%s intent=%s from_cache=%s",
+        current_user["id"],
+        repo_row["id"],
+        intent,
+        from_cache,
+    )
 
     def _event_success(payload: dict) -> str:
         return json.dumps({"success": True, "data": payload, "error": None}) + "\n"
@@ -137,6 +163,11 @@ def chat_stream(
             if cached_answer:
                 yield _event_success({"type": "chunk", "delta": cached_answer})
             yield _event_success({"type": "done", "intent": intent, "sources": sources})
+            logger.info(
+                "chat_stream - completed from cache user_id=%s repository_id=%s",
+                current_user["id"],
+                repo_row["id"],
+            )
             return
 
         generated_parts: list[str] = []
@@ -177,6 +208,13 @@ def chat_stream(
             return
 
         yield _event_success({"type": "done", "intent": intent, "sources": sources})
+        logger.info(
+            "chat_stream - completed user_id=%s repository_id=%s intent=%s chunks=%s",
+            current_user["id"],
+            repo_row["id"],
+            intent,
+            len(generated_parts),
+        )
 
     return StreamingResponse(_iter_stream(), media_type="application/x-ndjson")
 

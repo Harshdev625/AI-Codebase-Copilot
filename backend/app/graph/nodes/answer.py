@@ -1,7 +1,13 @@
+import logging
+
 from app.graph.state import CopilotState
 
 
+logger = logging.getLogger(__name__)
+
+
 def answer_node(state: CopilotState) -> CopilotState:
+    logger.debug("graph_answer - request")
     analysis = state.get("analysis", "")
     refactor_plan = state.get("refactor_plan", "")
     documentation = state.get("documentation", "")
@@ -25,4 +31,6 @@ def answer_node(state: CopilotState) -> CopilotState:
             + f"retrieved_count={verification.get('retrieved_count')}"
         )
 
-    return {"answer": "\n\n".join(parts) if parts else "No answer generated."}
+    answer = "\n\n".join(parts) if parts else "No answer generated."
+    logger.debug("graph_answer - response chars=%s", len(answer))
+    return {"answer": answer}

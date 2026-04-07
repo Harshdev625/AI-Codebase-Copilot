@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import httpx
 import redis
 
@@ -15,6 +16,7 @@ from app.core.roles import ROLE_ADMIN, ROLE_USER, normalize_role
 from app.db.database import get_db_session
 
 router = APIRouter(tags=["admin"])
+logger = logging.getLogger(__name__)
 
 
 class UserRoleUpdate(BaseModel):
@@ -36,6 +38,7 @@ def admin_users(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
+    logger.info("admin_users - request received")
     rows = session.execute(
         text(
             """
@@ -50,6 +53,7 @@ def admin_users(
         item = dict(row)
         item["role"] = normalize_role(item.get("role"))
         results.append(item)
+    logger.info("admin_users - response sent count=%s", len(results))
     return success_response(results)
 
 
@@ -58,6 +62,7 @@ def admin_repositories(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
+    logger.info("admin_repositories - request received")
     rows = session.execute(
         text(
             """
@@ -67,7 +72,9 @@ def admin_repositories(
             """
         )
     ).mappings().all()
-    return success_response([dict(row) for row in rows])
+    payload = [dict(row) for row in rows]
+    logger.info("admin_repositories - response sent count=%s", len(payload))
+    return success_response(payload)
 
 
 @router.get("/admin/indexing-status")
@@ -75,6 +82,7 @@ def admin_indexing_status(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
+    logger.info("admin_indexing_status - request received")
     rows = session.execute(
         text(
             """
@@ -85,7 +93,9 @@ def admin_indexing_status(
             """
         )
     ).mappings().all()
-    return success_response([dict(row) for row in rows])
+    payload = [dict(row) for row in rows]
+    logger.info("admin_indexing_status - response sent count=%s", len(payload))
+    return success_response(payload)
 
 
 @router.post("/admin/users/{user_id}/role")
@@ -99,6 +109,7 @@ def update_user_role(
     Update user role. Only admins can promote/demote users.
     Similar to AWS/GCP/Azure admin management.
     """
+    logger.info("admin_update_user_role - request received target_user_id=%s", user_id)
     normalized_role = normalize_role(request.role)
     if normalized_role not in (ROLE_ADMIN, ROLE_USER):
         raise HTTPException(status_code=400, detail="Invalid role. Must be 'ADMIN' or 'USER'.")
@@ -123,7 +134,9 @@ def update_user_role(
     if row:
         result = dict(row)
         result["role"] = normalize_role(result.get("role"))
+        logger.info("admin_update_user_role - success target_user_id=%s role=%s", user_id, result["role"])
         return success_response(result)
+    logger.warning("admin_update_user_role - user not found target_user_id=%s", user_id)
     raise HTTPException(status_code=404, detail="User not found")
 
 
@@ -135,6 +148,7 @@ def update_user_status(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Activate or deactivate a user account."""
+    logger.info("admin_update_user_status - request received target_user_id=%s", user_id)
     # Prevent self-deactivation
     if current_admin["id"] == user_id and not request.is_active:
         raise HTTPException(status_code=400, detail="Cannot deactivate yourself. Contact another admin.")
@@ -155,7 +169,13 @@ def update_user_status(
     if row:
         result = dict(row)
         result["role"] = normalize_role(result.get("role"))
+        logger.info(
+            "admin_update_user_status - success target_user_id=%s is_active=%s",
+            user_id,
+            result["is_active"],
+        )
         return success_response(result)
+    logger.warning("admin_update_user_status - user not found target_user_id=%s", user_id)
     raise HTTPException(status_code=404, detail="User not found")
 
 
@@ -166,6 +186,7 @@ def delete_user(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Delete a user account (admin only). Cascades to delete projects."""
+    logger.info("admin_delete_user - request received target_user_id=%s", user_id)
     # Prevent self-deletion
     if current_admin["id"] == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself. Contact another admin.")
@@ -178,8 +199,10 @@ def delete_user(
     session.commit()
 
     if not result:
+        logger.warning("admin_delete_user - user not found target_user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="User not found")
 
+    logger.info("admin_delete_user - success target_user_id=%s", user_id)
     return success_response({"deleted": True, "user_id": result["id"], "email": result["email"]})
 
 
@@ -188,6 +211,7 @@ def admin_system_metrics(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    logger.info("admin_system_metrics - request received")
     counts = session.execute(
         text(
             """
@@ -199,7 +223,9 @@ def admin_system_metrics(
             """
         )
     ).mappings().first()
-    return success_response(dict(counts) if counts else {})
+    payload = dict(counts) if counts else {}
+    logger.info("admin_system_metrics - response sent")
+    return success_response(payload)
 
 
 @router.get("/admin/recent-activity")
@@ -207,6 +233,7 @@ def admin_recent_activity(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    logger.info("admin_recent_activity - request received")
     indexing_jobs = session.execute(
         text(
             """
@@ -229,12 +256,21 @@ def admin_recent_activity(
         )
     ).mappings().all()
 
+    payload = {
+        "indexing_jobs": [dict(row) for row in indexing_jobs],
+        "recent_users": [
+            {**dict(row), "role": normalize_role(dict(row).get("role"))} for row in recent_users
+        ],
+    }
+    logger.info(
+        "admin_recent_activity - response sent indexing_jobs=%s recent_users=%s",
+        len(payload["indexing_jobs"]),
+        len(payload["recent_users"]),
+    )
     return success_response(
         {
-            "indexing_jobs": [dict(row) for row in indexing_jobs],
-            "recent_users": [
-                {**dict(row), "role": normalize_role(dict(row).get("role"))} for row in recent_users
-            ],
+            "indexing_jobs": payload["indexing_jobs"],
+            "recent_users": payload["recent_users"],
         }
     )
 
@@ -244,6 +280,7 @@ def admin_service_health(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> list[dict]:
+    logger.info("admin_service_health - request received")
     def _ok() -> dict:
         return {"status": "online", "error": None}
 
@@ -282,12 +319,12 @@ def admin_service_health(
     except Exception as exc:
         ollama_status = _fail(exc)
 
-    return success_response(
-        [
+    statuses = [
             {"name": "Backend API", "status": "online", "detail": None},
             {"name": "PostgreSQL", "status": db_status["status"], "detail": db_status["error"]},
             {"name": "Qdrant", "status": qdrant_status["status"], "detail": qdrant_status["error"]},
             {"name": "Redis", "status": redis_status["status"], "detail": redis_status["error"]},
             {"name": "Ollama", "status": ollama_status["status"], "detail": ollama_status["error"]},
         ]
-    )
+    logger.info("admin_service_health - response sent")
+    return success_response(statuses)

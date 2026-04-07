@@ -24,7 +24,7 @@ def _configure_logging() -> None:
     if not root.handlers:
         logging.basicConfig(
             level=log_level,
-            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
         )
     else:
         root.setLevel(log_level)
@@ -51,18 +51,26 @@ def create_app() -> FastAPI:
     )
     @app.on_event("startup")
     def on_startup() -> None:
+        logger.info("startup - ensuring database schema")
         ensure_app_schema()
+        logger.info("startup - schema ready")
 
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())[:12]
         started = time.perf_counter()
+        logger.info(
+            "request - request received request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path,
+        )
         try:
             response = await call_next(request)
         except Exception:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             logger.exception(
-                "Unhandled request failure request_id=%s method=%s path=%s elapsed_ms=%s",
+                "request - unhandled failure request_id=%s method=%s path=%s elapsed_ms=%s",
                 request_id,
                 request.method,
                 request.url.path,
@@ -73,7 +81,7 @@ def create_app() -> FastAPI:
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         response.headers["X-Request-Id"] = request_id
         logger.info(
-            "Request completed request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
+            "request - response sent request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
             request_id,
             request.method,
             request.url.path,
@@ -83,12 +91,18 @@ def create_app() -> FastAPI:
         return response
 
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(_: Request, exc: HTTPException):
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        logger.warning(
+            "http_exception - path=%s status=%s detail=%s",
+            request.url.path,
+            exc.status_code,
+            exc.detail,
+        )
         detail = str(exc.detail) if exc.detail is not None else "HTTP request failed"
         return error_response(detail, status_code=exc.status_code)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
         detail = "Invalid request payload"
         errors = exc.errors()
         if errors:
@@ -96,11 +110,12 @@ def create_app() -> FastAPI:
             location = ".".join(str(part) for part in first.get("loc", []))
             message = str(first.get("msg", "Invalid request payload"))
             detail = f"{location}: {message}" if location else message
+        logger.warning("validation_error - path=%s detail=%s", request.url.path, detail)
         return error_response(detail, status_code=422)
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(_: Request, exc: Exception):
-        logger.exception("Unhandled application error: %s", exc)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        logger.exception("unhandled_exception - path=%s error=%s", request.url.path, exc)
         return error_response("Internal server error", status_code=500)
 
     app.include_router(auth_router, prefix="/v1")

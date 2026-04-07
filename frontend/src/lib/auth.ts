@@ -1,100 +1,108 @@
-export type CurrentUser = {
+export type UserRole = "USER" | "ADMIN" | string;
+
+export interface AuthUser {
   id: string;
   email: string;
   full_name?: string | null;
-  role: string;
+  role: UserRole;
   is_active: boolean;
-};
-
-import { apiRequest, requireData } from "@/lib/http";
-
-function normalizeRole(role: string | undefined | null): string {
-  const value = (role || "").toString().trim();
-  if (!value) return "";
-  const lower = value.toLowerCase();
-  if (lower === "admin") return "ADMIN";
-  if (lower === "developer" || lower === "user" || lower === "member") return "USER";
-  return value.toUpperCase();
 }
 
-const TOKEN_KEY = "aicc_token";
-const USER_KEY = "aicc_user";
+const ACCESS_TOKEN_KEY = "tm.access_token";
+const USER_KEY = "tm.user";
+const TOKEN_COOKIE = "tm_token";
+const ROLE_COOKIE = "tm_role";
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 
-export function getToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(TOKEN_KEY) || "";
+function isBrowser(): boolean {
+  return typeof window !== "undefined";
 }
 
-export function getStoredUser(): CurrentUser | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(USER_KEY);
-  if (!raw) return null;
+function setCookie(name: string, value: string, maxAge = COOKIE_MAX_AGE): void {
+  if (!isBrowser()) {
+    return;
+  }
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}; samesite=lax`;
+}
+
+function clearCookie(name: string): void {
+  if (!isBrowser()) {
+    return;
+  }
+  document.cookie = `${name}=; path=/; max-age=0; samesite=lax`;
+}
+
+function readCookie(name: string): string | undefined {
+  if (!isBrowser()) {
+    return undefined;
+  }
+  const entry = document.cookie
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`));
+  if (!entry) {
+    return undefined;
+  }
+  return decodeURIComponent(entry.substring(name.length + 1));
+}
+
+export function getAccessToken(): string | undefined {
+  if (!isBrowser()) {
+    return undefined;
+  }
+  const token = window.localStorage.getItem(ACCESS_TOKEN_KEY);
+  return token ?? readCookie(TOKEN_COOKIE);
+}
+
+export function getStoredUser(): AuthUser | null {
+  if (!isBrowser()) {
+    return null;
+  }
+  const payload = window.localStorage.getItem(USER_KEY);
+  if (!payload) {
+    return null;
+  }
   try {
-    const parsed = JSON.parse(raw) as CurrentUser;
-    return { ...parsed, role: normalizeRole(parsed.role) };
+    return JSON.parse(payload) as AuthUser;
   } catch {
     return null;
   }
 }
 
-export function clearSession(): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-  localStorage.removeItem("aicc_project_id");
+export function setAccessToken(token: string): void {
+  if (!isBrowser()) {
+    return;
+  }
+  window.localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  setCookie(TOKEN_COOKIE, token);
 }
 
-export function redirectToLogin(): void {
-  clearSession();
-  if (typeof window !== "undefined") {
-    window.location.href = "/login";
+export function setStoredUser(user: AuthUser): void {
+  if (!isBrowser()) {
+    return;
   }
+  window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+  setCookie(ROLE_COOKIE, String(user.role).toUpperCase());
 }
 
-export function handleUnauthorizedResponse(response: Response): boolean {
-  if (response.status === 401) {
-    redirectToLogin();
-    return true;
+export function setAuthSession(token: string, user: AuthUser): void {
+  if (!isBrowser()) {
+    return;
   }
-  return false;
+  setAccessToken(token);
+  setStoredUser(user);
 }
 
-export async function validateSessionAndRefreshUser(): Promise<CurrentUser | null> {
-  const token = getToken();
-  if (!token) {
-    redirectToLogin();
-    return null;
+export function clearAuthSession(): void {
+  if (!isBrowser()) {
+    return;
   }
-
-  const result = await apiRequest<CurrentUser>("/api/auth/me");
-  if (!result.success || !result.data) {
-    return null;
-  }
-
-  const user = result.data;
-  user.role = normalizeRole(user.role);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-  return user;
+  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
+  window.localStorage.removeItem(USER_KEY);
+  clearCookie(TOKEN_COOKIE);
+  clearCookie(ROLE_COOKIE);
 }
 
-export async function storeSession(accessToken: string): Promise<CurrentUser> {
-  if (typeof window === "undefined") {
-    throw new Error("Session storage is only available in the browser");
-  }
-
-  localStorage.setItem(TOKEN_KEY, accessToken);
-  const result = await apiRequest<CurrentUser>("/api/auth/me", {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!result.success) {
-    clearSession();
-    if (!result.error || result.error === "Request failed.") {
-      throw new Error("Failed to load current user");
-    }
-    throw new Error(result.error);
-  }
-  const user = requireData(result, "Failed to load current user");
-  user.role = normalizeRole(user.role);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-  return user;
+export function isAdmin(role: string | undefined | null): boolean {
+  return String(role ?? "").toUpperCase() === "ADMIN";
 }

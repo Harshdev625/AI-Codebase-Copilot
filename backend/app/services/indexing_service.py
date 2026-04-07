@@ -107,8 +107,10 @@ class IndexingService:
 
     def _run_git(self, args: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
         """Run git command with timeout (default 5 minutes)."""
+        command_text = "git " + " ".join(args)
+        logger.debug("index_git - running command=%s cwd=%s timeout=%s", command_text, cwd, timeout)
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 ["git", *args],
                 cwd=str(cwd) if cwd else None,
                 check=True,
@@ -117,8 +119,26 @@ class IndexingService:
                 text=True,
                 timeout=timeout,
             )
+            logger.debug(
+                "index_git - completed command=%s returncode=%s stdout=%s stderr=%s",
+                command_text,
+                result.returncode,
+                (result.stdout or "").strip()[:300],
+                (result.stderr or "").strip()[:300],
+            )
+            return result
         except subprocess.TimeoutExpired as exc:
+            logger.exception("index_git - timeout command=%s", command_text)
             raise RuntimeError(f"Git command timed out after {timeout}s: {' '.join(args)}") from exc
+        except subprocess.CalledProcessError as exc:
+            logger.exception(
+                "index_git - failed command=%s returncode=%s stdout=%s stderr=%s",
+                command_text,
+                exc.returncode,
+                (exc.stdout or "").strip()[:300],
+                (exc.stderr or "").strip()[:300],
+            )
+            raise
 
     def _cache_root(self) -> Path:
         cache_root = Path(settings.repo_cache_dir)
@@ -149,10 +169,18 @@ class IndexingService:
         repo_url: str | None,
         repo_ref: str | None,
     ) -> Path:
+        logger.info(
+            "index_resolve_repo - start repo_id=%s repo_path=%s repo_url=%s repo_ref=%s",
+            repo_id,
+            repo_path,
+            repo_url,
+            repo_ref,
+        )
         if repo_path:
             root = Path(repo_path)
             if not root.exists():
                 raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
+            logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
             return root
 
         if not repo_url:
@@ -160,6 +188,7 @@ class IndexingService:
 
         local_path_candidate = Path(repo_url)
         if local_path_candidate.exists():
+            logger.info("index_resolve_repo - repo_url resolved to local path repo_id=%s root=%s", repo_id, local_path_candidate)
             return local_path_candidate
 
         cache_root = self._cache_root()
@@ -186,8 +215,10 @@ class IndexingService:
                 self._run_git(["fetch", "--all", "--tags"], cwd=target)
                 self._run_git(["checkout", repo_ref], cwd=target)
             except subprocess.CalledProcessError:
+                logger.warning("index_resolve_repo - failed to checkout ref=%s repo_id=%s", repo_ref, repo_id)
                 pass
 
+        logger.info("index_resolve_repo - ready repo_id=%s root=%s", repo_id, target)
         return target
 
     def _iter_git_listed_files(self, repo_root: Path):
@@ -341,8 +372,16 @@ class IndexingService:
                     {"snapshot_id": target_snapshot_id, "stats": json.dumps(stats_payload)},
                 )
             self.session.commit()
+            logger.debug(
+                "index_progress_update - success job_id=%s current=%s total=%s percentage=%s",
+                indexing_job_id,
+                current,
+                total,
+                percentage,
+            )
         except Exception:
             # Non-critical update failure; rollback to avoid aborted transactions.
+            logger.exception("index_progress_update - failed job_id=%s", indexing_job_id)
             self.session.rollback()
 
     def index_repository(
@@ -356,6 +395,12 @@ class IndexingService:
         indexing_job_id: str | None = None,
         snapshot_id: str | None = None,
     ) -> int:
+        logger.info(
+            "index_repository - start repo_id=%s repository_id=%s commit_sha=%s",
+            repo_id,
+            repository_id,
+            commit_sha,
+        )
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
         cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
         started_at = time.perf_counter()
@@ -366,12 +411,14 @@ class IndexingService:
 
         try:
             ignore_spec = self._load_gitignore_spec(root)
+            logger.debug("index_repository - phase=discover repo_id=%s", repo_id)
             self._update_progress(indexing_job_id, 0, 0, "Discovering files...", snapshot_id=snapshot_id)
 
             chunks: list[CodeChunk] = []
             file_list = list(self._iter_indexable_files(root, ignore_spec))
             total_files = len(file_list)
             self._active_total_files = total_files
+            logger.info("index_repository - files discovered repo_id=%s total_files=%s", repo_id, total_files)
             self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index", snapshot_id=snapshot_id)
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
@@ -398,6 +445,7 @@ class IndexingService:
 
             processed = 0
             max_workers = max(1, min(4, (os.cpu_count() or 2)))
+            logger.debug("index_repository - phase=chunk repo_id=%s workers=%s", repo_id, max_workers)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_map = {executor.submit(_chunk_single_file, fp): fp for fp in file_list}
                 pending = set(future_map.keys())
@@ -473,6 +521,7 @@ class IndexingService:
                     "stored_chunks": 0,
                 },
             )
+            logger.debug("index_repository - phase=store repo_id=%s chunks=%s", repo_id, len(chunks))
 
             if repository_id:
                 self._assign_repository_ids_and_chunk_ids(repository_id, chunks)
@@ -496,11 +545,13 @@ class IndexingService:
             self._active_total_files = None
             self._active_started_at_perf = None
             self._active_repository_id = None
+            logger.debug("index_repository - cleanup complete repo_id=%s", repo_id)
 
     def _rebuild_repo_graph(self, repo_id: str, repository_id: str) -> None:
         try:
             rebuild_code_graph(self.session, repository_id, repo_id)
         except Exception:
+            logger.exception("index_repository - graph rebuild failed repository_id=%s", repository_id)
             self.session.rollback()
 
     def _assign_repository_ids_and_chunk_ids(self, repository_id: str, chunks: list[CodeChunk]) -> None:
@@ -552,6 +603,7 @@ class IndexingService:
         """
         if not chunks:
             return
+        logger.info("index_store_chunks - start chunks=%s", len(chunks))
 
         indexing_job_id = self._active_indexing_job_id
         snapshot_id = self._active_snapshot_id
@@ -607,6 +659,7 @@ class IndexingService:
 
         for idx in range(0, len(chunks), 16):
             batch = chunks[idx : idx + 16]
+            logger.debug("index_store_chunks - batch start offset=%s batch_size=%s", idx, len(batch))
             embeddings_by_id: dict[str, list[float]] = {}
 
             for chunk in batch:
@@ -721,6 +774,7 @@ class IndexingService:
                 "Indexing produced chunks, but none were stored to PostgreSQL. "
                 "Check that the backend is connected to the expected database and that schema initialization succeeded."
             )
+        logger.info("index_store_chunks - stored chunks=%s qdrant_points=%s", stored_chunks, len(qdrant_points))
 
         if qdrant_points:
             try:

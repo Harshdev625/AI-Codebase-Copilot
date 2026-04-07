@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
+
+
+logger = logging.getLogger(__name__)
 
 
 _CALL_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
@@ -68,6 +72,7 @@ def _extract_references(content: str) -> list[tuple[str, str, float]]:
 
 
 def rebuild_code_graph(session: Session, repository_id: str, repo_id: str) -> int:
+    logger.info("code_graph_rebuild - start repository_id=%s repo_id=%s", repository_id, repo_id)
     rows = session.execute(
         text("SELECT id, symbol, content FROM code_chunks WHERE repository_id = :repository_id"),
         {"repository_id": repository_id},
@@ -136,12 +141,19 @@ def rebuild_code_graph(session: Session, repository_id: str, repo_id: str) -> in
                 break
 
     session.commit()
+    logger.info("code_graph_rebuild - completed repository_id=%s edges=%s", repository_id, inserted)
     return inserted
 
 
 def graph_expand_context(session: Session, repository_id: str, seed_chunk_ids: list[str], limit: int = 12) -> list[dict]:
     if not seed_chunk_ids:
         return []
+    logger.debug(
+        "code_graph_expand - request repository_id=%s seeds=%s limit=%s",
+        repository_id,
+        len(seed_chunk_ids),
+        limit,
+    )
 
     stmt = (
         text(
@@ -172,4 +184,6 @@ def graph_expand_context(session: Session, repository_id: str, seed_chunk_ids: l
             "limit": limit,
         },
     ).mappings()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    logger.debug("code_graph_expand - response repository_id=%s count=%s", repository_id, len(result))
+    return result

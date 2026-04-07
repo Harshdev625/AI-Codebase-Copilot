@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
 from app.rag.retrieval.code_graph import graph_expand_context
 from app.services.qdrant_service import QdrantService
+
+
+logger = logging.getLogger(__name__)
 
 
 NOISY_PATH_TOKENS = {
@@ -46,6 +50,11 @@ def _dense_search_postgres_with_embedding(
     embedding: list[float],
     top_k: int = 20,
 ) -> list[dict]:
+    logger.debug(
+        "retrieval_dense_postgres_embedding - request repository_id=%s top_k=%s",
+        repository_id,
+        top_k,
+    )
     validate_embedding_dimension(embedding)
     vector_literal = _to_vector_literal(embedding)
     stmt = text(
@@ -63,13 +72,16 @@ def _dense_search_postgres_with_embedding(
         stmt,
         {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
     ).mappings()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    logger.debug("retrieval_dense_postgres_embedding - response repository_id=%s count=%s", repository_id, len(result))
+    return result
 
 
 def _dense_search_postgres(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     try:
         embedding = get_embedding_provider().embed_text(query)
     except RuntimeError:
+        logger.warning("retrieval_dense_postgres - embed failed repository_id=%s", repository_id)
         return []  # Ollama unavailable; skip dense search
     validate_embedding_dimension(embedding)
     vector_literal = _to_vector_literal(embedding)
@@ -88,24 +100,30 @@ def _dense_search_postgres(session: Session, repository_id: str, query: str, top
         stmt,
         {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
     ).mappings()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    logger.debug("retrieval_dense_postgres - response repository_id=%s count=%s", repository_id, len(result))
+    return result
 
 
 def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
+    logger.debug("retrieval_dense - request repository_id=%s top_k=%s", repository_id, top_k)
     try:
         embedding = get_embedding_provider().embed_text(query)
     except RuntimeError:
+        logger.warning("retrieval_dense - embed failed repository_id=%s", repository_id)
         return []  # Ollama unavailable; dense search not possible
     validate_embedding_dimension(embedding)
 
     try:
         matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k)
     except RuntimeError:
+        logger.warning("retrieval_dense - qdrant failed; falling back to postgres repository_id=%s", repository_id)
         return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     if not matches:
         # Qdrant can be reachable but missing points/payload indexes.
         # Fall back to Postgres dense search if embeddings are stored there.
+        logger.debug("retrieval_dense - qdrant empty; falling back to postgres repository_id=%s", repository_id)
         return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     matched_ids = [str(item.get("id")) for item in matches]
@@ -130,15 +148,18 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
             continue
         merged.append(row)
     if merged:
+        logger.debug("retrieval_dense - response repository_id=%s count=%s source=qdrant", repository_id, len(merged))
         return merged
 
     # Qdrant returned matches, but none could be hydrated (e.g., stale IDs).
+    logger.debug("retrieval_dense - qdrant stale ids; falling back to postgres repository_id=%s", repository_id)
     return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
 
 def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     if not query.strip():
         return []
+    logger.debug("retrieval_lexical - request repository_id=%s top_k=%s", repository_id, top_k)
 
     stmt = text(
         """
@@ -161,6 +182,7 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         if _is_noisy_path(str(item.get("path", ""))):
             continue
         filtered.append(item)
+    logger.debug("retrieval_lexical - response repository_id=%s count=%s", repository_id, len(filtered))
     return filtered
 
 
@@ -201,6 +223,7 @@ def _looks_like_docs_path(path: str) -> bool:
 
 
 def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8) -> list[dict]:
+    logger.info("retrieval_hybrid - request repository_id=%s top_k=%s", repository_id, top_k)
     dense = dense_search(session, repository_id, query, top_k=25)
     lexical = lexical_search(session, repository_id, query, top_k=25)
 
@@ -221,6 +244,13 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
     ordered_items = [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]
 
     if len(ordered_items) >= top_k:
+        logger.info(
+            "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s final=%s",
+            repository_id,
+            len(dense),
+            len(lexical),
+            top_k,
+        )
         return ordered_items[:top_k]
 
     try:
@@ -238,4 +268,12 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
         if len(ordered_items) >= top_k:
             break
 
+    logger.info(
+        "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s graph=%s final=%s",
+        repository_id,
+        len(dense),
+        len(lexical),
+        len(graph_items),
+        len(ordered_items[:top_k]),
+    )
     return ordered_items[:top_k]

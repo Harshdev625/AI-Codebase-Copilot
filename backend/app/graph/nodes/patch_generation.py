@@ -1,8 +1,14 @@
+import logging
+
 from app.graph.state import CopilotState
 from app.graph.nodes.common import build_context, llm_try
 
 
+logger = logging.getLogger(__name__)
+
+
 def patch_generation_node(state: CopilotState) -> CopilotState:
+    logger.debug("graph_patch_generation - request")
     context = state.get("retrieved_context", [])
     if not context:
         return {"patch": "No patch generated because retrieval returned no context."}
@@ -21,6 +27,7 @@ def patch_generation_node(state: CopilotState) -> CopilotState:
         )
         generated = llm_try(prompt=prompt, context=build_context(context, limit=4, max_chars=7000))
     if generated and generated.startswith("diff --git"):
+        logger.debug("graph_patch_generation - generated diff chars=%s", len(generated))
         return {"patch": generated}
 
     patch = (
@@ -33,4 +40,5 @@ def patch_generation_node(state: CopilotState) -> CopilotState:
         "+# Apply targeted extraction and improve guard clauses based on retrieved context\n"
     ).format(path=path)
 
+    logger.debug("graph_patch_generation - using fallback patch")
     return {"patch": patch}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from hmac import compare_digest
 
@@ -22,15 +23,18 @@ from app.models.api_models import (
 )
 
 router = APIRouter(tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 def register(req: AuthRegisterRequest, session: Session = Depends(get_db_session)) -> UserResponse:
+    logger.info("auth_register - request received email=%s", req.email.lower())
     existing = session.execute(
         text("SELECT id FROM users WHERE email = :email"),
         {"email": req.email.lower()},
     ).first()
     if existing:
+        logger.warning("auth_register - duplicate email=%s", req.email.lower())
         raise HTTPException(status_code=409, detail="Email already registered")
 
     user_id = str(uuid.uuid4())
@@ -50,6 +54,7 @@ def register(req: AuthRegisterRequest, session: Session = Depends(get_db_session
         },
     )
     session.commit()
+    logger.info("auth_register - user created user_id=%s email=%s", user_id, req.email.lower())
 
     return success_response(
         UserResponse(
@@ -65,11 +70,14 @@ def register(req: AuthRegisterRequest, session: Session = Depends(get_db_session
 
 @router.post("/auth/admin/register", status_code=status.HTTP_201_CREATED)
 def admin_register(req: AuthAdminRegisterRequest, session: Session = Depends(get_db_session)) -> UserResponse:
+    logger.info("admin_register - request received email=%s", req.email.lower())
     configured_secret = settings.admin_registration_secret_key.strip()
     if not configured_secret:
+        logger.warning("admin_register - admin registration disabled")
         raise HTTPException(status_code=503, detail="Admin registration is disabled")
 
     if not compare_digest(req.admin_secret_key, configured_secret):
+        logger.warning("admin_register - invalid secret email=%s", req.email.lower())
         raise HTTPException(status_code=403, detail="Invalid admin secret key")
 
     existing = session.execute(
@@ -77,6 +85,7 @@ def admin_register(req: AuthAdminRegisterRequest, session: Session = Depends(get
         {"email": req.email.lower()},
     ).first()
     if existing:
+        logger.warning("admin_register - duplicate email=%s", req.email.lower())
         raise HTTPException(status_code=409, detail="Email already registered")
 
     user_id = str(uuid.uuid4())
@@ -96,6 +105,7 @@ def admin_register(req: AuthAdminRegisterRequest, session: Session = Depends(get
         },
     )
     session.commit()
+    logger.info("admin_register - admin user created user_id=%s email=%s", user_id, req.email.lower())
 
     return success_response(
         UserResponse(
@@ -117,6 +127,7 @@ def admin_register_alias(req: AuthAdminRegisterRequest, session: Session = Depen
 
 @router.post("/auth/login")
 def login(req: AuthLoginRequest, session: Session = Depends(get_db_session)) -> AuthTokenResponse:
+    logger.info("auth_login - request received email=%s", req.email.lower())
     row = session.execute(
         text(
             """
@@ -129,16 +140,20 @@ def login(req: AuthLoginRequest, session: Session = Depends(get_db_session)) -> 
     ).mappings().first()
 
     if row is None or not verify_password(req.password, row["password_hash"]):
+        logger.warning("auth_login - invalid credentials email=%s", req.email.lower())
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not row["is_active"]:
+        logger.warning("auth_login - inactive user email=%s", req.email.lower())
         raise HTTPException(status_code=403, detail="User is inactive")
 
     token = create_access_token(subject=row["id"])
+    logger.info("auth_login - login success user_id=%s", row["id"])
     return success_response(AuthTokenResponse(access_token=token).model_dump())
 
 
 @router.post("/auth/admin/login")
 def admin_login(req: AuthLoginRequest, session: Session = Depends(get_db_session)) -> AuthTokenResponse:
+    logger.info("admin_login - request received email=%s", req.email.lower())
     row = session.execute(
         text(
             """
@@ -151,13 +166,17 @@ def admin_login(req: AuthLoginRequest, session: Session = Depends(get_db_session
     ).mappings().first()
 
     if row is None or not verify_password(req.password, row["password_hash"]):
+        logger.warning("admin_login - invalid credentials email=%s", req.email.lower())
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not row["is_active"]:
+        logger.warning("admin_login - inactive user email=%s", req.email.lower())
         raise HTTPException(status_code=403, detail="User is inactive")
     if normalize_role(row["role"]) != ROLE_ADMIN:
+        logger.warning("admin_login - non-admin attempted login email=%s", req.email.lower())
         raise HTTPException(status_code=403, detail="Admin account required")
 
     token = create_access_token(subject=row["id"])
+    logger.info("admin_login - login success user_id=%s", row["id"])
     return success_response(AuthTokenResponse(access_token=token).model_dump())
 
 
@@ -169,6 +188,7 @@ def admin_login_alias(req: AuthLoginRequest, session: Session = Depends(get_db_s
 
 @router.get("/auth/me")
 def me(current_user: dict = Depends(get_current_user)) -> UserResponse:
+    logger.info("auth_me - request received user_id=%s", current_user["id"])
     return success_response(
         UserResponse(
             id=current_user["id"],

@@ -1,3 +1,5 @@
+import logging
+
 from langgraph.graph import END, StateGraph
 
 from app.graph.nodes.answer import answer_node
@@ -13,8 +15,12 @@ from app.graph.nodes.verifier import verifier_node
 from app.graph.state import CopilotState
 
 
+logger = logging.getLogger(__name__)
+
+
 def route_after_retrieval(state: CopilotState) -> str:
     intent = state.get("intent")
+    logger.debug("graph_route_after_retrieval - intent=%s", intent)
     if intent == "debug":
         return "debugger"
     if intent == "refactor":
@@ -25,6 +31,7 @@ def route_after_retrieval(state: CopilotState) -> str:
 
 
 def build_graph():
+    logger.info("graph_build - compiling workflow")
     graph = StateGraph(CopilotState)
     graph.add_node("planner", planner_node)
     graph.add_node("retrieval", retrieval_node)
@@ -60,7 +67,9 @@ def build_graph():
     graph.add_edge("tool_execution", "verifier")
     graph.add_edge("verifier", "answer")
     graph.add_edge("answer", END)
-    return graph.compile()
+    compiled = graph.compile()
+    logger.info("graph_build - compiled workflow")
+    return compiled
 
 
 compiled_graph = build_graph()

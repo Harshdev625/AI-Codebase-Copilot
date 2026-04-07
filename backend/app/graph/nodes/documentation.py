@@ -1,8 +1,14 @@
+import logging
+
 from app.graph.state import CopilotState
 from app.graph.nodes.common import build_context, llm_try
 
 
+logger = logging.getLogger(__name__)
+
+
 def documentation_node(state: CopilotState) -> CopilotState:
+    logger.debug("graph_documentation - request")
     snippets = state.get("retrieved_context", [])
     if not snippets:
         return {
@@ -21,6 +27,7 @@ def documentation_node(state: CopilotState) -> CopilotState:
         )
         generated = llm_try(prompt=prompt, context=context)
     if generated:
+        logger.debug("graph_documentation - generated chars=%s", len(generated))
         return {"documentation": generated, "confidence": 0.76}
 
     lines = ["## Generated Documentation Draft", "", "### Relevant Files"]
@@ -36,4 +43,6 @@ def documentation_node(state: CopilotState) -> CopilotState:
             "This area contains logic related to the requested topic. Consider adding purpose, inputs/outputs, and failure modes.",
         ]
     )
-    return {"documentation": "\n".join(lines), "confidence": 0.55}
+    fallback = "\n".join(lines)
+    logger.debug("graph_documentation - fallback chars=%s", len(fallback))
+    return {"documentation": fallback, "confidence": 0.55}

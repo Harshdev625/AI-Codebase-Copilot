@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+:root {
+  --background: 204 40% 98%;
+  --foreground: 217 25% 13%;
+  --card: 0 0% 100%;
+  --card-foreground: 217 25% 13%;
+  --primary: 212 88% 48%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 197 72% 63%;
+  --secondary-foreground: 220 25% 12%;
+  --muted: 210 34% 94%;
+  --muted-foreground: 220 10% 42%;
+  --accent: 198 46% 89%;
+  --accent-foreground: 220 24% 17%;
+  --destructive: 0 80% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 212 22% 86%;
+  --ring: 212 88% 48%;
+}
+
+[data-theme="dark"] {
+  --background: 222 35% 9%;
+  --foreground: 220 24% 94%;
+  --card: 220 28% 13%;
+  --card-foreground: 220 24% 94%;
+  --primary: 194 88% 57%;
+  --primary-foreground: 220 28% 10%;
+  --secondary: 186 80% 44%;
+  --secondary-foreground: 220 22% 95%;
+  --muted: 220 20% 17%;
+  --muted-foreground: 215 18% 72%;
+  --accent: 220 20% 18%;
+  --accent-foreground: 220 24% 94%;
+  --destructive: 0 72% 56%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 220 17% 24%;
+  --ring: 194 88% 57%;
+}
+
+[data-theme="hacker"] {
+  --background: 120 8% 4%;
+  --foreground: 128 100% 78%;
+  --card: 123 9% 7%;
+  --card-foreground: 128 100% 78%;
+  --primary: 128 93% 59%;
+  --primary-foreground: 120 20% 7%;
+  --secondary: 128 50% 32%;
+  --secondary-foreground: 128 100% 86%;
+  --muted: 128 22% 12%;
+  --muted-foreground: 128 45% 56%;
+  --accent: 128 25% 16%;
+  --accent-foreground: 128 100% 78%;
+  --destructive: 2 82% 65%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 128 40% 24%;
+  --ring: 128 100% 60%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-manrope), "Segoe UI", sans-serif;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-plex-mono), "Consolas", monospace;
+}
+
+[data-theme="hacker"] body {
+  text-shadow: 0 0 1px rgba(88, 255, 129, 0.35);
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 260ms ease-out both;
+}

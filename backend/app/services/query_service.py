@@ -43,6 +43,12 @@ class QueryService:
         self.model_router = get_model_router()
 
     def run(self, repository_id: str, repo_id: str, query: str, *, user_id: str | None = None, project_id: str | None = None) -> dict:
+        logger.info(
+            "query_run - request received repository_id=%s repo_id=%s user_id=%s",
+            repository_id,
+            repo_id,
+            user_id,
+        )
         result, assembled_context, cache_key, from_cache = self.prepare_generation(
             repository_id,
             repo_id,
@@ -51,6 +57,7 @@ class QueryService:
             project_id=project_id,
         )
         if from_cache:
+            logger.info("query_run - completed from cache repository_id=%s repo_id=%s", repository_id, repo_id)
             return result
 
         try:
@@ -63,6 +70,12 @@ class QueryService:
             raise EmptyLLMResponseError("Language model returned an empty response")
 
         result["answer"] = llm_answer
+        logger.debug(
+            "query_run - model answer generated repository_id=%s repo_id=%s chars=%s",
+            repository_id,
+            repo_id,
+            len(llm_answer),
+        )
         return self.finalize_result(
             repository_id,
             repo_id,
@@ -81,6 +94,13 @@ class QueryService:
         user_id: str | None = None,
         project_id: str | None = None,
     ) -> tuple[dict, str, str, bool]:
+        logger.debug(
+            "query_prepare - start repository_id=%s repo_id=%s user_id=%s project_id=%s",
+            repository_id,
+            repo_id,
+            user_id,
+            project_id,
+        )
         history = self._load_recent_history(user_id=user_id, project_id=project_id, repository_id=repository_id)
         history_hash = self._history_hash(history)
 
@@ -102,6 +122,7 @@ class QueryService:
 
         snippets = result.get("retrieved_context", [])[:6]
         if not snippets:
+            logger.warning("query_prepare - no indexed context repository_id=%s repo_id=%s", repository_id, repo_id)
             raise NoIndexedContextError(
                 "No indexed context found for this query. Index the repository first and retry."
             )
@@ -121,6 +142,12 @@ class QueryService:
             content = snippet.get("content", "")
             context_parts.append(f"File: {path} | Symbol: {symbol}\n{content}")
         assembled_context = "\n\n---\n\n".join(context_parts)
+        logger.debug(
+            "query_prepare - context assembled repository_id=%s snippets=%s context_chars=%s",
+            repository_id,
+            len(snippets),
+            len(assembled_context),
+        )
         return result, assembled_context, cache_key, False
 
     def finalize_result(
@@ -138,6 +165,7 @@ class QueryService:
 
         safe_result = json.loads(json.dumps(result, default=str))
         self.cache.set_json(cache_key, safe_result)
+        logger.debug("query_finalize - cache stored repository_id=%s key=%s", repository_id, cache_key)
 
         try:
             self._record_agent_run(
@@ -214,6 +242,13 @@ class QueryService:
             if not query_text or not answer:
                 continue
             history.append({"query": query_text, "answer": answer})
+        logger.debug(
+            "query_history - loaded repository_id=%s user_id=%s project_id=%s items=%s",
+            repository_id,
+            user_id,
+            project_id,
+            len(history),
+        )
         return history
 
     def _record_agent_run(
@@ -229,6 +264,7 @@ class QueryService:
         sources: list[dict],
     ) -> None:
         if not user_id or not project_id:
+            logger.debug("query_record_agent_run - skipped missing user/project context")
             return
 
         run_id = str(uuid.uuid4())
@@ -257,6 +293,7 @@ class QueryService:
             },
         )
         self.session.commit()
+        logger.debug("query_record_agent_run - persisted run_id=%s repository_id=%s", run_id, repository_id)
 
     def _invoke_graph_with_trace(self, state: dict) -> dict:
         run_trace: list[dict] = []
@@ -280,8 +317,10 @@ class QueryService:
                             logger.debug("Graph step node=%s keys=%s", node_name, sorted(node_output.keys()))
                 if run_trace:
                     merged["run_trace"] = run_trace
+                logger.debug("graph_invoke - stream completed nodes=%s", len(run_trace))
                 return merged
             except Exception:
+                logger.exception("graph_invoke - stream failed; falling back to invoke")
                 # Fall back to non-stream invocation below.
                 pass
 

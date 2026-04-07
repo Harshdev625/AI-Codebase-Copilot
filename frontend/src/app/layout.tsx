@@ -1,37 +1,31 @@
-import "./globals.css";
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
-import AppShell from "@/components/app-shell";
+import { IBM_Plex_Mono, Manrope } from "next/font/google";
 
-const themeInitScript = `(() => {
-  try {
-    const key = "aicc_theme_mode";
-    const stored = localStorage.getItem(key);
-    const mode = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
-    const resolved = mode === "system"
-      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-      : mode;
-    document.documentElement.setAttribute("data-theme", resolved);
-    document.documentElement.style.colorScheme = resolved;
-  } catch (_) {
-    document.documentElement.setAttribute("data-theme", "light");
-    document.documentElement.style.colorScheme = "light";
-  }
-})();`;
+import { ThemeProvider } from "@/components/shared/theme-provider";
+import "@/styles/globals.css";
+
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-manrope",
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  variable: "--font-plex-mono",
+  weight: ["400", "500", "600"],
+});
 
 export const metadata: Metadata = {
   title: "AI Codebase Copilot",
-  description: "Production-grade agentic RAG copilot for code repositories"
+  description: "Modern AI workspace for repository intelligence and code conversations",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        <AppShell>{children}</AppShell>
+      <body className={`${manrope.variable} ${plexMono.variable} font-sans antialiased`}>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );
 }
-
