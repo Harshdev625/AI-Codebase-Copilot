@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     postgres_max_overflow: int = 10
     postgres_pool_timeout_seconds: int = 30
 
-    vector_dim: int = 1024
+    vector_dim: int = 768
     max_retrieval_k: int = 12
     repo_cache_dir: str = ".repo_cache"
     repo_cache_persist: bool = False

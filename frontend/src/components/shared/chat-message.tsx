@@ -1,3 +1,4 @@
+import * as React from "react";
 import { cn } from "@/lib/utils";
 
 interface ChatMessageProps {
@@ -9,16 +10,18 @@ export function ChatMessage({ role, content }: ChatMessageProps): React.JSX.Elem
   const isUser = role === "user";
 
   return (
-    <div className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex w-full animate-in fade-in slide-in-from-bottom-2 duration-300", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm md:max-w-[75%]",
+          "max-w-[85%] rounded-lg px-4 py-3 text-sm leading-relaxed shadow-sm transition-ui lg:max-w-[75%]",
           isUser
-            ? "bg-primary text-primary-foreground"
-            : "border border-border bg-card text-card-foreground"
+            ? "bg-primary text-primary-foreground shadow-md"
+            : "border border-border bg-muted/30 text-foreground"
         )}
       >
-        <p className="whitespace-pre-wrap">{content}</p>
+        <div className="prose prose-sm dark:prose-invert max-w-none">
+          <p className="whitespace-pre-wrap">{content}</p>
+        </div>
       </div>
     </div>
   );

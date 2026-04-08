@@ -3,13 +3,17 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowRight, UserPlus } from "lucide-react";
 
+import { ErrorState } from "@/components/shared/error-state";
+import { useToast } from "@/components/shared/toast-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api, toApiError } from "@/lib/api";
 
 export default function RegisterPage(): React.JSX.Element {
+  const toast = useToast();
   const router = useRouter();
   const [fullName, setFullName] = React.useState("");
   const [email, setEmail] = React.useState("");
@@ -24,6 +28,7 @@ export default function RegisterPage(): React.JSX.Element {
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
+      toast.error("Validation failed", "Passwords do not match.");
       return;
     }
 
@@ -34,9 +39,12 @@ export default function RegisterPage(): React.JSX.Element {
         password,
         full_name: fullName || undefined,
       });
+      toast.success("Account created", "Sign in with your new credentials.");
       router.push("/login");
     } catch (requestError) {
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("Registration failed", message);
     } finally {
       setSubmitting(false);
     }
@@ -45,7 +53,10 @@ export default function RegisterPage(): React.JSX.Element {
   return (
     <Card className="w-full max-w-md animate-fade-up">
       <CardHeader>
-        <CardTitle>Create account</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <UserPlus className="h-5 w-5" />
+          Create account
+        </CardTitle>
         <CardDescription>Set up your workspace access credentials.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -107,7 +118,7 @@ export default function RegisterPage(): React.JSX.Element {
             />
           </div>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <ErrorState message={error} /> : null}
 
           <Button type="submit" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? "Creating account..." : "Create account"}
@@ -116,8 +127,9 @@ export default function RegisterPage(): React.JSX.Element {
 
         <p className="mt-5 text-sm text-muted-foreground">
           Already registered?{" "}
-          <Link className="font-semibold text-primary hover:underline" href="/login">
+          <Link className="inline-flex items-center gap-1 font-semibold text-primary hover:underline" href="/login">
             Sign in
+            <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </p>
       </CardContent>

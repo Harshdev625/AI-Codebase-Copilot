@@ -372,3 +372,56 @@ def test_index_uses_repository_source_and_returns_progress(
     progress_payload = _payload(progress_response)
     assert progress_payload["snapshot_id"] == snapshot_id
     assert progress_payload["index_status"] in {"pending", "running", "completed", "failed"}
+
+
+def test_index_blocks_duplicate_running_job(
+    client: TestClient,
+    session_factory: sessionmaker,
+) -> None:
+    _insert_user(session_factory, "u-6", "lock@example.com")
+    token = _login(client, "lock@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_project = client.post(
+        "/v1/projects",
+        json={"name": "LockProject", "description": "lock flow"},
+        headers=headers,
+    )
+    assert create_project.status_code == 201
+    project_id = _payload(create_project)["id"]
+
+    add_repo = client.post(
+        f"/v1/projects/{project_id}/repositories",
+        json={
+            "repo_id": "lock-repo",
+            "remote_url": "https://github.com/example/lock-repo",
+            "local_path": None,
+            "default_branch": "main",
+        },
+        headers=headers,
+    )
+    assert add_repo.status_code == 201
+    repository_id = _payload(add_repo)["id"]
+
+    db = session_factory()
+    try:
+        db.execute(
+            text(
+                """
+                INSERT INTO indexing_jobs (id, repository_id, snapshot_id, status, message)
+                VALUES ('job-running', :repository_id, 'snap-running', 'running', 'already indexing')
+                """
+            ),
+            {"repository_id": repository_id},
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(
+        "/v1/index",
+        json={"repository_id": repository_id},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    assert "already in progress" in str(response.json()).lower()

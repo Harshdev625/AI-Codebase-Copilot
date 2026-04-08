@@ -15,6 +15,7 @@ interface AppShellProps {
 
 export function AppShell({ title, items, children }: AppShellProps): React.JSX.Element {
   const [isSidebarOpen, setSidebarOpen] = React.useState(false);
+  const [isSidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [userEmail, setUserEmail] = React.useState<string | undefined>(undefined);
   const router = useRouter();
   const pathname = usePathname();
@@ -33,23 +34,31 @@ export function AppShell({ title, items, children }: AppShellProps): React.JSX.E
   }, [router]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1600px]">
-        <Sidebar
-          title={title}
-          items={items}
-          isOpen={isSidebarOpen}
-          onClose={() => setSidebarOpen(false)}
+    <div className="flex min-h-screen bg-background transition-ui">
+      <Sidebar
+        title={title}
+        items={items}
+        isOpen={isSidebarOpen}
+        collapsed={isSidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((previous) => !previous)}
+        onClose={() => setSidebarOpen(false)}
+      />
+      
+      <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+        <TopNavbar
+          sectionTitle={title}
+          userEmail={userEmail}
+          onMenuClick={() => setSidebarOpen(true)}
+          onSidebarToggle={() => setSidebarCollapsed((previous) => !previous)}
+          isSidebarCollapsed={isSidebarCollapsed}
+          onSignOut={signOut}
         />
-        <div className="flex min-h-screen flex-1 flex-col">
-          <TopNavbar
-            sectionTitle={title}
-            userEmail={userEmail}
-            onMenuClick={() => setSidebarOpen(true)}
-            onSignOut={signOut}
-          />
-          <main className="flex-1 p-4 md:p-8">{children}</main>
-        </div>
+        
+        <main className="flex-1 overflow-hidden animate-in fade-in duration-500">
+          <div className="flex h-full flex-col overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8">
+            {children}
+          </div>
+        </main>
       </div>
     </div>
   );

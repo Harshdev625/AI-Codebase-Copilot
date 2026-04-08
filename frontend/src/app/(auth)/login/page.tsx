@@ -3,7 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowRight, LogIn } from "lucide-react";
 
+import { ErrorState } from "@/components/shared/error-state";
+import { useToast } from "@/components/shared/toast-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,6 +14,7 @@ import { api, toApiError } from "@/lib/api";
 import { clearAuthSession, isAdmin, setAccessToken, setStoredUser } from "@/lib/auth";
 
 export default function LoginPage(): React.JSX.Element {
+  const toast = useToast();
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -28,10 +32,12 @@ export default function LoginPage(): React.JSX.Element {
       const user = await api.auth.me();
       setStoredUser(user);
       router.push(isAdmin(user.role) ? "/admin/dashboard" : "/dashboard");
-      router.refresh();
+      toast.success("Signed in", "Welcome back.");
     } catch (requestError) {
       clearAuthSession();
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("Sign in failed", message);
     } finally {
       setSubmitting(false);
     }
@@ -40,7 +46,10 @@ export default function LoginPage(): React.JSX.Element {
   return (
     <Card className="w-full max-w-md animate-fade-up">
       <CardHeader>
-        <CardTitle>Sign in</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <LogIn className="h-5 w-5" />
+          Sign in
+        </CardTitle>
         <CardDescription>Access your AI Codebase Copilot workspace.</CardDescription>
       </CardHeader>
       <CardContent>
@@ -73,7 +82,7 @@ export default function LoginPage(): React.JSX.Element {
             />
           </div>
 
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {error ? <ErrorState message={error} /> : null}
 
           <Button type="submit" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? "Signing in..." : "Sign in"}
@@ -82,8 +91,9 @@ export default function LoginPage(): React.JSX.Element {
 
         <p className="mt-5 text-sm text-muted-foreground">
           New account?{" "}
-          <Link className="font-semibold text-primary hover:underline" href="/register">
+          <Link className="inline-flex items-center gap-1 font-semibold text-primary hover:underline" href="/register">
             Register
+            <ArrowRight className="h-3.5 w-3.5" />
           </Link>
         </p>
       </CardContent>

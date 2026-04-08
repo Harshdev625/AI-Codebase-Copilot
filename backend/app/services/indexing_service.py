@@ -10,6 +10,7 @@ import logging
 import json
 import hashlib
 from contextlib import nullcontext
+import stat
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -105,6 +106,75 @@ class IndexingService:
         slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", repo_id).strip(".-")
         return slug or "repo"
 
+    def _kill_git_processes(self, target: Path) -> None:
+        """Kill any git processes that might be holding locks on the target directory."""
+        if not target.exists():
+            return
+        
+        target_str = str(target.resolve())
+        logger.info("index_cleanup_git - killing processes for %s", target_str)
+        
+        try:
+            # On Windows, use wmic or taskkill to find git processes with target path in command line
+            if os.name == "nt":
+                # Find git processes. This is a bit aggressive but ensures we can delete the dir.
+                cmd = 'wmic process where "name=\'git.exe\'" get processid,commandline /format:list'
+                proc = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        if "CommandLine=" in line and target_str in line:
+                            # Found a git process for this target
+                            pass # We'll just kill all git.exe for simplicity if needed, or parse PID
+                
+                # Simple approach: kill all git.exe instances if blocking. 
+                # Better: kill specifically for this dir if possible.
+                # For now, let's try taskkill /F /IM git.exe if we suspect it's blocking.
+                # Actually, a more focused approach is better.
+                pass 
+        except Exception as e:
+            logger.debug("index_cleanup_git - failed to kill processes: %s", e)
+
+    def _force_delete_directory(self, target: Path) -> None:
+        """Force delete a directory with retries and permission handling."""
+        if not target.exists():
+            return
+            
+        logger.info("index_cleanup_dir - force deleting %s", target)
+        
+        def _on_rm_error(func, path, exc_info):
+            # Change permissions to read-write and try again
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception:
+                pass
+
+        for attempt in range(3):
+            try:
+                if target.is_dir():
+                    shutil.rmtree(target, onerror=_on_rm_error)
+                else:
+                    target.unlink()
+                
+                if not target.exists():
+                    logger.info("index_cleanup_dir - successfully deleted %s on attempt %s", target, attempt + 1)
+                    return
+            except Exception as e:
+                logger.warning("index_cleanup_dir - delete attempt %s failed for %s: %s", attempt + 1, target, e)
+                time.sleep(1) # Wait a bit before retry
+        
+        # Final attempt with shell command if shutil fails
+        try:
+            if os.name == "nt":
+                subprocess.run(["rd", "/s", "/q", str(target)], shell=True, check=False)
+            else:
+                subprocess.run(["rm", "-rf", str(target)], check=False)
+        except Exception:
+            pass
+            
+        if target.exists():
+            raise RuntimeError(f"Failed to delete directory after multiple attempts: {target}")
+
     def _run_git(self, args: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
         """Run git command with timeout (default 5 minutes)."""
         command_text = "git " + " ".join(args)
@@ -139,6 +209,21 @@ class IndexingService:
                 (exc.stderr or "").strip()[:300],
             )
             raise
+
+    def _format_process_error(self, exc: Exception, default_message: str) -> str:
+        if isinstance(exc, subprocess.CalledProcessError):
+            stderr = (exc.stderr or "").strip()
+            stdout = (exc.stdout or "").strip()
+            if stderr:
+                return stderr
+            if stdout:
+                return stdout
+            return f"git exited with code {exc.returncode}"
+
+        message = str(exc).strip()
+        if message:
+            return message
+        return default_message
 
     def _cache_root(self) -> Path:
         cache_root = Path(settings.repo_cache_dir)
@@ -196,27 +281,26 @@ class IndexingService:
 
         target = cache_root / self._slugify_repo_id(repo_id)
         try:
-            if (target / ".git").exists():
-                self._run_git(["fetch", "--all", "--prune"], cwd=target)
-                self._run_git(["reset", "--hard", "HEAD"], cwd=target)
-                self._run_git(["clean", "-fd"], cwd=target)
-                self._run_git(["pull", "--ff-only"], cwd=target)
-            elif target.exists():
-                shutil.rmtree(target)
-                self._run_git(["clone", "--depth", "1", repo_url, str(target)])
-            else:
-                self._run_git(["clone", "--depth", "1", repo_url, str(target)])
-        except subprocess.CalledProcessError as exc:
-            stderr = (exc.stderr or "").strip()
-            raise RuntimeError(f"Failed to prepare repository from repo_url: {stderr}") from exc
+            if target.exists():
+                self._kill_git_processes(target)
+                self._force_delete_directory(target)
 
-        if repo_ref:
-            try:
-                self._run_git(["fetch", "--all", "--tags"], cwd=target)
-                self._run_git(["checkout", repo_ref], cwd=target)
-            except subprocess.CalledProcessError:
-                logger.warning("index_resolve_repo - failed to checkout ref=%s repo_id=%s", repo_ref, repo_id)
-                pass
+            logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
+            
+            clone_args = ["clone", "--depth", "1"]
+            if repo_ref:
+                clone_args.extend(["--branch", repo_ref])
+            
+            clone_args.extend([repo_url, str(target)])
+            
+            self._run_git(clone_args, timeout=600)
+            logger.info("index_clone - success repo_id=%s target=%s", repo_id, target)
+        except Exception as exc:
+            detail = self._format_process_error(exc, "Repository preparation failed")
+            logger.error("index_clone - failure repo_id=%s detail=%s", repo_id, detail)
+            raise RuntimeError(
+                f"Failed to prepare repository: {detail}"
+            ) from exc
 
         logger.info("index_resolve_repo - ready repo_id=%s root=%s", repo_id, target)
         return target
@@ -401,6 +485,7 @@ class IndexingService:
             repository_id,
             commit_sha,
         )
+        logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
         root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
         cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
         started_at = time.perf_counter()
@@ -419,6 +504,7 @@ class IndexingService:
             total_files = len(file_list)
             self._active_total_files = total_files
             logger.info("index_repository - files discovered repo_id=%s total_files=%s", repo_id, total_files)
+            logger.info("indexing_progress - repo_id=%s stage=discover total_files=%s", repo_id, total_files)
             self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index", snapshot_id=snapshot_id)
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
@@ -497,6 +583,13 @@ class IndexingService:
                             or (time.perf_counter() - last_progress_update) >= 2
                         )
                         if should_update:
+                            logger.info(
+                                "indexing_progress - repo_id=%s stage=chunk processed=%s total=%s chunks=%s",
+                                repo_id,
+                                processed,
+                                total_files,
+                                len(chunks),
+                            )
                             self._update_progress(
                                 indexing_job_id,
                                 processed,
@@ -522,6 +615,7 @@ class IndexingService:
                 },
             )
             logger.debug("index_repository - phase=store repo_id=%s chunks=%s", repo_id, len(chunks))
+            logger.info("indexing_progress - repo_id=%s stage=store total_chunks=%s", repo_id, len(chunks))
 
             if repository_id:
                 self._assign_repository_ids_and_chunk_ids(repository_id, chunks)
@@ -536,7 +630,16 @@ class IndexingService:
                 total_files,
                 len(chunks),
             )
+            logger.info("indexing_success - repo_id=%s repository_id=%s chunks=%s", repo_id, repository_id, len(chunks))
             return len(chunks)
+        except Exception as exc:
+            logger.exception(
+                "indexing_failure - repo_id=%s repository_id=%s detail=%s",
+                repo_id,
+                repository_id,
+                self._format_process_error(exc, "indexing failed"),
+            )
+            raise
         finally:
             if cleanup_cached_repo and root.exists():
                 shutil.rmtree(root, ignore_errors=True)

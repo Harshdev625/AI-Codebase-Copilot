@@ -8,12 +8,12 @@ interface StatCardProps {
 
 export function StatCard({ title, value, subtitle }: StatCardProps): React.JSX.Element {
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold text-muted-foreground">{title}</CardTitle>
+    <Card className="overflow-hidden">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">{title}</CardTitle>
       </CardHeader>
       <CardContent>
-        <p className="text-3xl font-bold tracking-tight text-foreground">{value}</p>
+        <p className="text-3xl font-semibold tracking-tight text-foreground">{value}</p>
         {subtitle ? <p className="mt-2 text-xs text-muted-foreground">{subtitle}</p> : null}
       </CardContent>
     </Card>

@@ -1,29 +1,41 @@
 "use client";
 
 import * as React from "react";
+import { ShieldCheck, UserCog2 } from "lucide-react";
 
+import { EmptyState } from "@/components/shared/empty-state";
+import { ErrorState } from "@/components/shared/error-state";
 import { PageHeader } from "@/components/shared/page-header";
+import { useToast } from "@/components/shared/toast-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, type AdminUser, toApiError } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 export default function AdminUsersPage(): React.JSX.Element {
+  const toast = useToast();
   const [users, setUsers] = React.useState<AdminUser[]>([]);
   const [busyUserId, setBusyUserId] = React.useState<string | null>(null);
+  const [isLoading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
   const loadUsers = React.useCallback(async () => {
+    setLoading(true);
     setError(null);
     try {
       const data = await api.admin.users();
       setUsers(data);
     } catch (requestError) {
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("Failed to load users", message);
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   React.useEffect(() => {
     void loadUsers();
@@ -35,8 +47,11 @@ export default function AdminUsersPage(): React.JSX.Element {
     try {
       await api.admin.updateUserRole(user.id, user.role === "ADMIN" ? "USER" : "ADMIN");
       await loadUsers();
+      toast.success("Role updated", `${user.email} role has been updated.`);
     } catch (requestError) {
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("Role update failed", message);
     } finally {
       setBusyUserId(null);
     }
@@ -48,8 +63,11 @@ export default function AdminUsersPage(): React.JSX.Element {
     try {
       await api.admin.updateUserStatus(user.id, !user.is_active);
       await loadUsers();
+      toast.success("Status updated", `${user.email} status has been changed.`);
     } catch (requestError) {
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("Status update failed", message);
     } finally {
       setBusyUserId(null);
     }
@@ -66,8 +84,11 @@ export default function AdminUsersPage(): React.JSX.Element {
     try {
       await api.admin.deleteUser(user.id);
       await loadUsers();
+      toast.success("User deleted", `${user.email} was removed.`);
     } catch (requestError) {
-      setError(toApiError(requestError));
+      const message = toApiError(requestError);
+      setError(message);
+      toast.error("User deletion failed", message);
     } finally {
       setBusyUserId(null);
     }
@@ -85,24 +106,45 @@ export default function AdminUsersPage(): React.JSX.Element {
         }
       />
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <ErrorState message={error} onRetry={() => void loadUsers()} /> : null}
+
+      <section className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardContent className="flex items-center gap-3 pt-6">
+            <UserCog2 className="h-4 w-4 text-primary" />
+            <p className="text-sm text-muted-foreground">Role and status updates are applied via admin APIs without page reloads.</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="flex items-center gap-3 pt-6">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            <p className="text-sm text-muted-foreground">Admin actions are protected and reflected immediately in the user table.</p>
+          </CardContent>
+        </Card>
+      </section>
 
       <Card>
         <CardContent className="pt-6">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Email</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {users.length > 0 ? (
-                users.map((user) => (
+          {isLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : users.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((user) => (
                   <TableRow key={user.id}>
                     <TableCell className="font-medium">{user.email}</TableCell>
                     <TableCell>{user.full_name || "-"}</TableCell>
@@ -135,7 +177,7 @@ export default function AdminUsersPage(): React.JSX.Element {
                         </Button>
                         <Button
                           size="sm"
-                          variant="danger"
+                          variant="destructive"
                           disabled={busyUserId === user.id}
                           onClick={() => void deleteUser(user)}
                         >
@@ -144,16 +186,12 @@ export default function AdminUsersPage(): React.JSX.Element {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No users found.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <EmptyState title="No users found" description="There are no users in the system yet." />
+          )}
         </CardContent>
       </Card>
     </div>

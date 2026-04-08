@@ -52,6 +52,7 @@ export interface Repository {
   created_at: string;
   latest_snapshot_id?: string | null;
   latest_index_status?: string | null;
+  latest_index_stats?: Record<string, unknown> | null;
   latest_indexed_chunks?: number | null;
   has_completed_index?: boolean;
 }
@@ -66,6 +67,19 @@ export interface ChatResponse {
   answer: string;
   intent: string;
   sources: Array<Record<string, unknown>>;
+}
+
+export interface IndexProgressResponse {
+  snapshot_id: string;
+  index_status: string;
+  job_status: string;
+  message: string;
+  total_files: number;
+  processed_files: number;
+  percentage: number;
+  current_file?: string | null;
+  eta_seconds?: number | null;
+  stats?: Record<string, unknown>;
 }
 
 export interface AdminUser extends AuthUser {
@@ -220,6 +234,12 @@ export const api = {
       repo_ref?: string;
     }): Promise<IndexResponse> => {
       const response = await apiClient.post<ApiEnvelope<IndexResponse>>("/index", payload);
+      return unwrap(response);
+    },
+    indexProgress: async (snapshotId: string): Promise<IndexProgressResponse> => {
+      const response = await apiClient.get<ApiEnvelope<IndexProgressResponse>>(
+        `/index/progress/${snapshotId}`
+      );
       return unwrap(response);
     },
   },
