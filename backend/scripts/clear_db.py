@@ -41,13 +41,27 @@ def clear_index_only_data() -> None:
     logger.warning("db_clear - index-only reset completed")
 
 
+import httpx
+from app.core.config import settings
+
+def clear_vdb() -> None:
+    logger.warning("db_clear - vector store reset start")
+    qdrant_url = f"{settings.qdrant_url.rstrip('/')}/collections/{settings.qdrant_collection}"
+    try:
+        response = httpx.delete(qdrant_url)
+        logger.info("db_clear - qdrant collection deleted status=%s", response.status_code)
+    except Exception as e:
+        logger.error("db_clear - qdrant delete failed error=%s", e)
+
 def main() -> None:
     full_reset = "--full" in sys.argv
     if full_reset:
         logger.warning("db_clear - full reset requested")
+        clear_vdb()
         reset_app_schema()
         return
 
+    clear_vdb()
     clear_index_only_data()
 
 

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "mxbai-embed-large:latest"
     ollama_chat_model: str = "tinyllama:latest"
-    ollama_timeout_seconds: float = 60.0
+    ollama_timeout_seconds: float = 600.0
 
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333

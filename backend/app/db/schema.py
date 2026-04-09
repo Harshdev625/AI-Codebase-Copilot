@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS code_chunks (
   end_line INTEGER NOT NULL DEFAULT 1,
   content TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  embedding VECTOR(1024),
+  embedding VECTOR(768),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

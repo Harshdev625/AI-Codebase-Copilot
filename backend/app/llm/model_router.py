@@ -57,7 +57,7 @@ class OllamaModelRouter:
                     f"{self.base_url}/api/chat",
                     json=payload,
                     # First-token/model-load can be slow on CPU.
-                    timeout=max(self.timeout, 180.0),
+                    timeout=max(self.timeout, 600.0),
                 )
                 response.raise_for_status()
                 body = response.json()
