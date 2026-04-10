@@ -20,6 +20,7 @@ class ChatRequest(StrictRequestModel):
     repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
     query: str = Field(..., min_length=3, max_length=4000)
+    session_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
@@ -33,7 +34,26 @@ class ChatRequest(StrictRequestModel):
 class ChatResponse(BaseModel):
     answer: str
     intent: str
+    session_id: str
     sources: list[dict[str, Any]] = []
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    project_id: str
+    repository_id: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    metadata: dict[str, Any] = {}
+    created_at: str
 
 
 class IndexRequest(StrictRequestModel):

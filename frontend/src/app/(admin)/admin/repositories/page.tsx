@@ -126,7 +126,7 @@ export default function AdminRepositoriesPage(): React.JSX.Element {
                             job.status === "completed"
                               ? "success"
                               : job.status === "failed"
-                                ? "danger"
+                                ? "error"
                                 : "warning"
                           }
                         >
@@ -158,3 +158,4 @@ export default function AdminRepositoriesPage(): React.JSX.Element {
     </div>
   );
 }
+

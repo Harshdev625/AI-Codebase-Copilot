@@ -123,7 +123,7 @@ export default function AdminDashboardPage(): React.JSX.Element {
                       <p className="text-xs text-muted-foreground">{service.detail}</p>
                     ) : null}
                   </div>
-                  <Badge variant={service.status === "online" ? "success" : "danger"}>
+                  <Badge variant={service.status === "online" ? "success" : "error"}>
                     {service.status}
                   </Badge>
                 </div>
@@ -166,7 +166,7 @@ export default function AdminDashboardPage(): React.JSX.Element {
                             job.status === "completed"
                               ? "success"
                               : job.status === "failed"
-                                ? "danger"
+                                ? "error"
                                 : "warning"
                           }
                         >
@@ -188,3 +188,4 @@ export default function AdminDashboardPage(): React.JSX.Element {
     </div>
   );
 }
+

@@ -7,7 +7,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ??
   "http://localhost:8000/v1";
 
-interface ApiEnvelope<T> {
+export interface ApiEnvelope<T> {
   success: boolean;
   data: T;
   error: string | null;
@@ -116,8 +116,10 @@ export const apiClient = axios.create({
   },
 });
 
+import { useAuthStore } from "@/store/auth-store";
+
 apiClient.interceptors.request.use((config) => {
-  const token = getAccessToken();
+  const token = useAuthStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

@@ -42,22 +42,28 @@ class QueryService:
         self.cache = get_cache_service()
         self.model_router = get_model_router()
 
-    def run(self, repository_id: str, repo_id: str, query: str, *, user_id: str | None = None, project_id: str | None = None) -> dict:
+    def run(self, repository_id: str, repo_id: str, query: str, *, user_id: str | None = None, project_id: str | None = None, session_id: str | None = None) -> dict:
         logger.info(
-            "query_run - request received repository_id=%s repo_id=%s user_id=%s",
+            "query_run - request received repository_id=%s repo_id=%s user_id=%s session_id=%s",
             repository_id,
             repo_id,
             user_id,
+            session_id,
         )
+        # Ensure session exists or create new one
+        active_session_id = self._ensure_session(session_id, user_id, project_id, repository_id)
+
         result, assembled_context, cache_key, from_cache = self.prepare_generation(
             repository_id,
             repo_id,
             query,
             user_id=user_id,
             project_id=project_id,
+            session_id=active_session_id,
         )
         if from_cache:
             logger.info("query_run - completed from cache repository_id=%s repo_id=%s", repository_id, repo_id)
+            result["session_id"] = active_session_id
             return result
 
         try:
@@ -70,6 +76,8 @@ class QueryService:
             raise EmptyLLMResponseError("Language model returned an empty response")
 
         result["answer"] = llm_answer
+        result["session_id"] = active_session_id
+        
         logger.debug(
             "query_run - model answer generated repository_id=%s repo_id=%s chars=%s",
             repository_id,
@@ -83,6 +91,7 @@ class QueryService:
             cache_key,
             user_id=user_id,
             project_id=project_id,
+            session_id=active_session_id,
         )
 
     def prepare_generation(
@@ -93,15 +102,17 @@ class QueryService:
         *,
         user_id: str | None = None,
         project_id: str | None = None,
+        session_id: str | None = None,
     ) -> tuple[dict, str, str, bool]:
         logger.debug(
-            "query_prepare - start repository_id=%s repo_id=%s user_id=%s project_id=%s",
+            "query_prepare - start repository_id=%s repo_id=%s user_id=%s session_id=%s",
             repository_id,
             repo_id,
             user_id,
-            project_id,
+            session_id,
         )
-        history = self._load_recent_history(user_id=user_id, project_id=project_id, repository_id=repository_id)
+        # Load history specifically from the active session
+        history = self._load_session_history(session_id)
         history_hash = self._history_hash(history)
 
         normalized = query.strip().lower()
@@ -117,6 +128,7 @@ class QueryService:
             "repository_id": repository_id,
             "query": query,
             "session": self.session,
+            "history": history,
         }
         result = self._invoke_graph_with_trace(state)
 
@@ -129,7 +141,7 @@ class QueryService:
 
         context_parts = []
         if history:
-            history_lines = ["Conversation history (most recent first):"]
+            history_lines = ["Conversation history:"]
             for item in history:
                 history_lines.append(f"User: {item['query']}")
                 history_lines.append(f"Assistant: {item['answer']}")
@@ -159,6 +171,7 @@ class QueryService:
         *,
         user_id: str | None = None,
         project_id: str | None = None,
+        session_id: str | None = None,
     ) -> dict:
         if not str(result.get("answer", "")).strip():
             raise EmptyLLMResponseError("Language model returned an empty response")
@@ -167,89 +180,117 @@ class QueryService:
         self.cache.set_json(cache_key, safe_result)
         logger.debug("query_finalize - cache stored repository_id=%s key=%s", repository_id, cache_key)
 
-        try:
-            self._record_agent_run(
-                user_id=user_id,
-                project_id=project_id,
-                repo_id=repo_id,
-                repository_id=repository_id,
-                query=str(safe_result.get("query") or ""),
-                intent=str(safe_result.get("intent") or "unknown"),
-                answer=str(safe_result.get("answer") or ""),
-                sources=safe_result.get("retrieved_context", []) or [],
-            )
-        except Exception:
-            logger.debug("Failed to record agent run", exc_info=True)
+        # Record to persistent messages table
+        if session_id:
+            try:
+                self._persist_message_turn(
+                    session_id=session_id,
+                    query=str(safe_result.get("query") or ""),
+                    answer=str(safe_result.get("answer") or ""),
+                    metadata={
+                        "intent": str(safe_result.get("intent") or "unknown"),
+                        "sources": safe_result.get("retrieved_context", []) or [],
+                    }
+                )
+            except Exception:
+                logger.error("Failed to persist message turn session_id=%s", session_id, exc_info=True)
 
         logger.info(
-            "QueryService completed repo_id=%s repository_id=%s intent=%s retrieved=%s",
+            "QueryService completed repo_id=%s repository_id=%s intent=%s",
             repo_id,
             repository_id,
             safe_result.get("intent", "unknown"),
-            len(safe_result.get("retrieved_context", []) or []),
         )
         return safe_result
 
-    def _history_hash(self, history: list[dict]) -> str:
-        if not history:
-            return "none"
-        raw = "\n".join([f"{item.get('query','')}\n{item.get('answer','')}" for item in history])
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-
-    def _load_recent_history(
-        self,
-        *,
-        user_id: str | None,
-        project_id: str | None,
-        repository_id: str,
-        limit: int = 3,
-    ) -> list[dict]:
+    def _ensure_session(self, session_id: str | None, user_id: str | None, project_id: str | None, repository_id: str) -> str:
+        """Verifies if a session exists, or creates a new one if needed."""
         if not user_id or not project_id:
+             # Fallback for anonymous or system calls
+             return session_id or str(uuid.uuid4())
+
+        if session_id:
+            # check if exists
+            row = self.session.execute(
+                text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
+                {"id": session_id, "user_id": user_id}
+            ).fetchone()
+            if row:
+                # Update timestamp
+                self.session.execute(
+                    text("UPDATE chat_sessions SET updated_at = NOW() WHERE id = :id"),
+                    {"id": session_id}
+                )
+                self.session.commit()
+                return session_id
+
+        # Create new
+        new_id = session_id or str(uuid.uuid4())
+        self.session.execute(
+            text(
+                "INSERT INTO chat_sessions (id, project_id, repository_id, user_id, created_at, updated_at) "
+                "VALUES (:id, :project_id, :repository_id, :user_id, NOW(), NOW())"
+            ),
+            {
+                "id": new_id,
+                "project_id": project_id,
+                "repository_id": repository_id,
+                "user_id": user_id,
+            }
+        )
+        self.session.commit()
+        logger.debug("query_session - created new session_id=%s", new_id)
+        return new_id
+
+    def _load_session_history(self, session_id: str | None, limit: int = 10) -> list[dict]:
+        """Loads previous turns from the messages table for context."""
+        if not session_id:
             return []
 
         rows = self.session.execute(
             text(
-                """
-                SELECT query, diagnostics
-                FROM agent_runs
-                WHERE user_id = :user_id
-                  AND project_id = :project_id
-                  AND status = 'completed'
-                  AND diagnostics->>'repository_id' = :repository_id
-                ORDER BY started_at DESC
-                LIMIT :limit
-                """
+                "SELECT content, role FROM messages WHERE chat_session_id = :session_id ORDER BY created_at ASC LIMIT :limit"
             ),
-            {
-                "user_id": user_id,
-                "project_id": project_id,
-                "repository_id": repository_id,
-                "limit": limit,
-            },
-        ).mappings().all()
+            {"session_id": session_id, "limit": limit * 2}
+        ).fetchall()
 
         history: list[dict] = []
+        # Group pairs of user/assistant messages
+        current_turn: dict = {}
         for row in rows:
-            diagnostics = row.get("diagnostics")
-            if isinstance(diagnostics, str):
-                try:
-                    diagnostics = json.loads(diagnostics)
-                except json.JSONDecodeError:
-                    diagnostics = {}
-            diagnostics = diagnostics or {}
-            answer = str(diagnostics.get("answer") or "").strip()
-            query_text = str(row.get("query") or "").strip()
-            if not query_text or not answer:
-                continue
-            history.append({"query": query_text, "answer": answer})
-        logger.debug(
-            "query_history - loaded repository_id=%s user_id=%s project_id=%s items=%s",
-            repository_id,
-            user_id,
-            project_id,
-            len(history),
-        )
+            if row.role == "user":
+                current_turn = {"query": row.content}
+            elif row.role == "assistant" and "query" in current_turn:
+                current_turn["answer"] = row.content
+                history.append(current_turn)
+                current_turn = {}
+        
         return history
+
+    def _persist_message_turn(self, session_id: str, query: str, answer: str, metadata: dict) -> None:
+        """Saves a user query and assistant response as linked messages."""
+        user_msg_id = str(uuid.uuid4())
+        asst_msg_id = str(uuid.uuid4())
+
+        # Save User prompt
+        self.session.execute(
+            text("INSERT INTO messages (id, chat_session_id, role, content, created_at) VALUES (:id, :sid, 'user', :content, NOW())"),
+            {"id": user_msg_id, "sid": session_id, "content": query}
+        )
+        # Save Assistant response
+        self.session.execute(
+            text("INSERT INTO messages (id, chat_session_id, role, content, metadata, created_at) VALUES (:id, :sid, 'assistant', :content, CAST(:meta AS jsonb), NOW())"),
+            {"id": asst_msg_id, "sid": session_id, "content": answer, "meta": json.dumps(metadata)}
+        )
+        
+        # Update session summary if it's the first message
+        self.session.execute(
+            text("UPDATE chat_sessions SET summary = :summary WHERE id = :id AND summary IS NULL"),
+            {"id": session_id, "summary": (query[:50] + "...") if len(query) > 50 else query}
+        )
+        
+        self.session.commit()
+        logger.debug("query_persistence - saved turn for session_id=%s", session_id)
 
     def _record_agent_run(
         self,

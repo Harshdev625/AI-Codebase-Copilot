@@ -152,7 +152,7 @@ export default function AdminUsersPage(): React.JSX.Element {
                       <Badge variant={user.role === "ADMIN" ? "warning" : "muted"}>{user.role}</Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={user.is_active ? "success" : "danger"}>
+                      <Badge variant={user.is_active ? "success" : "error"}>
                         {user.is_active ? "active" : "inactive"}
                       </Badge>
                     </TableCell>
@@ -197,3 +197,4 @@ export default function AdminUsersPage(): React.JSX.Element {
     </div>
   );
 }
+

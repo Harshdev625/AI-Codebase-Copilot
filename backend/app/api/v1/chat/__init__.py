@@ -6,6 +6,7 @@ from typing import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import ensure_repository_access, ensure_repository_access_by_id, get_current_user
@@ -15,6 +16,8 @@ from app.db.database import get_db_session
 from app.models.api_models import (
     ChatRequest,
     ChatResponse,
+    ChatSessionResponse,
+    ChatMessageResponse,
 )
 from app.services.query_service import QueryService
 from app.services.query_service import (
@@ -28,6 +31,76 @@ router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+@router.get("/sessions", response_model=list[ChatSessionResponse])
+def list_sessions(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[ChatSessionResponse]:
+    """Returns all chat sessions for the current user."""
+    rows = session.execute(
+        text("SELECT * FROM chat_sessions WHERE user_id = :user_id ORDER BY updated_at DESC"),
+        {"user_id": current_user["id"]}
+    ).fetchall()
+    
+    return [
+        ChatSessionResponse(
+            id=str(r.id),
+            project_id=str(r.project_id),
+            repository_id=str(r.repository_id) if r.repository_id else None,
+            title=str(r.title) if r.title else None,
+            summary=str(r.summary) if r.summary else None,
+            created_at=str(r.created_at),
+            updated_at=str(r.updated_at),
+        ) for r in rows
+    ]
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageResponse])
+def get_session_messages(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> list[ChatMessageResponse]:
+    """Returns full history for a specific chat thread."""
+    # Security check
+    row = session.execute(
+        text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
+        {"id": session_id, "user_id": current_user["id"]}
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    rows = session.execute(
+        text("SELECT * FROM messages WHERE chat_session_id = :sid ORDER BY created_at ASC"),
+        {"sid": session_id}
+    ).fetchall()
+
+    return [
+        ChatMessageResponse(
+            id=str(r.id),
+            role=str(r.role),
+            content=str(r.content),
+            metadata=dict(r.metadata or {}),
+            created_at=str(r.created_at),
+        ) for r in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+):
+    """Deletes a chat session and all its messages."""
+    session.execute(
+        text("DELETE FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
+        {"id": session_id, "user_id": current_user["id"]}
+    )
+    session.commit()
+    return {"status": "ok"}
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     req: ChatRequest,
@@ -35,60 +108,38 @@ def chat(
     session: Session = Depends(get_db_session),
 ) -> ChatResponse:
     logger.info(
-        "chat - request received user_id=%s repository_id=%s repo_id=%s",
+        "chat - request received user_id=%s repository_id=%s",
         current_user["id"],
         req.repository_id,
-        req.repo_id,
     )
     if req.repository_id:
         repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
         repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+    
     try:
         service = QueryService(session)
-        try:
-            result = service.run(
-                repository_id=repo_row["id"],
-                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                query=req.query,
-                user_id=str(current_user["id"]),
-                project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
-            )
-        except TypeError:
-            # Allows unit tests (and any custom QueryService) that monkeypatch a simpler signature.
-            result = service.run(
-                repository_id=repo_row["id"],
-                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                query=req.query,
-            )
+        result = service.run(
+            repository_id=repo_row["id"],
+            repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            query=req.query,
+            user_id=str(current_user["id"]),
+            project_id=str(repo_row["project_id"]),
+            session_id=req.session_id,
+        )
     except NoIndexedContextError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=str(exc),
-        ) from exc
+        raise HTTPException(status_code=409, detail=str(exc))
     except (LLMUnavailableError, EmptyLLMResponseError) as exc:
-        logger.exception("Chat request failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        detail = "AI service is temporarily unavailable. Please retry shortly."
-        if str(settings.app_env).lower() != "production":
-            detail = str(exc)
-        raise HTTPException(status_code=503, detail=detail) from exc
-    except WorkflowExecutionError as exc:
-        logger.exception("Chat workflow failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        raise HTTPException(status_code=500, detail="Agent workflow failed. Please retry.") from exc
-    except RuntimeError as exc:
-        logger.exception("Chat request failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
-    logger.info(
-        "chat - response sent user_id=%s repository_id=%s intent=%s sources=%s",
-        current_user["id"],
-        repo_row["id"],
-        result.get("intent", "unknown"),
-        len(result.get("retrieved_context", []) or []),
-    )
+        raise HTTPException(status_code=503, detail="AI service unavailable.")
+    except Exception as exc:
+        logger.exception("Chat failed")
+        raise HTTPException(status_code=500, detail="Internal error")
+
     return success_response(
         ChatResponse(
             answer=result.get("answer", ""),
             intent=result.get("intent", "unknown"),
+            session_id=result.get("session_id"),
             sources=result.get("retrieved_context", []),
         ).model_dump()
     )
@@ -101,120 +152,65 @@ def chat_stream(
     session: Session = Depends(get_db_session),
 ) -> StreamingResponse:
     logger.info(
-        "chat_stream - request received user_id=%s repository_id=%s repo_id=%s",
+        "chat_stream - request user_id=%s repository_id=%s",
         current_user["id"],
         req.repository_id,
-        req.repo_id,
     )
     if req.repository_id:
         repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
         repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+    
     service = QueryService(session)
+    active_session_id = service._ensure_session(req.session_id, str(current_user["id"]), str(repo_row["project_id"]), str(repo_row["id"]))
 
     try:
-        try:
-            result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                repo_row["id"],
-                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                req.query,
-                user_id=str(current_user["id"]),
-                project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
-            )
-        except TypeError:
-            result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                repo_row["id"],
-                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                req.query,
-            )
+        result, assembled_context, cache_key, from_cache = service.prepare_generation(
+            repo_row["id"],
+            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            req.query,
+            user_id=str(current_user["id"]),
+            project_id=str(repo_row["project_id"]),
+            session_id=active_session_id,
+        )
     except NoIndexedContextError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (LLMUnavailableError, EmptyLLMResponseError) as exc:
-        logger.exception("Streaming chat preparation failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
-    except WorkflowExecutionError as exc:
-        logger.exception("Streaming chat workflow failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        raise HTTPException(status_code=500, detail="Agent workflow failed. Please retry.") from exc
-    except RuntimeError as exc:
-        logger.exception("Streaming chat preparation failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
+        raise HTTPException(status_code=409, detail=str(exc))
 
     intent = str(result.get("intent", "unknown"))
     sources = result.get("retrieved_context", [])
-    logger.debug(
-        "chat_stream - generation prepared user_id=%s repository_id=%s intent=%s from_cache=%s",
-        current_user["id"],
-        repo_row["id"],
-        intent,
-        from_cache,
-    )
 
     def _event_success(payload: dict) -> str:
         return json.dumps({"success": True, "data": payload, "error": None}) + "\n"
 
-    def _event_error(message: str) -> str:
-        return json.dumps({"success": False, "data": None, "error": message}) + "\n"
-
     def _iter_stream() -> Iterator[str]:
-        yield _event_success({"type": "start", "intent": intent})
+        yield _event_success({"type": "start", "intent": intent, "session_id": active_session_id})
 
         if from_cache:
-            cached_answer = str(result.get("answer", ""))
-            if cached_answer:
-                yield _event_success({"type": "chunk", "delta": cached_answer})
+            yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
             yield _event_success({"type": "done", "intent": intent, "sources": sources})
-            logger.info(
-                "chat_stream - completed from cache user_id=%s repository_id=%s",
-                current_user["id"],
-                repo_row["id"],
-            )
             return
 
         generated_parts: list[str] = []
         try:
             for delta in service.model_router.stream_chat(prompt=req.query, context=assembled_context):
-                if not delta:
-                    continue
+                if not delta: continue
                 generated_parts.append(delta)
                 yield _event_success({"type": "chunk", "delta": delta})
-        except RuntimeError as exc:
-            logger.exception("Streaming chat failed repo_id=%s user_id=%s", req.repo_id, current_user["id"])
-            message = "AI service is temporarily unavailable. Please retry shortly."
-            if str(settings.app_env).lower() != "production":
-                message = str(exc)
-            yield _event_error(message)
+        except Exception:
+            yield json.dumps({"success": False, "error": "Streaming failed"}) + "\n"
             return
 
         result["answer"] = "".join(generated_parts)
-        try:
-            try:
-                service.finalize_result(
-                    repo_row["id"],
-                    str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                    result,
-                    cache_key,
-                    user_id=str(current_user["id"]),
-                    project_id=str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None,
-                )
-            except TypeError:
-                service.finalize_result(
-                    repo_row["id"],
-                    str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                    result,
-                    cache_key,
-                )
-        except RuntimeError:
-            yield _event_error("AI service returned an empty response. Please retry.")
-            return
-
-        yield _event_success({"type": "done", "intent": intent, "sources": sources})
-        logger.info(
-            "chat_stream - completed user_id=%s repository_id=%s intent=%s chunks=%s",
-            current_user["id"],
+        service.finalize_result(
             repo_row["id"],
-            intent,
-            len(generated_parts),
+            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            result,
+            cache_key,
+            user_id=str(current_user["id"]),
+            project_id=str(repo_row["project_id"]),
+            session_id=active_session_id,
         )
+        yield _event_success({"type": "done", "intent": intent, "sources": sources})
 
     return StreamingResponse(_iter_stream(), media_type="application/x-ndjson")
 

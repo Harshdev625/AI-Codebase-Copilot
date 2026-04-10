@@ -1,143 +1,119 @@
-"use client";
+'use client';
 
-import * as React from "react";
-import { Activity, FolderGit2, Layers3 } from "lucide-react";
+import * as React from 'react';
+import { RefreshCw, Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
+import { DashboardStatsGrid } from '@/features/dashboard/components/dashboard-stats-grid';
+import { DashboardRecentRepositories } from '@/features/dashboard/components/dashboard-recent-repositories';
+import { DashboardMomentumChart } from '@/features/dashboard/components/dashboard-momentum-chart';
+import { DashboardQuickActions } from '@/features/dashboard/components/dashboard-quick-actions';
+import { OnboardingOverlay } from '@/components/shared/onboarding-overlay';
+import { useDashboard } from '@/features/dashboard/hooks/use-dashboard';
+import { useAuthStore } from '@/store/auth-store';
 
-import { EmptyState } from "@/components/shared/empty-state";
-import { ErrorState } from "@/components/shared/error-state";
-import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
-import { useToast } from "@/components/shared/toast-provider";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { api, type DashboardSummary, toApiError } from "@/lib/api";
-import { formatDate } from "@/lib/utils";
-
-export default function DashboardPage(): React.JSX.Element {
-  const toast = useToast();
-  const [summary, setSummary] = React.useState<DashboardSummary | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [isLoading, setLoading] = React.useState(true);
-
-  const loadSummary = React.useCallback(async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      const data = await api.dashboard.me();
-      setSummary(data);
-    } catch (requestError) {
-      const message = toApiError(requestError);
-      setError(message);
-      toast.error("Dashboard load failed", message);
-    } finally {
-      setLoading(false);
-    }
-  }, [toast]);
+export default function DashboardPage() {
+  const { refetch, isLoading } = useDashboard();
+  const { user } = useAuthStore();
+  const [greeting, setGreeting] = React.useState('Hello');
 
   React.useEffect(() => {
-    void loadSummary();
-  }, [loadSummary]);
+    const h = new Date().getHours();
+    if (h < 12) setGreeting('Good morning');
+    else if (h < 17) setGreeting('Good afternoon');
+    else setGreeting('Good evening');
+  }, []);
+
+  const firstName = user?.full_name?.split(' ')[0] ?? user?.email?.split('@')[0] ?? 'there';
 
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Dashboard"
-        description="Track repository activity, indexing health, and workspace momentum."
-        actions={
-          <Button variant="secondary" onClick={() => void loadSummary()}>
-            Refresh
-          </Button>
-        }
-      />
+    <>
+      <OnboardingOverlay />
 
-      {error ? <ErrorState message={error} onRetry={() => void loadSummary()} /> : null}
-
-      <section className="grid gap-4 md:grid-cols-3">
-        {isLoading ? (
-          <>
-            <Card><CardContent className="pt-6"><Skeleton className="h-20 w-full" /></CardContent></Card>
-            <Card><CardContent className="pt-6"><Skeleton className="h-20 w-full" /></CardContent></Card>
-            <Card><CardContent className="pt-6"><Skeleton className="h-20 w-full" /></CardContent></Card>
-          </>
-        ) : (
-          <>
-            <StatCard title="Projects" value={summary?.metrics.projects_count ?? 0} subtitle="All project spaces" />
-            <StatCard title="Repositories" value={summary?.metrics.repositories_count ?? 0} subtitle="Linked sources" />
-            <StatCard title="Indexed Chunks" value={summary?.metrics.indexed_chunks_count ?? 0} subtitle="Searchable context" />
-          </>
-        )}
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardContent className="flex items-center gap-3 pt-6">
-            <div className="rounded-lg bg-primary/15 p-2 text-primary"><Activity className="h-4 w-4" /></div>
-            <p className="text-sm text-muted-foreground">Indexing jobs are tracked in real time from repository snapshots.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center gap-3 pt-6">
-            <div className="rounded-lg bg-primary/15 p-2 text-primary"><FolderGit2 className="h-4 w-4" /></div>
-            <p className="text-sm text-muted-foreground">Repository cards expose branch, source, and latest index status.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center gap-3 pt-6">
-            <div className="rounded-lg bg-primary/15 p-2 text-primary"><Layers3 className="h-4 w-4" /></div>
-            <p className="text-sm text-muted-foreground">Chat consumes indexed chunks to keep answers grounded.</p>
-          </CardContent>
-        </Card>
-      </section>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent repositories</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
+      <div className="space-y-10 animate-fade-up">
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border/20 pb-8">
+          <div>
+            <div className="flex items-center gap-2 mb-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-primary/70">
+                Workspace Overview
+              </span>
             </div>
-          ) : (
-            (summary?.recent_repositories ?? []).length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Repository</TableHead>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Created</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {summary?.recent_repositories.map((repo) => (
-                    <TableRow key={repo.id}>
-                      <TableCell className="font-medium">{repo.repo_id}</TableCell>
-                      <TableCell>{repo.default_branch}</TableCell>
-                      <TableCell>
-                        <Badge variant={repo.latest_index_status === "completed" ? "success" : "muted"}>
-                          {repo.latest_index_status ?? "not indexed"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatDate(repo.created_at)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <EmptyState
-                title="No repository activity"
-                description="Attach repositories to any project and run indexing to populate this feed."
-              />
-            )
-          )}
-        </CardContent>
-      </Card>
-    </div>
+            <h1 className="text-3xl font-bold tracking-tight">
+              {greeting}, {firstName}
+            </h1>
+            <p className="text-[13px] text-muted-foreground mt-1 max-w-xl">
+              Monitor indexing health, codebase momentum, and intelligence logs across your connected sources.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+              disabled={isLoading}
+              className="h-8 px-3 border-border/40 bg-background/50 backdrop-blur-sm hover:bg-muted/50 text-[11px] font-bold uppercase tracking-wider"
+            >
+              <RefreshCw className={cn("mr-2 h-3 w-3", isLoading && "animate-spin")} />
+              Sync State
+            </Button>
+            <Button
+              size="sm"
+              className="h-8 px-4 text-[11px] font-bold uppercase tracking-wider shadow-ai"
+            >
+              New Project
+            </Button>
+          </div>
+        </div>
+
+        {/* Main Stats Bar */}
+        <section>
+          <DashboardStatsGrid />
+        </section>
+
+        {/* High-density layout */}
+        <div className="flex flex-col lg:flex-row gap-12">
+          {/* Main content area */}
+          <div className="flex-1 space-y-12">
+            <section>
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/40">Productivity Momentum</h3>
+              </div>
+              <DashboardMomentumChart />
+            </section>
+
+            <section>
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/40">Linked Sources</h3>
+              </div>
+              <DashboardRecentRepositories />
+            </section>
+          </div>
+
+          {/* Sidebar-style widgets */}
+          <div className="lg:w-80 shrink-0 space-y-12 border-l border-border/10 pl-10">
+             <section>
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground/40 mb-6">Operations</h3>
+                <DashboardQuickActions />
+             </section>
+             
+             <section className="pt-6">
+                <div className="rounded-2xl bg-primary/5 border border-primary/10 p-5">
+                   <h4 className="text-xs font-bold text-primary mb-2 flex items-center gap-2">
+                      <Sparkles className="h-3 w-3" />
+                      Pro Tip
+                   </h4>
+                   <p className="text-[11px] leading-relaxed text-primary/70 font-medium">
+                      Use the "Index All" command in the repository settings to ensure the AI has full visibility across your recent commits.
+                   </p>
+                </div>
+             </section>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

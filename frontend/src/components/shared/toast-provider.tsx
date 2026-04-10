@@ -5,7 +5,7 @@ import { CheckCircle2, Info, TriangleAlert, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-type ToastVariant = "success" | "error" | "info";
+type ToastVariant = "success" | "error" | "info" | "warning";
 
 interface ToastItem {
   id: string;
@@ -19,6 +19,7 @@ interface ToastContextValue {
   success: (title: string, message?: string) => void;
   error: (title: string, message?: string) => void;
   info: (title: string, message?: string) => void;
+  warning: (title: string, message?: string) => void;
 }
 
 const ToastContext = React.createContext<ToastContextValue | null>(null);
@@ -36,6 +37,9 @@ function iconForVariant(variant: ToastVariant): React.JSX.Element {
   }
   if (variant === "error") {
     return <TriangleAlert className="h-4 w-4 text-rose-500" />;
+  }
+  if (variant === "warning") {
+    return <TriangleAlert className="h-4 w-4 text-amber-500" />;
   }
   return <Info className="h-4 w-4 text-cyan-500" />;
 }
@@ -58,6 +62,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }): Reac
     success: (title, message) => showToast({ title, message, variant: "success" }),
     error: (title, message) => showToast({ title, message, variant: "error" }),
     info: (title, message) => showToast({ title, message, variant: "info" }),
+    warning: (title, message) => showToast({ title, message, variant: "warning" }),
   }), [showToast]);
 
   return (
@@ -71,7 +76,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }): Reac
               "pointer-events-auto animate-fade-up rounded-xl border px-4 py-3 text-foreground shadow-2xl backdrop-blur",
               toast.variant === "success" && "border-emerald-500/35 bg-emerald-500/10",
               toast.variant === "error" && "border-rose-500/35 bg-rose-500/10",
-              toast.variant === "info" && "border-cyan-500/35 bg-cyan-500/10"
+              toast.variant === "info" && "border-cyan-500/35 bg-cyan-500/10",
+              toast.variant === "warning" && "border-amber-500/35 bg-amber-500/10"
             )}
           >
             <div className="flex items-start gap-3">
