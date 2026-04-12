@@ -1,204 +1,245 @@
 @import "tailwindcss";
 
 @theme {
-  /* 8px Spacing Scale */
-  --spacing-1: 0.25rem;  /* 4px */
-  --spacing-2: 0.5rem;   /* 8px */
-  --spacing-3: 0.75rem;  /* 12px */
-  --spacing-4: 1rem;     /* 16px */
-  --spacing-5: 1.25rem;  /* 20px */
-  --spacing-6: 1.5rem;   /* 24px */
-  --spacing-8: 2rem;     /* 32px */
-  --spacing-10: 2.5rem;  /* 40px */
-  --spacing-12: 3rem;    /* 48px */
+  /* ── Spacing Scale ─────────────────────────────────────── */
+  --spacing-1:  0.25rem;
+  --spacing-2:  0.5rem;
+  --spacing-3:  0.75rem;
+  --spacing-4:  1rem;
+  --spacing-5:  1.25rem;
+  --spacing-6:  1.5rem;
+  --spacing-8:  2rem;
+  --spacing-10: 2.5rem;
+  --spacing-12: 3rem;
 
-  /* Semantic Design Tokens (mapped from CSS vars) */
-  --color-background:            hsl(var(--background));
-  --color-foreground:            hsl(var(--foreground));
-  --color-card:                  hsl(var(--card));
-  --color-card-foreground:       hsl(var(--card-foreground));
-  --color-primary:               hsl(var(--primary));
-  --color-primary-foreground:    hsl(var(--primary-foreground));
-  --color-secondary:             hsl(var(--secondary));
-  --color-secondary-foreground:  hsl(var(--secondary-foreground));
-  --color-muted:                 hsl(var(--muted));
-  --color-muted-foreground:      hsl(var(--muted-foreground));
-  --color-accent:                hsl(var(--accent));
-  --color-accent-foreground:     hsl(var(--accent-foreground));
-  --color-destructive:           hsl(var(--destructive));
+  /* ── Semantic Colour Tokens ────────────────────────────── */
+  --color-background:             hsl(var(--background));
+  --color-foreground:             hsl(var(--foreground));
+  --color-card:                   hsl(var(--card));
+  --color-card-foreground:        hsl(var(--card-foreground));
+  --color-primary:                hsl(var(--primary));
+  --color-primary-foreground:     hsl(var(--primary-foreground));
+  --color-secondary:              hsl(var(--secondary));
+  --color-secondary-foreground:   hsl(var(--secondary-foreground));
+  --color-muted:                  hsl(var(--muted));
+  --color-muted-foreground:       hsl(var(--muted-foreground));
+  --color-accent:                 hsl(var(--accent));
+  --color-accent-foreground:      hsl(var(--accent-foreground));
+  --color-destructive:            hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-border:                hsl(var(--border));
-  --color-input:                 hsl(var(--input));
-  --color-ring:                  hsl(var(--ring));
+  --color-border:                 hsl(var(--border));
+  --color-input:                  hsl(var(--input));
+  --color-ring:                   hsl(var(--ring));
 
-  /* Brand & Semantic extras */
-  --color-success:               hsl(var(--success));
-  --color-success-foreground:    hsl(var(--success-foreground));
-  --color-warning:               hsl(var(--warning));
-  --color-warning-foreground:    hsl(var(--warning-foreground));
-  --color-error:                 hsl(var(--error));
-  --color-error-foreground:      hsl(var(--error-foreground));
-  --color-ai:                    hsl(var(--ai));
-  --color-ai-foreground:         hsl(var(--ai-foreground));
+  /* ── Brand extras ──────────────────────────────────────── */
+  --color-success:             hsl(var(--success));
+  --color-success-foreground:  hsl(var(--success-foreground));
+  --color-warning:             hsl(var(--warning));
+  --color-warning-foreground:  hsl(var(--warning-foreground));
+  --color-error:               hsl(var(--error));
+  --color-error-foreground:    hsl(var(--error-foreground));
+  --color-ai:                  hsl(var(--ai));
+  --color-ai-foreground:       hsl(var(--ai-foreground));
+  --color-glow:                hsl(var(--glow));
+  --color-cyan:                hsl(var(--cyan));
 
-  /* Radius */
-  --radius-xl:  calc(var(--radius) + 4px);
-  --radius-lg:  var(--radius);
-  --radius-md:  calc(var(--radius) - 2px);
-  --radius-sm:  calc(var(--radius) - 4px);
+  /* ── Radius ────────────────────────────────────────────── */
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
 
-  /* Typography */
+  /* ── Typography ────────────────────────────────────────── */
   --font-sans: var(--font-manrope), "Inter", "Segoe UI", sans-serif;
   --font-mono: var(--font-plex-mono), "JetBrains Mono", monospace;
 
-  /* Animations */
-  --animate-fade-up:       fade-up 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  --animate-fade-in:       fade-in 200ms ease-out;
-  --animate-slide-up:      slide-up 400ms cubic-bezier(0.16, 1, 0.3, 1);
-  --animate-spring:        spring 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  --animate-shimmer:       shimmer 1.8s infinite linear;
-  --animate-pulse-ring:    pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  --animate-typewriter:    typewriter 40ms steps(1) infinite;
-  --animate-float:         float 6s ease-in-out infinite;
+  /* ── Named animations ──────────────────────────────────── */
+  --animate-fade-up:      fade-up 350ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade-in:      fade-in 250ms ease-out both;
+  --animate-spring:       spring 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --animate-float:        float 6s ease-in-out infinite;
+  --animate-pulse-glow:   pulse-glow 2.5s ease-in-out infinite;
+  --animate-scan-line:    scan-line 4s linear infinite;
+  --animate-aurora:       aurora 12s ease infinite;
+  --animate-shimmer:      shimmer 2s infinite linear;
+  --animate-gradient-x:   gradient-x 5s ease infinite;
+  --animate-typewriter:   typewriter 1.8s steps(30) forwards;
+  --animate-count-up:     count-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-wave:         wave 1.4s ease-in-out infinite;
 
+  /* ── Keyframes ─────────────────────────────────────────── */
   @keyframes fade-up {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(16px); }
     to   { opacity: 1; transform: translateY(0); }
   }
   @keyframes fade-in {
     from { opacity: 0; }
     to   { opacity: 1; }
   }
-  @keyframes slide-up {
-    from { transform: translateY(10px); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
   @keyframes spring {
-    0%   { transform: scale(0.95); }
-    70%  { transform: scale(1.02); }
+    0%   { transform: scale(0.94); }
+    65%  { transform: scale(1.03); }
     100% { transform: scale(1); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50%       { transform: translateY(-10px); }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 8px 2px hsl(var(--primary) / 0.2); }
+    50%       { box-shadow: 0 0 24px 6px hsl(var(--primary) / 0.45), 0 0 60px 12px hsl(var(--glow) / 0.15); }
+  }
+  @keyframes scan-line {
+    0%   { transform: translateY(-100%); opacity: 0; }
+    10%  { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { transform: translateY(400%); opacity: 0; }
+  }
+  @keyframes aurora {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
   }
   @keyframes shimmer {
     0%   { background-position: -200% 0; }
     100% { background-position:  200% 0; }
   }
-  @keyframes pulse-ring {
-    0%, 100% { opacity: 1;   transform: scale(1); }
-    50%       { opacity: 0.5; transform: scale(1.05); }
-  }
-  @keyframes float {
-    0%, 100% { transform: translateY(0px); }
-    50%       { transform: translateY(-8px); }
-  }
   @keyframes gradient-x {
     0%, 100% { background-position: 0% 50%; }
     50%       { background-position: 100% 50%; }
   }
-  @keyframes count-up {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
+  @keyframes typewriter {
+    from { width: 0; }
+    to   { width: 100%; }
+  }
+  @keyframes wave {
+    0%, 100% { transform: scaleY(0.4); }
+    50%       { transform: scaleY(1.2); }
+  }
+  @keyframes glow-pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50%       { opacity: 0.9; transform: scale(1.15); }
+  }
+  @keyframes border-glow-rotate {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  @keyframes slide-in-right {
+    from { opacity: 0; transform: translateX(20px); }
+    to   { opacity: 1; transform: translateX(0); }
   }
 }
 
-/* ─── Light Mode (Indigo Spectrum) ─────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   LIGHT MODE - Indigo Spectrum
+══════════════════════════════════════════════════════════ */
 :root {
-  --background:           210 20% 98%;
-  --foreground:           224 71% 4%;
-  --card:                 0 0% 100%;
-  --card-foreground:      224 71% 4%;
-  --primary:              221 83% 53%;
-  --primary-foreground:   210 40% 98%;
-  --secondary:            220 14% 96%;
-  --secondary-foreground: 224 71% 4%;
-  --muted:                220 14% 96%;
-  --muted-foreground:     220 9% 46%;
-  --accent:               220 14% 92%;
-  --accent-foreground:    224 71% 4%;
-  --destructive:          0 84% 60%;
-  --destructive-foreground: 210 40% 98%;
-  --border:               220 13% 91%;
-  --input:                220 13% 91%;
-  --ring:                 221 83% 53%;
-  --radius:               0.75rem;
+  --background:            210 20% 98%;
+  --foreground:            224 71% 4%;
+  --card:                  0 0% 100%;
+  --card-foreground:       224 71% 4%;
+  --primary:               243 75% 59%;
+  --primary-foreground:    210 40% 98%;
+  --secondary:             220 14% 96%;
+  --secondary-foreground:  224 71% 4%;
+  --muted:                 220 14% 96%;
+  --muted-foreground:      220 9% 46%;
+  --accent:                220 14% 92%;
+  --accent-foreground:     224 71% 4%;
+  --destructive:           0 84% 60%;
+  --destructive-foreground:210 40% 98%;
+  --border:                220 13% 91%;
+  --input:                 220 13% 91%;
+  --ring:                  243 75% 59%;
+  --radius:                0.8rem;
 
-  /* Semantic extras */
-  --success:              142 71% 45%;
-  --success-foreground:   144 61% 10%;
-  --warning:              38 92% 50%;
-  --warning-foreground:   48 96% 10%;
-  --error:                346 84% 61%;
-  --error-foreground:     346 84% 10%;
-  --ai:                   262 83% 58%;
-  --ai-foreground:        210 40% 98%;
+  --success:               142 71% 45%;
+  --success-foreground:    144 61% 10%;
+  --warning:               38 92% 50%;
+  --warning-foreground:    48 96% 10%;
+  --error:                 346 84% 61%;
+  --error-foreground:      346 84% 10%;
+  --ai:                    262 83% 58%;
+  --ai-foreground:         210 40% 98%;
+  --glow:                  243 75% 65%;
+  --cyan:                  189 94% 43%;
 }
 
-/* ─── Dark Mode (Midnight Navy) ───────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   DARK MODE - Midnight Violet (PRIMARY EXPERIENCE)
+══════════════════════════════════════════════════════════ */
 [data-theme="dark"] {
-  --background:           224 71% 4%;
-  --foreground:           213 31% 91%;
-  --card:                 224 71% 6%;
-  --card-foreground:      213 31% 91%;
-  --primary:              217 91% 60%;
-  --primary-foreground:   224 71% 4%;
-  --secondary:            222 47% 11%;
-  --secondary-foreground: 213 31% 91%;
-  --muted:                222 47% 11%;
-  --muted-foreground:     215 20% 65%;
-  --accent:               222 47% 12%;
-  --accent-foreground:    213 31% 91%;
-  --destructive:          0 62% 30%;
-  --destructive-foreground: 210 40% 98%;
-  --border:               222 47% 15%;
-  --input:                222 47% 15%;
-  --ring:                 217 91% 60%;
+  --background:            240 18% 5%;
+  --foreground:            220 20% 92%;
+  --card:                  240 18% 7%;
+  --card-foreground:       220 20% 92%;
+  --primary:               246 80% 65%;
+  --primary-foreground:    240 18% 5%;
+  --secondary:             240 14% 11%;
+  --secondary-foreground:  220 20% 80%;
+  --muted:                 240 14% 10%;
+  --muted-foreground:      220 12% 55%;
+  --accent:                240 14% 12%;
+  --accent-foreground:     220 20% 88%;
+  --destructive:           0 62% 40%;
+  --destructive-foreground:210 40% 98%;
+  --border:                240 12% 15%;
+  --input:                 240 12% 13%;
+  --ring:                  246 80% 65%;
 
-  /* Semantic extras */
-  --success:              142 71% 45%;
-  --success-foreground:   0 0% 100%;
-  --warning:              38 92% 50%;
-  --warning-foreground:   0 0% 100%;
-  --error:                346 84% 61%;
-  --error-foreground:     0 0% 100%;
-  --ai:                   262 83% 65%;
-  --ai-foreground:        0 0% 100%;
+  --success:               145 65% 42%;
+  --success-foreground:    0 0% 100%;
+  --warning:               38 92% 50%;
+  --warning-foreground:    0 0% 100%;
+  --error:                 346 84% 61%;
+  --error-foreground:      0 0% 100%;
+  --ai:                    262 83% 68%;
+  --ai-foreground:         0 0% 100%;
+  --glow:                  246 80% 65%;
+  --cyan:                  189 94% 50%;
 }
 
-/* ─── Hacker Mode (Matrix Obsidian) ──────────────────── */
+/* ══════════════════════════════════════════════════════════
+   HACKER MODE - Matrix Obsidian
+══════════════════════════════════════════════════════════ */
 [data-theme="hacker"] {
-  --background:           120 100% 2%;
-  --foreground:           120 100% 75%;
-  --card:                 120 100% 3%;
-  --card-foreground:      120 100% 75%;
-  --primary:              120 100% 70%;
-  --primary-foreground:   120 100% 2%;
-  --secondary:            120 100% 6%;
-  --secondary-foreground: 120 100% 65%;
-  --muted:                120 100% 5%;
-  --muted-foreground:     120 100% 35%;
-  --accent:               120 100% 10%;
-  --accent-foreground:    120 100% 80%;
-  --destructive:          0 100% 60%;
-  --destructive-foreground: 120 100% 2%;
-  --border:               120 100% 12%;
-  --input:                120 100% 12%;
-  --ring:                 120 100% 60%;
-  --radius:               0px;
+  --background:            120 100% 2%;
+  --foreground:            120 100% 75%;
+  --card:                  120 100% 3%;
+  --card-foreground:       120 100% 75%;
+  --primary:               120 100% 70%;
+  --primary-foreground:    120 100% 2%;
+  --secondary:             120 100% 6%;
+  --secondary-foreground:  120 100% 65%;
+  --muted:                 120 100% 5%;
+  --muted-foreground:      120 100% 35%;
+  --accent:                120 100% 10%;
+  --accent-foreground:     120 100% 80%;
+  --destructive:           0 100% 60%;
+  --destructive-foreground:120 100% 2%;
+  --border:                120 100% 12%;
+  --input:                 120 100% 12%;
+  --ring:                  120 100% 60%;
+  --radius:                0px;
 
-  /* Semantic extras */
-  --success:              120 100% 60%;
-  --success-foreground:   120 100% 2%;
-  --warning:              60 90% 60%;
-  --warning-foreground:   120 100% 2%;
-  --error:                0 90% 60%;
-  --error-foreground:     120 100% 2%;
-  --ai:                   120 100% 80%;
-  --ai-foreground:        120 100% 2%;
+  --success:               120 100% 60%;
+  --success-foreground:    120 100% 2%;
+  --warning:               60 90% 60%;
+  --warning-foreground:    120 100% 2%;
+  --error:                 0 90% 60%;
+  --error-foreground:      120 100% 2%;
+  --ai:                    120 100% 80%;
+  --ai-foreground:         120 100% 2%;
+  --glow:                  120 100% 60%;
+  --cyan:                  120 100% 70%;
 
-  /* Font Override for Hacker Mode */
   --font-sans: "JetBrains Mono", "Fira Code", monospace;
 }
 
-/* ─── Base Layer ─────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   BASE RESET
+══════════════════════════════════════════════════════════ */
 @layer base {
   * {
     border-color: hsl(var(--border) / 0.6);
@@ -216,60 +257,216 @@
   }
 
   ::selection {
-    background-color: hsl(var(--primary) / 0.2);
+    background-color: hsl(var(--primary) / 0.25);
     color: hsl(var(--foreground));
   }
 }
 
-/* ─── Typography ─────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   TYPOGRAPHY
+══════════════════════════════════════════════════════════ */
 h1 { @apply text-4xl font-bold tracking-tight; }
 h2 { @apply text-2xl font-semibold tracking-tight; }
 h3 { @apply text-xl font-semibold tracking-tight; }
 p  { @apply leading-relaxed text-muted-foreground; }
 
-/* ─── Utility Classes ────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   CORE UTILITY CLASSES
+══════════════════════════════════════════════════════════ */
+
+/* Smooth UI transitions */
 .transition-ui {
   transition-property: color, background-color, border-color, box-shadow, opacity, transform;
-  transition-duration: 200ms;
+  transition-duration: 220ms;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* Glassmorphism surfaces */
 .glass {
-  @apply bg-background/60 backdrop-blur-xl border border-white/5 shadow-2xl;
+  @apply bg-background/50 backdrop-blur-2xl border border-white/8 shadow-2xl;
 }
 
+.glass-card {
+  background: hsl(var(--card) / 0.6);
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid hsl(var(--border) / 0.5);
+}
+
+/* Flat surface */
 .surface {
-  @apply bg-card border border-border/40 shadow-sm rounded-xl overflow-hidden;
+  @apply bg-card border border-border/40 shadow-sm rounded-2xl overflow-hidden;
 }
 
-.animate-spring    { animation: spring 300ms cubic-bezier(0.175, 0.885, 0.32, 1.275); }
-.animate-fade-up   { animation: fade-up 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-.animate-fade-in   { animation: fade-in 200ms ease-out both; }
-.animate-float     { animation: float 6s ease-in-out infinite; }
-.animate-gradient-x {
-  background-size: 200% 200%;
-  animation: gradient-x 4s ease infinite;
+/* ══════════════════════════════════════════════════════════
+   AURORA / MESH BACKGROUNDS
+══════════════════════════════════════════════════════════ */
+
+/* Animated aurora gradient background */
+.aurora-bg {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--background)) 0%,
+    hsl(246 60% 8%) 25%,
+    hsl(280 50% 7%) 50%,
+    hsl(240 50% 6%) 75%,
+    hsl(var(--background)) 100%
+  );
+  background-size: 400% 400%;
+  animation: aurora 12s ease infinite;
 }
 
-/* ─── Shadow System ──────────────────────────────────── */
+/* Dot grid overlay */
+.dot-grid {
+  background-image: radial-gradient(
+    circle,
+    hsl(var(--primary) / 0.12) 1px,
+    transparent 1px
+  );
+  background-size: 28px 28px;
+}
+
+/* Subtle noise texture */
+.noise-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+/* Mesh gradient card */
+.mesh-gradient {
+  background:
+    radial-gradient(ellipse at 20% 0%, hsl(var(--primary) / 0.25) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 100%, hsl(var(--cyan) / 0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 50%, hsl(var(--ai) / 0.08) 0%, transparent 70%);
+}
+
+/* ══════════════════════════════════════════════════════════
+   GLOW EFFECTS
+══════════════════════════════════════════════════════════ */
+
+/* Standard glow shadows */
 .shadow-premium {
   box-shadow:
-    0 1px 2px 0 rgb(0 0 0 / 0.04),
-    0 4px 6px -1px rgb(0 0 0 / 0.08),
-    0 2px 4px -2px rgb(0 0 0 / 0.06);
+    0 1px 2px rgb(0 0 0 / 0.05),
+    0 4px 8px -2px rgb(0 0 0 / 0.12),
+    0 16px 32px -8px rgb(0 0 0 / 0.10);
 }
 
 .shadow-ai {
   box-shadow:
-    0 0 0 1px hsl(var(--primary) / 0.1),
-    0 4px 16px -4px hsl(var(--primary) / 0.15);
+    0 0 0 1px hsl(var(--primary) / 0.15),
+    0 4px 20px -4px hsl(var(--primary) / 0.25),
+    0 0 40px -8px hsl(var(--glow) / 0.15);
 }
 
 .shadow-glow-sm {
-  box-shadow: 0 0 8px -2px hsl(var(--primary) / 0.2);
+  box-shadow: 0 0 12px -2px hsl(var(--primary) / 0.3);
 }
 
-/* ─── Shimmer Skeleton ───────────────────────────────── */
+.shadow-glow-md {
+  box-shadow:
+    0 0 20px -4px hsl(var(--primary) / 0.4),
+    0 0 60px -12px hsl(var(--glow) / 0.2);
+}
+
+.shadow-cyan-glow {
+  box-shadow: 0 0 16px -4px hsl(var(--cyan) / 0.4);
+}
+
+/* Glowing border card  */
+.glow-border {
+  position: relative;
+}
+.glow-border::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--primary) / 0.6),
+    hsl(var(--cyan) / 0.3),
+    hsl(var(--ai) / 0.4)
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+.glow-border:hover::before {
+  opacity: 1;
+}
+
+/* Neon top border glow on card hover */
+.neon-top {
+  border-top: 1px solid transparent;
+  transition: border-color 300ms, box-shadow 300ms;
+}
+.neon-top:hover {
+  border-top-color: hsl(var(--primary) / 0.8);
+  box-shadow: 0 -2px 12px -2px hsl(var(--primary) / 0.4), 0 4px 12px -4px hsl(var(--primary) / 0.1);
+}
+
+/* ══════════════════════════════════════════════════════════
+   ANIMATION UTILITIES
+══════════════════════════════════════════════════════════ */
+
+.animate-spring       { animation: spring 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+.animate-fade-up      { animation: fade-up 350ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.animate-fade-in      { animation: fade-in 250ms ease-out both; }
+.animate-float        { animation: float 6s ease-in-out infinite; }
+.animate-pulse-glow   { animation: pulse-glow 2.5s ease-in-out infinite; }
+.animate-aurora       { animation: aurora 12s ease infinite; }
+.animate-gradient-x   {
+  background-size: 300% 300%;
+  animation: gradient-x 5s ease infinite;
+}
+.animate-scan-line    { animation: scan-line 4s linear infinite; }
+.animate-wave         { animation: wave 1.4s ease-in-out infinite; }
+.animate-glow-pulse   { animation: glow-pulse 2s ease-in-out infinite; }
+.animate-slide-right  { animation: slide-in-right 400ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Stagger animation delays */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+
+/* ══════════════════════════════════════════════════════════
+   GRADIENT TEXT
+══════════════════════════════════════════════════════════ */
+
+.gradient-text {
+  background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--cyan)));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.gradient-text-aurora {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--primary)),
+    hsl(var(--ai)),
+    hsl(var(--cyan))
+  );
+  background-size: 200% 200%;
+  animation: gradient-x 4s ease infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SHIMMER SKELETON
+══════════════════════════════════════════════════════════ */
 .shimmer {
   background: linear-gradient(
     90deg,
@@ -281,7 +478,9 @@ p  { @apply leading-relaxed text-muted-foreground; }
   animation: shimmer 1.8s infinite linear;
 }
 
-/* ─── Scrollbar ──────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   SCROLLBAR
+══════════════════════════════════════════════════════════ */
 ::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -289,20 +488,65 @@ p  { @apply leading-relaxed text-muted-foreground; }
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.35);
+  background: hsl(var(--primary) / 0.4);
 }
 
-/* ─── Code block base ────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   CODE BLOCKS
+══════════════════════════════════════════════════════════ */
 pre {
-  @apply rounded-xl overflow-auto text-sm font-mono;
+  @apply rounded-2xl overflow-auto text-sm font-mono;
   tab-size: 2;
 }
 
 code:not(pre code) {
-  @apply rounded-md bg-muted/60 border border-border/40 px-1.5 py-0.5 text-[0.82em] font-mono text-primary;
+  @apply rounded-md bg-primary/8 border border-primary/20 px-1.5 py-0.5 text-[0.82em] font-mono text-primary;
 }
 
-/* ─── Focus Ring ─────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════
+   FOCUS RING
+══════════════════════════════════════════════════════════ */
 .focus-ring {
   @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background;
 }
+
+/* ══════════════════════════════════════════════════════════
+   SCAN-LINE OVERLAY (for sidebar ambient effect)
+══════════════════════════════════════════════════════════ */
+.scan-line-container {
+  position: relative;
+  overflow: hidden;
+}
+.scan-line-container::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--primary) / 0.3) 30%,
+    hsl(var(--primary) / 0.6) 50%,
+    hsl(var(--primary) / 0.3) 70%,
+    transparent 100%
+  );
+  animation: scan-line 4s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ══════════════════════════════════════════════════════════
+   WAVE LOADING DOTS
+══════════════════════════════════════════════════════════ */
+.wave-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  animation: wave 1.4s ease-in-out infinite;
+}
+.wave-dot:nth-child(1) { animation-delay: 0ms; }
+.wave-dot:nth-child(2) { animation-delay: 160ms; }
+.wave-dot:nth-child(3) { animation-delay: 320ms; }
