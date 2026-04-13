@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -13,6 +14,19 @@ from app.db.database import get_db_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PaginationParams:
+    limit: int
+    offset: int
+
+
+def get_pagination(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10_000),
+) -> PaginationParams:
+    return PaginationParams(limit=limit, offset=offset)
 
 
 def get_current_user(

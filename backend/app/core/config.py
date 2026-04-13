@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     cors_allow_origins: str = "http://localhost:3000"
+    cors_allow_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    cors_allow_headers: str = "Authorization,Content-Type,X-Request-Id"
+
+    rate_limit_requests_per_window: int = 120
+    rate_limit_window_seconds: int = 60
+    rate_limit_exempt_paths: str = "/docs,/openapi.json,/redoc,/health"
 
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "mxbai-embed-large:latest"
@@ -77,6 +83,27 @@ class Settings(BaseSettings):
         if not raw:
             return []
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    @property
+    def cors_allow_methods_list(self) -> list[str]:
+        raw = (self.cors_allow_methods or "").strip()
+        if not raw:
+            return ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+        return [method.strip().upper() for method in raw.split(",") if method.strip()]
+
+    @property
+    def cors_allow_headers_list(self) -> list[str]:
+        raw = (self.cors_allow_headers or "").strip()
+        if not raw:
+            return ["Authorization", "Content-Type", "X-Request-Id"]
+        return [header.strip() for header in raw.split(",") if header.strip()]
+
+    @property
+    def rate_limit_exempt_paths_list(self) -> list[str]:
+        raw = (self.rate_limit_exempt_paths or "").strip()
+        if not raw:
+            return []
+        return [path.strip() for path in raw.split(",") if path.strip()]
 
     @property
     def redis_dsn(self) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 
 from sqlalchemy.orm import Session
@@ -66,6 +67,21 @@ class QueryService:
             result["session_id"] = active_session_id
             return result
 
+        deterministic_answer = self.build_deterministic_answer(query, result)
+        if deterministic_answer is not None:
+            result["answer"] = deterministic_answer
+            result["session_id"] = active_session_id
+            logger.info("query_run - deterministic answer used repository_id=%s", repository_id)
+            return self.finalize_result(
+                repository_id,
+                repo_id,
+                result,
+                cache_key,
+                user_id=user_id,
+                project_id=project_id,
+                session_id=active_session_id,
+            )
+
         try:
             llm_answer = self.model_router.chat(prompt=query, context=assembled_context)
         except RuntimeError as exc:
@@ -117,7 +133,7 @@ class QueryService:
 
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-        cache_key = f"chat:{repository_id}:{query_hash}:{history_hash}"
+        cache_key = f"chat:v2:{repository_id}:{query_hash}:{history_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
             logger.debug("QueryService cache hit repo_id=%s repository_id=%s", repo_id, repository_id)
@@ -161,6 +177,129 @@ class QueryService:
             len(assembled_context),
         )
         return result, assembled_context, cache_key, False
+
+    def build_deterministic_answer(self, query: str, result: dict) -> str | None:
+        """Return a deterministic location answer with concrete code excerpts."""
+        q = query.strip().lower()
+        location_intent = (
+            "where" in q
+            or "which file" in q
+            or "location" in q
+            or "implemented" in q
+            or "defined" in q
+        )
+        if not location_intent:
+            return None
+
+        file_match = re.search(r"([A-Za-z0-9_.-]+\.(?:js|jsx|ts|tsx|py|java|go|rb|php|md|json))", query, re.IGNORECASE)
+        requested_file = file_match.group(1).lower() if file_match else None
+
+        target_match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s+(?:function|method|class)", query, re.IGNORECASE)
+        if target_match and target_match.group(1).lower() in {"the", "a", "an"}:
+            target_match = None
+
+        if target_match is None:
+            target_match = re.search(r"(?:function|method|class)\s+[`'\"]?([A-Za-z_][A-Za-z0-9_]*)", query, re.IGNORECASE)
+        target = target_match.group(1) if target_match else None
+
+        if not target:
+            quoted_match = re.search(r"[`'\"]([A-Za-z_][A-Za-z0-9_]*)[`'\"]", query)
+            target = quoted_match.group(1) if quoted_match else None
+
+        if not target and "auth" in q:
+            target = "auth"
+
+        if not target:
+            return None
+
+        snippets = result.get("retrieved_context", []) or []
+        target_lower = target.lower()
+        matches: list[tuple[int, str, str, str, bool]] = []
+
+        def _snippet_lang(path: str) -> str:
+            lower = path.lower()
+            if lower.endswith(".py"):
+                return "python"
+            if lower.endswith(".ts"):
+                return "ts"
+            if lower.endswith(".tsx"):
+                return "tsx"
+            if lower.endswith(".js"):
+                return "javascript"
+            if lower.endswith(".jsx"):
+                return "jsx"
+            return "text"
+
+        def _is_code_path(path: str) -> bool:
+            lower = path.lower()
+            code_exts = (
+                ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".go", ".rs", ".rb", ".php", ".cs", ".cpp", ".c", ".h"
+            )
+            return lower.endswith(code_exts)
+
+        def _extract_excerpt(content: str) -> str:
+            lines = content.splitlines()
+            if not lines:
+                return ""
+            idx = next((i for i, line in enumerate(lines) if target_lower in line.lower()), 0)
+            start = max(0, idx - 2)
+            end = min(len(lines), idx + 4)
+            excerpt = "\n".join(lines[start:end]).strip()
+            return excerpt if excerpt else content[:280]
+
+        for item in snippets:
+            path = str(item.get("path") or "unknown")
+            symbol = str(item.get("symbol") or "module")
+            content = str(item.get("content") or "")
+            searchable = f"{path}\n{symbol}\n{content}".lower()
+            if target_lower not in searchable:
+                continue
+
+            score = 0
+            lower_path = path.lower()
+            lower_symbol = symbol.lower()
+            if requested_file and requested_file in lower_path:
+                score += 100
+            if lower_symbol == target_lower:
+                score += 40
+            elif target_lower in lower_symbol:
+                score += 20
+            if lower_path.endswith(".md") or "readme" in lower_path or "privacy" in lower_path:
+                score -= 40
+            if re.search(rf"\b(function|def|class)\s+{re.escape(target_lower)}\b", content.lower()):
+                score += 30
+
+            excerpt = _extract_excerpt(content)
+            is_code_file = _is_code_path(path)
+            matches.append((score, path, symbol, excerpt, is_code_file))
+
+        if not matches:
+            return None
+
+        # Strong preference to source code when present.
+        if any(item[4] for item in matches):
+            matches = [item for item in matches if item[4]]
+
+        matches.sort(key=lambda x: x[0], reverse=True)
+
+        deduped: list[tuple[int, str, str, str, bool]] = []
+        seen: set[tuple[str, str]] = set()
+        for score, path, symbol, excerpt, is_code_file in matches:
+            key = (path, symbol)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append((score, path, symbol, excerpt, is_code_file))
+
+        lines = [f"I found {target} related implementation. Showing code excerpts:"]
+        for _, path, symbol, excerpt, _ in deduped[:3]:
+            lines.append(f"- {path} (symbol: {symbol})")
+            language = _snippet_lang(path)
+            snippet = excerpt[:700] if excerpt else "(no content captured in this chunk)"
+            lines.append(f"```{language}\n{snippet}\n```")
+
+        lines.append("If you want, I can show a longer excerpt from one specific file.")
+        return "\n".join(lines)
 
     def finalize_result(
         self,
@@ -241,6 +380,14 @@ class QueryService:
         self.session.commit()
         logger.debug("query_session - created new session_id=%s", new_id)
         return new_id
+
+    def _history_hash(self, history: list[dict]) -> str:
+        """Generate a hash based on conversation history for cache key."""
+        if not history:
+            return hashlib.sha256(b"").hexdigest()[:16]
+        
+        history_str = json.dumps(history, sort_keys=True)
+        return hashlib.sha256(history_str.encode("utf-8")).hexdigest()[:16]
 
     def _load_session_history(self, session_id: str | None, limit: int = 10) -> list[dict]:
         """Loads previous turns from the messages table for context."""

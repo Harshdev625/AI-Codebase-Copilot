@@ -5,8 +5,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { ThemeProvider } from '@/components/shared/theme-provider';
 import { ToastProvider } from '@/components/shared/toast-provider';
+import { useAuthStore } from '@/store/auth-store';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
+  const hydrateFromStorage = useAuthStore((state) => state.hydrateFromStorage);
   const [queryClient] = React.useState(
     () =>
       new QueryClient({
@@ -19,6 +21,10 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         },
       })
   );
+
+  React.useEffect(() => {
+    hydrateFromStorage();
+  }, [hydrateFromStorage]);
 
   return (
     <QueryClientProvider client={queryClient}>

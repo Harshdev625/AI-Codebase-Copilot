@@ -4,14 +4,13 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { Menu, Bell, LogOut, ChevronRight, Zap } from "lucide-react";
 
-import { ThemeSwitcher } from "@/components/shared/theme-switcher";
 import { Button } from "@/components/ui/button";
 
 /* Route → display name map */
 const PAGE_LABELS: Record<string, string> = {
   "/dashboard":    "Dashboard",
   "/repositories": "Repositories",
-  "/chat":         "AI Workspace",
+  "/chat":         "TimeMachine Chat",
   "/admin":        "Admin Panel",
 };
 
@@ -89,10 +88,6 @@ export function TopNavbar({ userEmail, onMenuClick, onSignOut }: TopNavbarProps)
               <Bell className="h-4 w-4" />
               <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_2px_hsl(265,80%,65%,0.7)]" />
             </Button>
-
-            <div className="h-4 w-px bg-white/6 mx-0.5" />
-
-            <ThemeSwitcher />
 
             <div className="h-4 w-px bg-white/6 mx-0.5" />
 

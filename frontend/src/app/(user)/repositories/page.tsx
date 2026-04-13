@@ -2,98 +2,327 @@
 
 import * as React from 'react';
 import {
-  LayoutGrid, List, RefreshCw, Plus, GitBranch,
-  Database, FolderKanban, Calendar, Loader2, ChevronRight,
+  LayoutGrid, List, RefreshCw, Plus, GitBranch, Database,
+  FolderKanban, Globe, HardDrive, Zap, Focus,
+  CheckCircle, XCircle, Clock, Loader2, Bot, Search
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { RepositoryAddForm } from '@/features/repositories/components/repository-add-form';
-import { RepositoryItemCard } from '@/features/repositories/components/repository-item-card';
-import { useRepositories, useProjects, useCreateProject } from '@/features/repositories/hooks/use-repositories';
+import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useRepositories, useProjects, useCreateProject, useAddRepository, useIndexRepository } from '@/features/repositories/hooks/use-repositories';
+import { Repository, Project } from '@/features/repositories/types/repository-types';
+import { repositoryService } from '@/features/repositories/services/repository-service';
 import { cn, formatDate } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useRouter } from 'next/navigation';
 
-/* ── Project tab pill ─────────────────────────────────── */
-function ProjectTab({
-  name,
-  date,
-  isActive,
-  onClick,
+/* ══════════════════════════════════════════════════════
+   COMPACT PROJECT TABS
+══════════════════════════════════════════════════════ */
+function ProjectTabs({
+  projects, selectedId, onSelect, isLoading, onCreate,
 }: {
-  name: string;
-  date: string;
-  isActive: boolean;
-  onClick: () => void;
+  projects: Project[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  isLoading: boolean;
+  onCreate: () => void;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'relative flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-left transition-all duration-200 shrink-0',
-        isActive
-          ? 'bg-violet-500/10 border-violet-500/30 text-violet-300 shadow-[0_0_16px_-6px_hsl(265,80%,65%,0.4)]'
-          : 'bg-[hsl(240,18%,8%)] border-white/6 text-zinc-500 hover:bg-[hsl(240,18%,10%)] hover:border-white/10 hover:text-zinc-300'
+    <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none snap-x">
+      {isLoading ? (
+        [1, 2, 3].map((i) => <Skeleton key={i} className="h-8 w-24 rounded-full bg-white/5" />)
+      ) : (
+        projects.map((p) => {
+          const active = p.id === selectedId;
+          return (
+            <button
+              key={p.id}
+              onClick={() => onSelect(p.id)}
+              className={cn(
+                'group relative flex items-center gap-2 h-8 px-4 rounded-full border text-[12px] font-semibold transition-all duration-300 snap-start shrink-0',
+                active
+                  ? 'bg-violet-500/15 border-violet-500/40 text-white shadow-[0_0_15px_-5px_hsl(265,80%,65%,0.3)]'
+                  : 'bg-white/[0.02] border-white/10 text-zinc-400 hover:bg-white/[0.05] hover:border-white/20 hover:text-white'
+              )}
+            >
+              <FolderKanban className={cn('h-3.5 w-3.5 transition-colors', active ? 'text-violet-400' : 'text-zinc-500 group-hover:text-zinc-300')} />
+              <span className="max-w-[120px] truncate">{p.name}</span>
+              {active && (
+                <motion.div layoutId="activeProject" className="absolute inset-0 rounded-full border border-violet-400/50" transition={{ type: 'spring', stiffness: 300, damping: 30 }} />
+              )}
+            </button>
+          );
+        })
       )}
-    >
-      {isActive && (
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r-full bg-gradient-to-b from-violet-400 to-indigo-500 shadow-[0_0_6px_2px_hsl(265,80%,65%,0.5)]" />
-      )}
-      <FolderKanban className={cn('h-3.5 w-3.5 shrink-0', isActive ? 'text-violet-400' : 'text-zinc-600')} />
-      <div className="min-w-0">
-        <p className="text-[12px] font-bold leading-none truncate max-w-[120px]">{name}</p>
-        <p className="text-[9px] font-medium text-zinc-700 mt-0.5 flex items-center gap-1">
-          <Calendar className="h-2 w-2" />
-          {formatDate(date)}
-        </p>
-      </div>
-      {isActive && <div className="ml-1 h-1.5 w-1.5 rounded-full bg-violet-400" />}
-    </button>
+      <button
+        onClick={onCreate}
+        className="flex items-center gap-1.5 h-8 px-4 rounded-full border border-dashed border-white/15 text-[11px] font-bold text-zinc-400 hover:text-white hover:border-white/30 hover:bg-white/5 transition-all duration-300 shrink-0 snap-start"
+      >
+        <Plus className="h-3.5 w-3.5" />
+        New
+      </button>
+    </div>
   );
 }
 
-/* ── New project mini-form ─────────────────────────────── */
-function NewProjectForm({ onCancel }: { onCancel: () => void }) {
-  const createProjectMutation = useCreateProject();
+/* ══════════════════════════════════════════════════════
+   NEW PROJECT FORM (Compact)
+══════════════════════════════════════════════════════ */
+function NewProjectInlineForm({ onDone }: { onDone: () => void }) {
+  const createMutation = useCreateProject();
   const [name, setName] = React.useState('');
+  const ref = React.useRef<HTMLInputElement>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  React.useEffect(() => { ref.current?.focus(); }, []);
+
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    createProjectMutation.mutate({ name: name.trim() }, {
-      onSuccess: () => { setName(''); onCancel(); },
-    });
+    createMutation.mutate({ name: name.trim() }, { onSuccess: onDone });
   };
 
   return (
     <motion.form
-      initial={{ opacity: 0, scale: 0.97 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.97 }}
-      onSubmit={handleSubmit}
-      className="flex items-center gap-2 rounded-xl border border-violet-500/25 bg-violet-500/6 px-3 py-2"
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: 'auto' }}
+      exit={{ opacity: 0, height: 0 }}
+      onSubmit={submit}
+      className="overflow-hidden mb-4"
     >
-      <FolderKanban className="h-3.5 w-3.5 text-violet-400 shrink-0" />
-      <Input
-        autoFocus
-        placeholder="Project name…"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="h-7 text-[12px] border-none bg-transparent focus-visible:ring-0 p-0 text-zinc-200 placeholder:text-zinc-600"
-      />
-      <Button type="submit" size="icon-sm" disabled={createProjectMutation.isPending || !name.trim()}
-        className="h-7 w-7 rounded-lg bg-violet-600 hover:bg-violet-500 border-0 shrink-0">
-        {createProjectMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-      </Button>
-      <button type="button" onClick={onCancel}
-        className="text-[9px] font-bold text-zinc-600 hover:text-zinc-400 uppercase tracking-wide shrink-0">
-        cancel
-      </button>
+      <div className="flex items-center gap-2 p-2 rounded-xl border border-violet-500/30 bg-[linear-gradient(90deg,hsl(246,80%,6%),hsl(246,80%,4%))] shadow-[0_4px_15px_rgba(139,92,246,0.1)]">
+        <Focus className="h-4 w-4 ml-2 text-violet-400 animate-pulse" />
+        <Input
+          ref={ref}
+          placeholder="Workspace name..."
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="h-8 border-none bg-transparent text-[13px] text-white placeholder:text-violet-200/40 focus-visible:ring-0 p-0 font-medium"
+        />
+        <Button
+          type="submit"
+          disabled={createMutation.isPending || !name.trim()}
+          className="h-8 px-4 rounded-lg text-[11px] font-bold bg-white text-black hover:bg-zinc-200"
+        >
+          {createMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Launch'}
+        </Button>
+        <button type="button" onClick={onDone} className="h-8 px-3 text-[11px] font-bold text-zinc-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
     </motion.form>
   );
 }
 
-/* ── Repositories page ────────────────────────────────── */
+/* ══════════════════════════════════════════════════════
+   ADD REPOSITORY FORM (Dense Row)
+══════════════════════════════════════════════════════ */
+function detectType(source: string): 'local' | 'github' | 'remote' | '' {
+  if (!source) return '';
+  if (!source.startsWith('http') && source.includes('/')) return 'local';
+  if (source.includes('github.com')) return 'github';
+  return 'remote';
+}
+
+function AddRepoForm({ projectId }: { projectId: string }) {
+  const mutation = useAddRepository();
+  const [repoId, setRepoId] = React.useState('');
+  const [source, setSource] = React.useState('');
+  const [branch, setBranch] = React.useState('main');
+  const type = detectType(source);
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!projectId || !repoId.trim()) return;
+    mutation.mutate({
+      projectId,
+      payload: {
+        repo_id: repoId.trim().toLowerCase().replace(/\.git$/, ''),
+        remote_url: type !== 'local' && source ? source.trim() : undefined,
+        local_path: type === 'local' ? source.trim() : undefined,
+        default_branch: branch.trim() || 'main',
+      },
+    }, {
+      onSuccess: () => { setRepoId(''); setSource(''); setBranch('main'); },
+    });
+  };
+
+  return (
+    <div className={cn(
+      'rounded-xl border transition-all duration-300 shadow-sm overflow-hidden',
+      projectId ? 'border-white/10 bg-[#0A0A0B]' : 'border-white/5 bg-black/20 opacity-50 pointer-events-none'
+    )}>
+      <form onSubmit={submit} className="flex flex-col md:flex-row items-center divide-y md:divide-y-0 md:divide-x divide-white/10">
+        
+        {/* Repo ID */}
+        <div className="flex-1 flex items-center px-4 py-2 bg-white/[0.01] focus-within:bg-white/[0.03] w-full">
+          <Search className="h-3.5 w-3.5 text-violet-400 shrink-0 mr-2" />
+          <Input
+            placeholder="Repository ID (e.g. core-engine)"
+            value={repoId}
+            onChange={(e) => setRepoId(e.target.value)}
+            className="h-8 border-none bg-transparent p-0 text-[13px] text-white focus-visible:ring-0"
+            required disabled={!projectId}
+          />
+        </div>
+
+        {/* Source */}
+        <div className="flex-[1.5] w-full flex items-center px-4 py-2 bg-white/[0.01] focus-within:bg-white/[0.03]">
+          {type === 'local' ? <HardDrive className="h-3.5 w-3.5 text-amber-500 mr-2 shrink-0" /> :
+           type === 'github' ? <Globe className="h-3.5 w-3.5 text-indigo-400 mr-2 shrink-0" /> :
+           <Globe className="h-3.5 w-3.5 text-zinc-500 mr-2 shrink-0" />}
+          <Input
+            placeholder="URL (https://github...) or Path (C:\...)"
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            className="h-8 border-none bg-transparent p-0 text-[13px] text-white focus-visible:ring-0"
+            disabled={!projectId}
+          />
+        </div>
+
+        {/* Branch */}
+        <div className="w-full md:w-[130px] flex items-center px-4 py-2 bg-white/[0.01] focus-within:bg-white/[0.03]">
+          <GitBranch className="h-3.5 w-3.5 text-zinc-500 mr-2 shrink-0" />
+          <Input
+            placeholder="main"
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            className="h-8 border-none bg-transparent p-0 text-[13px] text-white focus-visible:ring-0"
+            disabled={!projectId}
+          />
+        </div>
+
+        {/* Submit */}
+        <div className="w-full md:w-[120px] p-2 bg-black/20">
+          <Button
+            type="submit"
+            disabled={mutation.isPending || !repoId.trim() || !projectId}
+            className="w-full h-8 rounded-lg text-[11px] font-bold tracking-wide bg-white text-black hover:bg-zinc-200 border-0 disabled:opacity-30"
+          >
+            {mutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Connect'}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   REPOSITORY CARD (Dense Profile)
+══════════════════════════════════════════════════════ */
+function RepoCard({ repository, forceListMode = false }: { repository: Repository, forceListMode?: boolean }) {
+  const indexMutation = useIndexRepository();
+  const router = useRouter();
+  const [progress, setProgress] = React.useState<{
+    status: string; percentage: number; message: string; snapshotId?: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (!progress?.snapshotId || ['completed', 'failed'].includes(progress.status.toLowerCase())) return;
+    const id = setInterval(async () => {
+      try {
+        const d = await repositoryService.getIndexProgress(progress.snapshotId!);
+        setProgress({ status: d.index_status, percentage: d.percentage, message: d.message, snapshotId: progress.snapshotId });
+      } catch { clearInterval(id); }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [progress?.snapshotId, progress?.status]);
+
+  const status = progress?.status || repository.latest_index_status || 'not_indexed';
+  const statusLower = status.toLowerCase();
+  const isIndexing = (progress && !['completed', 'failed'].includes(statusLower)) || indexMutation.isPending;
+  const isReady = statusLower === 'completed';
+  const isFailed = statusLower === 'failed';
+
+  const handleIndex = () => {
+    indexMutation.mutate({ repository_id: repository.id }, {
+      onSuccess: (data) => {
+        if (data.snapshot_id) {
+          setProgress({ status: 'pending', percentage: 0, message: 'Warming engines…', snapshotId: data.snapshot_id });
+        }
+      },
+    });
+  };
+
+  const borderGlow = isIndexing ? 'border-amber-500/40 bg-amber-500/5' :
+                     isReady    ? 'border-emerald-500/20 bg-emerald-500/[0.02] hover:border-emerald-500/40' :
+                     isFailed   ? 'border-red-500/30 bg-red-500/5' :
+                                  'border-white/10 bg-white/[0.02] hover:border-white/20';
+
+  return (
+    <div className={cn('relative rounded-2xl border overflow-hidden transition-all duration-300', borderGlow, forceListMode ? 'p-3 flex items-center' : 'p-4 flex flex-col')}>
+      {/* Dense Top Row */}
+      <div className={cn("flex items-start gap-3", forceListMode && "items-center flex-1")}>
+        <div className={cn(
+          'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border shadow-inner transition-colors',
+          isReady ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-white/5 border-white/10 text-zinc-400'
+        )}>
+          {repository.remote_url ? <Globe className="h-5 w-5" /> : <HardDrive className="h-5 w-5" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5">
+            <h3 className="text-[14px] font-semibold tracking-tight text-white truncate break-all pr-2">
+              {repository.repo_id}
+            </h3>
+            {!forceListMode && (
+              <div className="flex items-center">
+                {isIndexing ? <Loader2 className="h-3.5 w-3.5 text-amber-400 animate-spin" /> :
+                 isReady ? <CheckCircle className="h-3.5 w-3.5 text-emerald-400" /> :
+                 isFailed ? <XCircle className="h-3.5 w-3.5 text-red-400" /> :
+                 <Clock className="h-3.5 w-3.5 text-zinc-500" />}
+              </div>
+            )}
+          </div>
+          <p className="text-[11px] text-zinc-500 font-mono truncate">{repository.remote_url || repository.local_path || 'Disconnected'}</p>
+        </div>
+      </div>
+
+      {!forceListMode && (
+        <div className="flex items-center justify-between mt-4 mb-4 p-2 rounded-xl bg-black/40 border border-white/5 mx-1">
+          <div className="flex items-center gap-1.5 text-zinc-300 text-[11px] font-medium"><GitBranch className="h-3 w-3 text-violet-400"/> {repository.default_branch}</div>
+          <div className="flex items-center gap-1.5 text-zinc-300 text-[11px] font-medium"><RefreshCw className="h-3 w-3 text-emerald-400"/> v{repository.indexing_version || 1}</div>
+          {repository.latest_indexed_chunks != null && (
+            <div className="flex items-center gap-1.5 text-zinc-300 text-[11px] font-medium"><Database className="h-3 w-3 text-indigo-400"/> {repository.latest_indexed_chunks}</div>
+          )}
+        </div>
+      )}
+
+      {/* Action Row */}
+      <div className={cn("mt-auto", forceListMode && "mt-0 flex shrink-0 items-center gap-3")}>
+        {isIndexing ? (
+          <div className="w-full space-y-1.5">
+            <div className="flex justify-between text-[10px] font-bold text-amber-400 uppercase tracking-wider">
+              <span>{progress?.message || 'Processing'}</span>
+              <span>{Math.round(progress?.percentage || 0)}%</span>
+            </div>
+            <Progress value={progress?.percentage || 0} variant="ai" className="h-1" animated />
+          </div>
+        ) : (
+          <div className="flex items-center justify-between w-full">
+            {!forceListMode && (
+              <span className="text-[10px] text-zinc-600 font-medium">{repository.updated_at ? formatDate(repository.updated_at) : 'Standby'}</span>
+            )}
+            <div className="flex gap-2 w-full justify-end">
+              {isReady && (
+                <Button variant="outline" size="sm" onClick={() => router.push('/chat')} className="h-7 px-3 text-[11px] border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20">
+                  <Bot className="h-3 w-3 mr-1.5" /> Chat
+                </Button>
+              )}
+              <Button size="sm" onClick={handleIndex} disabled={!!isIndexing} className={cn("h-7 px-3 text-[11px]", isReady ? "bg-white/10 hover:bg-white/20 text-white" : "bg-indigo-500 hover:bg-indigo-600 text-white")}>
+                <Zap className="h-3 w-3 mr-1.5" /> {isReady ? 'Sync' : 'Init'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   REPOSITORIES PAGE (Ultra Dense)
+══════════════════════════════════════════════════════ */
 export default function RepositoriesPage() {
   const { projects, isLoading: projectsLoading } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
@@ -103,177 +332,56 @@ export default function RepositoriesPage() {
   const { repositories, isLoading, refetch } = useRepositories(selectedProjectId);
 
   React.useEffect(() => {
-    if (!selectedProjectId && projects.length > 0) {
-      setSelectedProjectId(projects[0].id);
-    }
+    if (!selectedProjectId && projects.length > 0) setSelectedProjectId(projects[0].id);
   }, [projects, selectedProjectId]);
 
   return (
-    <div className="flex flex-col gap-8 animate-fade-up">
-
-      {/* ── Page header ──────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-3xl border border-white/6 bg-[hsl(240,18%,6%)] p-7 shadow-premium">
-        {/* Mesh BG */}
-        <div className="pointer-events-none absolute inset-0 mesh-gradient" />
-        <div className="pointer-events-none absolute inset-0 dot-grid opacity-10" />
-        <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-indigo-500/10 blur-[60px]" />
-
-        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-4">
-            <div className="relative h-11 w-11 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 flex items-center justify-center">
-              <Database className="h-5 w-5 text-indigo-400" />
-              <div className="absolute inset-0 rounded-2xl bg-indigo-500/10 blur-lg -z-10" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-indigo-400/70">Source Control</span>
-              </div>
-              <h1 className="text-2xl font-bold tracking-tight text-white/90">Repositories</h1>
-              <p className="text-[12px] text-zinc-500 mt-0.5 max-w-md">
-                Connect, index, and manage code repositories for AI-powered analysis.
-              </p>
-            </div>
+    <div className="max-w-6xl mx-auto space-y-6 pt-4 pb-12 w-full">
+      {/* Sleek inline header */}
+      <div className="flex items-center justify-between px-2 pb-5 border-b border-white/10">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-violet-400 mb-1">
+            <Database className="h-3.5 w-3.5" /> Pipeline Dashboard
           </div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Connected Sources ({repositories.length})</h1>
+        </div>
+        <button onClick={() => refetch()} disabled={isLoading} className="flex h-9 w-9 items-center justify-center rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
+          <RefreshCw className={cn('h-4 w-4 text-zinc-300', isLoading && 'animate-spin')} />
+        </button>
+      </div>
 
-          {/* Actions */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            {/* View toggle */}
-            <div className="flex items-center rounded-xl bg-white/3 p-1 border border-white/6">
-              <Button
-                variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
-                size="icon"
-                className="h-7 w-7 rounded-lg"
-                onClick={() => setViewMode('grid')}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant={viewMode === 'list' ? 'secondary' : 'ghost'}
-                size="icon"
-                className="h-7 w-7 rounded-lg"
-                onClick={() => setViewMode('list')}
-              >
-                <List className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+      {/* Workspace Layer */}
+      <div className="px-2 space-y-3">
+        <AnimatePresence>{showNewProject && <NewProjectInlineForm onDone={() => setShowNewProject(false)} />}</AnimatePresence>
+        <ProjectTabs projects={projects} selectedId={selectedProjectId} onSelect={setSelectedProjectId} isLoading={projectsLoading} onCreate={() => setShowNewProject(true)} />
+      </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void refetch()}
-              disabled={isLoading}
-              className="h-9 border-white/8 bg-white/3 text-zinc-400 hover:text-white hover:bg-white/6 text-[11px] font-bold tracking-wide"
-            >
-              <RefreshCw className={cn('mr-2 h-3.5 w-3.5', isLoading && 'animate-spin')} />
-              Sync
-            </Button>
+      {/* Connection Layer */}
+      <div className="px-2"><AddRepoForm projectId={selectedProjectId} /></div>
+
+      {/* Repos Grid */}
+      <div className="px-2 pt-2">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-[13px] font-bold text-zinc-400 uppercase tracking-wider">Indexed Artifacts</h2>
+          <div className="flex bg-black/40 border border-white/10 rounded-lg p-0.5">
+            <button onClick={() => setViewMode('grid')} className={cn('p-1.5 rounded-md transition-colors', viewMode === 'grid' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-white')}><LayoutGrid className="h-3.5 w-3.5" /></button>
+            <button onClick={() => setViewMode('list')} className={cn('p-1.5 rounded-md transition-colors', viewMode === 'list' ? 'bg-white/10 text-white' : 'text-zinc-500 hover:text-white')}><List className="h-3.5 w-3.5" /></button>
           </div>
-        </div>
-      </div>
-
-      {/* ── Project selector bar ─────────────────────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <FolderKanban className="h-3.5 w-3.5 text-zinc-600" />
-          <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-zinc-600">Projects</span>
-          <div className="flex-1 h-px bg-gradient-to-r from-white/6 to-transparent" />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowNewProject(!showNewProject)}
-            className="h-7 px-3 text-[10px] font-bold text-zinc-600 hover:text-violet-400 hover:bg-violet-500/8 rounded-lg gap-1.5"
-          >
-            <Plus className="h-3 w-3" />
-            New Project
-          </Button>
-        </div>
-
-        <div className="flex items-start gap-2 flex-wrap">
-          <AnimatePresence>
-            {showNewProject && (
-              <NewProjectForm onCancel={() => setShowNewProject(false)} />
-            )}
-          </AnimatePresence>
-
-          {projectsLoading ? (
-            [1, 2, 3].map((i) => (
-              <div key={i} className="h-12 w-36 rounded-xl bg-white/3 animate-pulse" />
-            ))
-          ) : projects.length === 0 ? (
-            <div className="flex items-center gap-3 rounded-xl border border-dashed border-white/8 px-4 py-3 text-[11px] text-zinc-700">
-              <FolderKanban className="h-4 w-4" />
-              No projects yet — create your first one above
-            </div>
-          ) : (
-            projects.map((project) => (
-              <ProjectTab
-                key={project.id}
-                name={project.name}
-                date={project.created_at}
-                isActive={selectedProjectId === project.id}
-                onClick={() => setSelectedProjectId(project.id)}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* ── Add repository form ──────────────────────────── */}
-      <div>
-        <RepositoryAddForm projectId={selectedProjectId} />
-      </div>
-
-      {/* ── Repository list / grid ───────────────────────── */}
-      <div>
-        {/* Section header */}
-        <div className="flex items-center gap-2 mb-5">
-          <div className="h-px flex-1 bg-gradient-to-r from-indigo-500/30 to-transparent" />
-          <span className="text-[9px] font-bold uppercase tracking-[0.25em] text-zinc-600">
-            {isLoading
-              ? 'Loading…'
-              : `${repositories.length} ${repositories.length === 1 ? 'Repository' : 'Repositories'}`
-            }
-          </span>
-          <div className="h-px flex-1 bg-gradient-to-l from-indigo-500/30 to-transparent" />
         </div>
 
         {isLoading ? (
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <Skeleton key={i} className="h-52 rounded-3xl bg-white/3" />
-            ))}
+          <div className={cn(viewMode === 'grid' ? 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3' : 'space-y-3')}>
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-40 rounded-2xl bg-white/5" />)}
           </div>
         ) : repositories.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center rounded-3xl border border-dashed border-white/6 bg-[hsl(240,18%,6%)] gap-5">
-            <div className="relative">
-              <div className="absolute inset-0 blur-2xl rounded-full bg-indigo-500/10 animate-glow-pulse" />
-              <div className="relative h-14 w-14 rounded-2xl bg-[hsl(240,18%,9%)] border border-white/6 flex items-center justify-center">
-                <GitBranch className="h-6 w-6 text-zinc-700" />
-              </div>
-            </div>
-            <div>
-              <p className="text-[12px] font-bold uppercase tracking-[0.2em] text-zinc-600">No repositories yet</p>
-              <p className="text-[11px] text-zinc-800 mt-1">
-                {selectedProjectId ? 'Connect a repository above to start indexing.' : 'Select a project first.'}
-              </p>
-            </div>
+          <div className="flex flex-col items-center justify-center py-16 rounded-2xl border border-dashed border-white/10 text-center bg-black/20">
+            <Database className="h-8 w-8 text-zinc-600 mb-3" />
+            <p className="text-[15px] font-bold text-white">No Repositories Hooked</p>
+            <p className="text-[13px] text-zinc-500 mt-1 max-w-sm">Connect a codebase above to begin vectorizing data.</p>
           </div>
         ) : (
-          <div className={cn(
-            viewMode === 'grid'
-              ? 'grid gap-5 md:grid-cols-2 xl:grid-cols-3'
-              : 'flex flex-col gap-4'
-          )}>
-            {repositories.map((repo, i) => (
-              <motion.div
-                key={repo.id}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05, duration: 0.3 }}
-              >
-                <RepositoryItemCard repository={repo} />
-              </motion.div>
-            ))}
+          <div className={cn(viewMode === 'grid' ? 'grid gap-4 sm:grid-cols-2 lg:grid-cols-3' : 'space-y-3')}>
+            {repositories.map((repo) => <RepoCard key={repo.id} repository={repo} forceListMode={viewMode === 'list'} />)}
           </div>
         )}
       </div>

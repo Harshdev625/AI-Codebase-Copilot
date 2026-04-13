@@ -9,8 +9,14 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import ensure_repository_access, ensure_repository_access_by_id, get_current_user
-from app.core.api_response import success_response
+from app.api.dependencies import (
+    PaginationParams,
+    ensure_repository_access,
+    ensure_repository_access_by_id,
+    get_current_user,
+    get_pagination,
+)
+from app.core.api_response import paginated_success_response, success_response
 from app.db.database import get_db_session
 from app.models.api_models import (
     AddRepositoryRequest,
@@ -24,6 +30,55 @@ from . import service
 
 router = APIRouter(tags=["repositories"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_pagination(pagination: Any) -> PaginationParams:
+    if isinstance(pagination, PaginationParams):
+        return pagination
+    return PaginationParams(limit=50, offset=0)
+
+
+def _safe_count_from_result(result: Any) -> int:
+    scalar_fn = getattr(result, "scalar", None)
+    if callable(scalar_fn):
+        try:
+            value = scalar_fn()
+            return int(value or 0)
+        except Exception:
+            pass
+
+    mappings_fn = getattr(result, "mappings", None)
+    if callable(mappings_fn):
+        mapped = mappings_fn()
+        first_fn = getattr(mapped, "first", None)
+        if callable(first_fn):
+            row = first_fn()
+            if isinstance(row, dict) and row:
+                first_value = next(iter(row.values()))
+                try:
+                    return int(first_value or 0)
+                except Exception:
+                    return 0
+
+    first_fn = getattr(result, "first", None)
+    if callable(first_fn):
+        row = first_fn()
+        if isinstance(row, (list, tuple)) and row:
+            try:
+                return int(row[0] or 0)
+            except Exception:
+                return 0
+
+    return 0
+
+
+def _ensure_membership(session: Session, project_id: str, user_id: str) -> None:
+    membership = session.execute(
+        text("SELECT id FROM project_memberships WHERE project_id = :p AND user_id = :u"),
+        {"p": project_id, "u": user_id},
+    ).first()
+    if not membership:
+        raise HTTPException(status_code=403, detail="Not authorized for this project")
 
 def _to_payload(row: dict) -> dict:
     payload = dict(row)
@@ -58,45 +113,89 @@ def _to_payload(row: dict) -> dict:
     payload["has_completed_index"] = bool(payload.get("has_completed_index"))
     return payload
 
-@router.get("/projects", response_model=list[ProjectResponse])
+@router.get("/projects")
 def list_projects(
     current_user: dict = Depends(get_current_user),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
-) -> list[ProjectResponse]:
+) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("projects_list - request user_id=%s", current_user["id"])
-    projects = service.get_projects_for_user(session, current_user["id"])
-    payload = [ProjectResponse(**_to_payload(p)).model_dump() for p in projects]
-    return success_response(payload)
+    total_result = session.execute(
+        text(
+            """
+            SELECT COUNT(*) AS total
+            FROM projects p
+            JOIN project_memberships pm ON pm.project_id = p.id
+            WHERE pm.user_id = :user_id
+            """
+        ),
+        {"user_id": current_user["id"]},
+    )
+    total = _safe_count_from_result(total_result)
 
-@router.post("/projects", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
+    projects = service.get_projects_for_user(
+        session,
+        current_user["id"],
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+    payload = [ProjectResponse(**_to_payload(p)).model_dump() for p in projects]
+    return paginated_success_response(
+        items=payload,
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+
+@router.post("/projects", status_code=status.HTTP_201_CREATED)
 def create_project(
     req: CreateProjectRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
-) -> ProjectResponse:
+) -> dict:
     logger.info("projects_create - request user_id=%s name=%s", current_user["id"], req.name)
     project = service.create_new_project(session, current_user["id"], req.name, req.description)
     return success_response(ProjectResponse(**_to_payload(project)).model_dump(), status_code=status.HTTP_201_CREATED)
 
-@router.get("/projects/{project_id}/repositories", response_model=list[RepositoryResponse])
+@router.get("/projects/{project_id}/repositories")
 def list_repositories(
     project_id: str,
     current_user: dict = Depends(get_current_user),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
-) -> list[RepositoryResponse]:
+) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("repositories_list - request project_id=%s", project_id)
     service_membership_check(session, project_id, current_user["id"])
-    repos = service.get_repositories_for_project(session, project_id)
-    payload = [RepositoryResponse(**_to_payload(r)).model_dump() for r in repos]
-    return success_response(payload)
 
-@router.post("/projects/{project_id}/repositories", response_model=RepositoryResponse, status_code=status.HTTP_201_CREATED)
+    total_result = session.execute(
+        text("SELECT COUNT(*) AS total FROM repositories WHERE project_id = :project_id"),
+        {"project_id": project_id},
+    )
+    total = _safe_count_from_result(total_result)
+
+    repos = service.get_repositories_for_project(
+        session,
+        project_id,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+    payload = [RepositoryResponse(**_to_payload(r)).model_dump() for r in repos]
+    return paginated_success_response(
+        items=payload,
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
+
+@router.post("/projects/{project_id}/repositories", status_code=status.HTTP_201_CREATED)
 def add_repository(
     project_id: str,
     req: AddRepositoryRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
-) -> RepositoryResponse:
+) -> dict:
     logger.info("repository_add - request project_id=%s repo_id=%s", project_id, req.repo_id)
     service_membership_check(session, project_id, current_user["id"])
     try:
@@ -108,13 +207,13 @@ def add_repository(
         logger.error("repository_add - failure: %s", e)
         raise HTTPException(status_code=409, detail="Repository already exists or creation failed")
 
-@router.post("/index", response_model=IndexResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/index", status_code=status.HTTP_202_ACCEPTED)
 def index_repo(
     req: IndexRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
-) -> IndexResponse:
+) -> dict:
     logger.info("index_start - request repository_id=%s", req.repository_id)
     snapshot_id = str(uuid.uuid4())
     indexing_job_id = str(uuid.uuid4())
@@ -215,6 +314,10 @@ def get_index_progress(
             stats = json.loads(stats)
         except:
             stats = {}
+    if isinstance(stats, (int, float)):
+        stats = {"indexed_chunks": int(stats)}
+    if not isinstance(stats, dict):
+        stats = {}
 
     started_at = data["started_at"]
     if started_at and hasattr(started_at, "isoformat"):
@@ -235,9 +338,4 @@ def get_index_progress(
     })
 
 def service_membership_check(session: Session, project_id: str, user_id: str) -> None:
-    membership = session.execute(
-        text("SELECT id FROM project_memberships WHERE project_id = :p AND user_id = :u"),
-        {"p": project_id, "u": user_id},
-    ).first()
-    if not membership:
-        raise HTTPException(status_code=403, detail="Access denied to this project")
+    _ensure_membership(session, project_id, user_id)

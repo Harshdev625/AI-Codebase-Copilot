@@ -19,8 +19,17 @@ export default function AdminUsersPage(): React.JSX.Element {
   const toast = useToast();
   const [users, setUsers] = React.useState<AdminUser[]>([]);
   const [busyUserId, setBusyUserId] = React.useState<string | null>(null);
+  const [pendingDeleteUserId, setPendingDeleteUserId] = React.useState<string | null>(null);
   const [isLoading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!pendingDeleteUserId) {
+      return;
+    }
+    const timer = window.setTimeout(() => setPendingDeleteUserId(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [pendingDeleteUserId]);
 
   const loadUsers = React.useCallback(async () => {
     setLoading(true);
@@ -74,11 +83,13 @@ export default function AdminUsersPage(): React.JSX.Element {
   };
 
   const deleteUser = async (user: AdminUser): Promise<void> => {
-    const shouldDelete = window.confirm(`Delete user ${user.email}?`);
-    if (!shouldDelete) {
+    if (pendingDeleteUserId !== user.id) {
+      setPendingDeleteUserId(user.id);
+      toast.warning('Confirm Deletion', `Click Delete again for ${user.email} to confirm.`);
       return;
     }
 
+    setPendingDeleteUserId(null);
     setBusyUserId(user.id);
     setError(null);
     try {
@@ -181,7 +192,7 @@ export default function AdminUsersPage(): React.JSX.Element {
                           disabled={busyUserId === user.id}
                           onClick={() => void deleteUser(user)}
                         >
-                          Delete
+                          {pendingDeleteUserId === user.id ? 'Confirm Delete' : 'Delete'}
                         </Button>
                       </div>
                     </TableCell>

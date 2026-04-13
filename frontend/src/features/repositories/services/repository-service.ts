@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/api-client';
+import { apiClient } from '@/lib/api';
 import { 
   Project, 
   Repository, 
@@ -14,6 +14,16 @@ interface ApiEnvelope<T> {
   error: string | null;
 }
 
+interface PaginatedData<T> {
+  items: T[];
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+    has_more: boolean;
+  };
+}
+
 const unwrap = <T>(response: { data: ApiEnvelope<T> }): T => {
   if (!response.data.success) {
     throw new Error(response.data.error || 'Request failed');
@@ -21,11 +31,19 @@ const unwrap = <T>(response: { data: ApiEnvelope<T> }): T => {
   return response.data.data;
 };
 
+const unwrapItems = <T>(response: { data: ApiEnvelope<PaginatedData<T>> }): T[] => {
+  const data = unwrap(response);
+  if (data && typeof data === 'object' && Array.isArray((data as PaginatedData<T>).items)) {
+    return (data as PaginatedData<T>).items;
+  }
+  throw new Error('Invalid paginated response payload');
+};
+
 export const repositoryService = {
   // Projects
   listProjects: async (): Promise<Project[]> => {
-    const response = await apiClient.get<ApiEnvelope<Project[]>>('/projects');
-    return unwrap(response);
+    const response = await apiClient.get<ApiEnvelope<PaginatedData<Project>>>('/projects');
+    return unwrapItems(response);
   },
   createProject: async (payload: { name: string; description?: string }): Promise<Project> => {
     const response = await apiClient.post<ApiEnvelope<Project>>('/projects', payload);
@@ -34,8 +52,8 @@ export const repositoryService = {
 
   // Repositories
   listByProject: async (projectId: string): Promise<Repository[]> => {
-    const response = await apiClient.get<ApiEnvelope<Repository[]>>(`/projects/${projectId}/repositories`);
-    return unwrap(response);
+    const response = await apiClient.get<ApiEnvelope<PaginatedData<Repository>>>(`/projects/${projectId}/repositories`);
+    return unwrapItems(response);
   },
   add: async (projectId: string, payload: AddRepositoryPayload): Promise<Repository> => {
     const response = await apiClient.post<ApiEnvelope<Repository>>(`/projects/${projectId}/repositories`, payload);

@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/api-client';
+import { apiClient } from '@/lib/api';
 import { AuthTokenResponse, LoginPayload, RegisterPayload, User } from '../types/auth-types';
 
 interface ApiEnvelope<T> {

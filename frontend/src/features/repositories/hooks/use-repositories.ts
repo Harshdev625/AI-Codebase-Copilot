@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { repositoryService } from '../services/repository-service';
 import { useToast } from '@/components/shared/toast-provider';
-import { getApiErrorMessage } from '@/api/api-client';
+import { toApiError } from '@/lib/api';
 
 export function useProjects() {
   const query = useQuery({
@@ -27,7 +27,7 @@ export function useCreateProject() {
       toast.success('Project Created', `"${data.name}" has been established.`);
     },
     onError: (error) => {
-      toast.error('Project Creation Failed', getApiErrorMessage(error));
+      toast.error('Project Creation Failed', toApiError(error));
     },
   });
 }
@@ -58,7 +58,7 @@ export function useAddRepository() {
       toast.success('Repository Added', 'Source has been linked to the project.');
     },
     onError: (error) => {
-      toast.error('Failed to Add Repository', getApiErrorMessage(error));
+      toast.error('Failed to Add Repository', toApiError(error));
     },
   });
 }
@@ -72,7 +72,7 @@ export function useIndexRepository() {
       toast.info('Indexing Started', 'The repository is being processed.');
     },
     onError: (error) => {
-      toast.error('Indexing Failed', getApiErrorMessage(error));
+      toast.error('Indexing Failed', toApiError(error));
     },
   });
 }

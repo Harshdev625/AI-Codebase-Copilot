@@ -16,18 +16,30 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-def get_projects_for_user(session: Session, user_id: str) -> list[dict[str, Any]]:
+def get_projects_for_user(
+    session: Session,
+    user_id: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"user_id": user_id, "offset": max(0, offset)}
+    pagination_sql = ""
+    if limit is not None:
+        params["limit"] = max(1, limit)
+        pagination_sql = " LIMIT :limit OFFSET :offset"
+
     rows = session.execute(
         text(
-            """
+            f"""
             SELECT p.id, p.name, p.description, p.created_by, p.created_at
             FROM projects p
             JOIN project_memberships pm ON pm.project_id = p.id
             WHERE pm.user_id = :user_id
             ORDER BY p.created_at DESC
+            {pagination_sql}
             """
         ),
-        {"user_id": user_id},
+        params,
     ).mappings().all()
     return [dict(row) for row in rows]
 
@@ -70,10 +82,21 @@ def create_new_project(session: Session, user_id: str, name: str, description: s
     ).mappings().first()
     return dict(row) if row else {}
 
-def get_repositories_for_project(session: Session, project_id: str) -> list[dict[str, Any]]:
+def get_repositories_for_project(
+    session: Session,
+    project_id: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {"project_id": project_id, "offset": max(0, offset)}
+    pagination_sql = ""
+    if limit is not None:
+        params["limit"] = max(1, limit)
+        pagination_sql = " LIMIT :limit OFFSET :offset"
+
     rows = session.execute(
         text(
-            """
+            f"""
             SELECT
                 r.id,
                 r.project_id,
@@ -120,9 +143,10 @@ def get_repositories_for_project(session: Session, project_id: str) -> list[dict
             FROM repositories r
             WHERE r.project_id = :project_id
             ORDER BY created_at DESC
+            {pagination_sql}
             """
         ),
-        {"project_id": project_id},
+        params,
     ).mappings().all()
     return [dict(row) for row in rows]
 
@@ -176,7 +200,14 @@ def trigger_repository_indexing(
     indexing_job_id: str | None,
 ) -> None:
     """Background task to run indexing."""
-    db = SessionLocal()
+    try:
+        from app.api.v1 import repositories as repositories_module
+
+        session_local_factory = getattr(repositories_module, "SessionLocal", SessionLocal)
+    except Exception:
+        session_local_factory = SessionLocal
+
+    db = session_local_factory()
     try:
         logger.info(
             "indexing_task - start repo_id=%s repository_id=%s snapshot_id=%s job_id=%s",
@@ -287,6 +318,7 @@ def trigger_repository_indexing(
 
 def check_indexing_timeout_and_stalls(session: Session, snapshot_id: str) -> dict[str, Any]:
     """Check for hung indexing jobs and mark them as failed if they exceed timeouts."""
+    refreshed = False
     row = session.execute(
         text(
             """
@@ -334,6 +366,7 @@ def check_indexing_timeout_and_stalls(session: Session, snapshot_id: str) -> dic
                 },
             )
             session.commit()
+            refreshed = True
             
     # Stall handling
     elif row["status"] == "running":
@@ -368,18 +401,20 @@ def check_indexing_timeout_and_stalls(session: Session, snapshot_id: str) -> dic
                     },
                 )
                 session.commit()
+                refreshed = True
 
     # Refresh row after potential updates
-    row = session.execute(
-        text(
-            """
-            SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
-            FROM repository_snapshots rs
-            LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
-            WHERE rs.id = :snapshot_id
-            """
-        ),
-        {"snapshot_id": snapshot_id},
-    ).mappings().first()
+    if refreshed:
+        row = session.execute(
+            text(
+                """
+                SELECT rs.id, rs.index_status, rs.stats, ij.message, ij.status, ij.started_at, ij.updated_at
+                FROM repository_snapshots rs
+                LEFT JOIN indexing_jobs ij ON rs.id = ij.snapshot_id
+                WHERE rs.id = :snapshot_id
+                """
+            ),
+            {"snapshot_id": snapshot_id},
+        ).mappings().first()
 
     return dict(row) if row else {}

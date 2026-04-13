@@ -71,7 +71,7 @@ export function ChatMessageItemBubble({ message }: ChatMessageBubbleProps) {
             'text-[10px] font-bold uppercase tracking-[0.15em]',
             isAssistant ? 'text-violet-400' : 'text-zinc-600'
           )}>
-            {isAssistant ? 'AI Copilot' : 'You'}
+            {isAssistant ? 'TimeMachine' : 'You'}
           </span>
           <span className="text-[9px] font-medium text-zinc-700">
             {message.created_at ? formatTime(message.created_at) : 'Just now'}

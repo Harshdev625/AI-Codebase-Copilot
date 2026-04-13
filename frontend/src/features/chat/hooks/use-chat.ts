@@ -6,37 +6,72 @@ import { useToast } from '@/components/shared/toast-provider';
 export function useChat(repositoryId: string, initialSessionId?: string) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = React.useState(false);
   const [currentSessionId, setCurrentSessionId] = React.useState<string | undefined>(initialSessionId);
-  const { warning, error, success } = useToast();
+  const historyRequestIdRef = React.useRef(0);
+  const { warning, error } = useToast();
 
-  // Load history if session_id is provided or changes
-  React.useEffect(() => {
-    if (currentSessionId) {
-      loadHistory(currentSessionId);
-    } else {
-      setMessages([]);
-    }
-  }, [currentSessionId]);
+  const mapHistoryMessage = React.useCallback((message: any): ChatMessage => {
+    return {
+      id: String(message.id),
+      role: message.role === 'assistant' ? 'assistant' : 'user',
+      content: String(message.content ?? ''),
+      created_at: message.created_at,
+      metadata: message.metadata,
+    };
+  }, []);
 
-  const loadHistory = async (sid: string) => {
+  const loadSessionHistory = React.useCallback(async (sessionId: string) => {
+    const requestId = ++historyRequestIdRef.current;
+    setCurrentSessionId(sessionId);
+    setMessages([]);
+    setIsHistoryLoading(true);
+
     try {
-      const response = await chatService.getSessionMessages(sid);
-      if (response.success && response.data) {
-        setMessages(response.data.map((m: any) => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          metadata: m.metadata
-        })));
+      const response = await chatService.getSessionMessages(sessionId);
+      if (requestId !== historyRequestIdRef.current) {
+        return;
       }
-    } catch (err) {
-      console.error('Failed to load history', err);
+      setMessages(response.map(mapHistoryMessage));
+    } catch (err: any) {
+      if (requestId !== historyRequestIdRef.current) {
+        return;
+      }
+      setMessages([]);
+      error('History Load Failed', err?.message || 'Unable to load session history.');
+    } finally {
+      if (requestId === historyRequestIdRef.current) {
+        setIsHistoryLoading(false);
+      }
     }
-  };
+  }, [error, mapHistoryMessage]);
 
-  const sendMessage = async (query: string) => {
+  React.useEffect(() => {
+    if (initialSessionId) {
+      void loadSessionHistory(initialSessionId);
+    }
+  }, [initialSessionId, loadSessionHistory]);
+
+  const selectSession = React.useCallback((sessionId: string) => {
+    if (!sessionId) {
+      return;
+    }
+    void loadSessionHistory(sessionId);
+  }, [loadSessionHistory]);
+
+  const clearMessages = React.useCallback(() => {
+    historyRequestIdRef.current += 1;
+    setMessages([]);
+    setCurrentSessionId(undefined);
+    setIsHistoryLoading(false);
+  }, []);
+
+  const sendMessage = React.useCallback(async (query: string) => {
     if (!repositoryId) {
       warning('Selection Required', 'Choose a repository to start analyzing.');
+      return;
+    }
+    if (isHistoryLoading) {
       return;
     }
 
@@ -46,23 +81,24 @@ export function useChat(repositoryId: string, initialSessionId?: string) {
       content: query,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    const assistantId = Math.random().toString(36).substring(7);
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      metadata: { intent: 'thinking...' },
+    };
+
+    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     setIsSending(true);
 
     try {
-      // Create a placeholder for assistant message
-      const assistantId = Math.random().toString(36).substring(7);
-      setMessages((prev) => [
-        ...prev,
-        { id: assistantId, role: 'assistant', content: '', metadata: { intent: 'thinking...' } },
-      ]);
-
       let fullContent = '';
       await chatService.streamChat(
         { query, repository_id: repositoryId, session_id: currentSessionId },
         (event) => {
           if (event.type === 'start' && event.session_id) {
-            setCurrentSessionId(event.session_id);
+            setCurrentSessionId(String(event.session_id));
           }
           if (event.type === 'chunk' && event.delta) {
             fullContent += event.delta;
@@ -85,23 +121,19 @@ export function useChat(repositoryId: string, initialSessionId?: string) {
       );
     } catch (err: any) {
       error('Message Failed', err.message || 'The AI service encountered an error.');
-      setMessages((prev) => prev.slice(0, -1)); // Remove the assistant placeholder
+      setMessages((prev) => prev.filter((msg) => msg.id !== assistantId));
     } finally {
       setIsSending(false);
     }
-  };
-
-  const clearMessages = () => {
-    setMessages([]);
-    setCurrentSessionId(undefined);
-  };
+  }, [repositoryId, warning, isHistoryLoading, currentSessionId, error]);
 
   return {
     messages,
     sendMessage,
     isSending,
+    isHistoryLoading,
     clearMessages,
     currentSessionId,
-    setCurrentSessionId,
+    selectSession,
   };
 }

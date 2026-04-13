@@ -1,4 +1,4 @@
-import { apiClient } from '@/api/api-client';
+import { apiClient } from '@/lib/api';
 import { DashboardSummary } from '../types/dashboard-types';
 
 interface ApiEnvelope<T> {

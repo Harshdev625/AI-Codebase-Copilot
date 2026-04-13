@@ -15,6 +15,16 @@ class _Result:
     def __init__(self, rows=None):
         self.rows = rows or []
 
+    def scalar(self):
+        if not self.rows:
+            return None
+        first = self.rows[0]
+        if isinstance(first, dict):
+            return next(iter(first.values())) if first else None
+        if isinstance(first, (list, tuple)) and first:
+            return first[0]
+        return first
+
     def mappings(self):
         return self
 
@@ -104,11 +114,16 @@ def test_require_roles_and_repository_access() -> None:
 def test_admin_list_and_update_routes() -> None:
     session = _SessionQueue(
         results=[
+            [{"total": 1}],
             [{"id": "u1", "role": "ADMIN"}],
+            [{"total": 1}],
             [{"id": "r1"}],
+            [{"total": 1}],
             [{"id": "i1"}],
             [{"id": "j1", "status": "running"}],
+            [{"total": 1}],
             [{"id": "ru1", "email": "recent@example.com", "role": "USER", "is_active": True}],
+            [{"total": 1}],
             [],
             [{"id": "u2", "email": "x@x.com", "full_name": "X", "role": "ADMIN", "is_active": True}],
             [],
@@ -117,12 +132,12 @@ def test_admin_list_and_update_routes() -> None:
         ]
     )
 
-    assert _payload(admin_module.admin_users(_={"id": "admin"}, session=session))[0]["id"] == "u1"
-    assert _payload(admin_module.admin_repositories(_={"id": "admin"}, session=session))[0]["id"] == "r1"
-    assert _payload(admin_module.admin_indexing_status(_={"id": "admin"}, session=session))[0]["id"] == "i1"
+    assert _payload(admin_module.admin_users(_={"id": "admin"}, session=session))["items"][0]["id"] == "u1"
+    assert _payload(admin_module.admin_repositories(_={"id": "admin"}, session=session))["items"][0]["id"] == "r1"
+    assert _payload(admin_module.admin_indexing_status(_={"id": "admin"}, session=session))["items"][0]["id"] == "i1"
     activity = _payload(admin_module.admin_recent_activity(_={"id": "admin"}, session=session))
-    assert activity["indexing_jobs"][0]["id"] == "j1"
-    assert activity["recent_users"][0]["role"] == "USER"
+    assert activity["indexing_jobs"]["items"][0]["id"] == "j1"
+    assert activity["recent_users"]["items"][0]["role"] == "USER"
 
     updated_role = admin_module.update_user_role(
         "u2",

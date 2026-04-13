@@ -222,7 +222,9 @@ def test_create_and_list_project_for_current_user(client: TestClient, session_fa
 
     list_response = client.get("/v1/projects", headers={"Authorization": f"Bearer {token}"})
     assert list_response.status_code == 200
-    assert any(project["id"] == project_id for project in _payload(list_response))
+    projects_payload = _payload(list_response)
+    assert projects_payload["pagination"]["total"] >= 1
+    assert any(project["id"] == project_id for project in projects_payload["items"])
 
 
 def test_add_and_list_repositories_for_project(client: TestClient, session_factory: sessionmaker) -> None:
@@ -253,7 +255,9 @@ def test_add_and_list_repositories_for_project(client: TestClient, session_facto
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_repo.status_code == 200
-    assert _payload(list_repo)[0]["repo_id"] == "demo-repo"
+    repositories_payload = _payload(list_repo)
+    assert repositories_payload["pagination"]["total"] >= 1
+    assert repositories_payload["items"][0]["repo_id"] == "demo-repo"
 
 
 def test_add_repository_duplicate_repo_id_returns_conflict(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 import httpx
 import redis
 
@@ -9,14 +10,20 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.dependencies import require_roles
-from app.core.api_response import success_response
+from app.api.dependencies import PaginationParams, get_pagination, require_roles
+from app.core.api_response import paginated_success_response, success_response
 from app.core.config import settings
 from app.core.roles import ROLE_ADMIN, ROLE_USER, normalize_role
 from app.db.database import get_db_session
 
 router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_pagination(pagination: Any) -> PaginationParams:
+    if isinstance(pagination, PaginationParams):
+        return pagination
+    return PaginationParams(limit=50, offset=0)
 
 
 class UserRoleUpdate(BaseModel):
@@ -36,17 +43,22 @@ class UserActiveUpdate(BaseModel):
 @router.get("/admin/users")
 def admin_users(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
-) -> list[dict]:
+) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("admin_users - request received")
+    total = int(session.execute(text("SELECT COUNT(*) FROM users")).scalar() or 0)
     rows = session.execute(
         text(
             """
             SELECT id, email, full_name, role, is_active, created_at
             FROM users
             ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
     ).mappings().all()
     results: list[dict] = []
     for row in rows:
@@ -54,48 +66,72 @@ def admin_users(
         item["role"] = normalize_role(item.get("role"))
         results.append(item)
     logger.info("admin_users - response sent count=%s", len(results))
-    return success_response(results)
+    return paginated_success_response(
+        items=results,
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.get("/admin/repositories")
 def admin_repositories(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
-) -> list[dict]:
+) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("admin_repositories - request received")
+    total = int(session.execute(text("SELECT COUNT(*) FROM repositories")).scalar() or 0)
     rows = session.execute(
         text(
             """
             SELECT id, project_id, repo_id, remote_url, local_path, default_branch, created_at
             FROM repositories
             ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
     ).mappings().all()
     payload = [dict(row) for row in rows]
     logger.info("admin_repositories - response sent count=%s", len(payload))
-    return success_response(payload)
+    return paginated_success_response(
+        items=payload,
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.get("/admin/indexing-status")
 def admin_indexing_status(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
-) -> list[dict]:
+) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("admin_indexing_status - request received")
+    total = int(session.execute(text("SELECT COUNT(*) FROM indexing_jobs")).scalar() or 0)
     rows = session.execute(
         text(
             """
             SELECT id, repository_id, snapshot_id, status, message, started_at, finished_at, created_at
             FROM indexing_jobs
             ORDER BY created_at DESC
-            LIMIT 200
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
     ).mappings().all()
     payload = [dict(row) for row in rows]
     logger.info("admin_indexing_status - response sent count=%s", len(payload))
-    return success_response(payload)
+    return paginated_success_response(
+        items=payload,
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.post("/admin/users/{user_id}/role")
@@ -231,8 +267,10 @@ def admin_system_metrics(
 @router.get("/admin/recent-activity")
 def admin_recent_activity(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
+    pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    pagination = _resolve_pagination(pagination)
     logger.info("admin_recent_activity - request received")
     indexing_jobs = session.execute(
         text(
@@ -240,21 +278,26 @@ def admin_recent_activity(
             SELECT id, repository_id, status, message, started_at, finished_at, created_at
             FROM indexing_jobs
             ORDER BY created_at DESC
-            LIMIT 25
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
     ).mappings().all()
 
+    users_total = int(session.execute(text("SELECT COUNT(*) FROM users")).scalar() or 0)
     recent_users = session.execute(
         text(
             """
             SELECT id, email, full_name, role, is_active, created_at
             FROM users
             ORDER BY created_at DESC
-            LIMIT 25
+            LIMIT :limit OFFSET :offset
             """
-        )
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
     ).mappings().all()
+
+    jobs_total = int(session.execute(text("SELECT COUNT(*) FROM indexing_jobs")).scalar() or 0)
 
     payload = {
         "indexing_jobs": [dict(row) for row in indexing_jobs],
@@ -269,8 +312,24 @@ def admin_recent_activity(
     )
     return success_response(
         {
-            "indexing_jobs": payload["indexing_jobs"],
-            "recent_users": payload["recent_users"],
+            "indexing_jobs": {
+                "items": payload["indexing_jobs"],
+                "pagination": {
+                    "total": jobs_total,
+                    "limit": pagination.limit,
+                    "offset": pagination.offset,
+                    "has_more": (pagination.offset + pagination.limit) < jobs_total,
+                },
+            },
+            "recent_users": {
+                "items": payload["recent_users"],
+                "pagination": {
+                    "total": users_total,
+                    "limit": pagination.limit,
+                    "offset": pagination.offset,
+                    "has_more": (pagination.offset + pagination.limit) < users_total,
+                },
+            },
         }
     )
 

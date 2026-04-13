@@ -363,6 +363,35 @@ def test_query_service_cache_hit_and_miss(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(miss_cache.set_calls) == 1
 
 
+def test_query_service_deterministic_location_answer_for_auth() -> None:
+    service = QueryService(session=object())
+    result = {
+        "retrieved_context": [
+            {
+                "path": "extension/popup.js",
+                "symbol": "auth",
+                "content": "function auth(user) { return login(user); }",
+            },
+            {
+                "path": "extension/helpers.js",
+                "symbol": "login",
+                "content": "export const login = () => true;",
+            },
+        ]
+    }
+
+    answer = service.build_deterministic_answer(
+        "Where is the auth function implemented in popup.js?",
+        result,
+    )
+
+    assert answer is not None
+    assert "popup.js" in answer
+    assert "auth" in answer.lower()
+    assert "```" in answer
+    assert "function auth" in answer
+
+
 def test_qdrant_service_paths_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     import app.services.qdrant_service as qdrant_module
 

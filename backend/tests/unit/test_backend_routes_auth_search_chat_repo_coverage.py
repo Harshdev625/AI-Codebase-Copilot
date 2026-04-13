@@ -18,6 +18,16 @@ class _Result:
     def __init__(self, rows=None):
         self.rows = rows or []
 
+    def scalar(self):
+        if not self.rows:
+            return None
+        first = self.rows[0]
+        if isinstance(first, dict):
+            return next(iter(first.values())) if first else None
+        if isinstance(first, (list, tuple)) and first:
+            return first[0]
+        return first
+
     def first(self):
         return self.rows[0] if self.rows else None
 
@@ -161,10 +171,13 @@ def test_chat_route_success_and_runtime_error(monkeypatch: pytest.MonkeyPatch) -
 def test_repository_list_projects_and_progress_paths() -> None:
     now = datetime.now(timezone.utc)
     projects_session = _SessionQueue(
-        results=[[{"id": "p0", "name": "Proj0", "description": "d0", "created_by": "u1", "created_at": now}]]
+        results=[
+            [{"total": 1}],
+            [{"id": "p0", "name": "Proj0", "description": "d0", "created_by": "u1", "created_at": now}],
+        ]
     )
     projects_response = list_projects(current_user={"id": "u1"}, session=projects_session)
-    assert _payload(projects_response)[0]["id"] == "p0"
+    assert _payload(projects_response)["items"][0]["id"] == "p0"
 
     progress_session = _SessionQueue(
         results=[[

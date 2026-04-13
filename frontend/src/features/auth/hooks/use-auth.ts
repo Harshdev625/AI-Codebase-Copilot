@@ -4,7 +4,8 @@ import { authService } from '../services/auth-service';
 import { LoginPayload, RegisterPayload } from '../types/auth-types';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/components/shared/toast-provider';
-import { getApiErrorMessage } from '@/api/api-client';
+import { toApiError } from '@/lib/api';
+import { setAccessToken } from '@/lib/auth';
 
 export function useAuth() {
   const queryClient = useQueryClient();
@@ -17,6 +18,7 @@ export function useAuth() {
     onSuccess: async (data) => {
       try {
         // Essential: Set token in store so 'me' request has it
+        setAccessToken(data.access_token);
         useAuthStore.setState({ token: data.access_token });
         
         const profile = await authService.me();
@@ -35,12 +37,11 @@ export function useAuth() {
           }, 500);
         }, 100);
       } catch (error) {
-        console.error('Login profile fetch failed:', error);
         toast.error('Login Error', 'Failed to retrieve user profile');
       }
     },
     onError: (error) => {
-      toast.error('Login Failed', getApiErrorMessage(error));
+      toast.error('Login Failed', toApiError(error));
     },
   });
 
@@ -53,7 +54,7 @@ export function useAuth() {
       }, 500);
     },
     onError: (error) => {
-      toast.error('Registration Failed', getApiErrorMessage(error));
+      toast.error('Registration Failed', toApiError(error));
     },
   });
 

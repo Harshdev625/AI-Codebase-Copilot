@@ -10,6 +10,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useOnboardingStore } from '@/store/onboarding-store';
+import { useAuthStore } from '@/store/auth-store';
 
 interface Step {
   id: number;
@@ -75,18 +76,16 @@ const steps: Step[] = [
 ];
 
 export function OnboardingOverlay() {
-  const { isOpen, currentStep, isCompleted, nextStep, prevStep, closeOnboarding, completeOnboarding } =
+  const { isOpen, currentStep, nextStep, prevStep, completeOnboarding, initializeForUser, dismissOnboarding } =
     useOnboardingStore();
+  const user = useAuthStore((state) => state.user);
   const router = useRouter();
 
-  // Auto-open on first visit
-  const { openOnboarding } = useOnboardingStore();
   React.useEffect(() => {
-    if (!isCompleted) {
-      openOnboarding();
+    if (user?.id) {
+      initializeForUser(user.id);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user?.id, initializeForUser]);
 
   const step = steps[currentStep];
   const isLast = currentStep === steps.length - 1;
@@ -128,7 +127,7 @@ export function OnboardingOverlay() {
 
               {/* Close */}
               <button
-                onClick={closeOnboarding}
+                onClick={dismissOnboarding}
                 className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-border/40 bg-muted/40 text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
               >
                 <X className="h-3.5 w-3.5" />
@@ -198,7 +197,7 @@ export function OnboardingOverlay() {
 
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={completeOnboarding}
+                    onClick={dismissOnboarding}
                     className="text-[11px] font-semibold text-muted-foreground/60 hover:text-muted-foreground transition-colors"
                   >
                     Skip tour

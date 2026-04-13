@@ -1,6 +1,7 @@
 import axios, { AxiosError, type AxiosResponse } from "axios";
 
-import { clearAuthSession, getAccessToken, type AuthUser } from "@/lib/auth";
+import { getAccessToken, type AuthUser } from "@/lib/auth";
+import { useAuthStore } from "@/store/auth-store";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
@@ -11,6 +12,18 @@ export interface ApiEnvelope<T> {
   success: boolean;
   data: T;
   error: string | null;
+}
+
+export interface PaginationMeta {
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+export interface PaginatedData<T> {
+  items: T[];
+  pagination: PaginationMeta;
 }
 
 export interface AuthTokenResponse {
@@ -116,10 +129,8 @@ export const apiClient = axios.create({
   },
 });
 
-import { useAuthStore } from "@/store/auth-store";
-
 apiClient.interceptors.request.use((config) => {
-  const token = useAuthStore.getState().token;
+  const token = useAuthStore.getState().token ?? getAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -130,7 +141,14 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ApiEnvelope<unknown>>) => {
     if (error.response?.status === 401) {
-      clearAuthSession();
+      useAuthStore.getState().logout();
+      if (
+        typeof window !== "undefined" &&
+        !window.location.pathname.startsWith("/login") &&
+        !window.location.pathname.startsWith("/register")
+      ) {
+        window.location.href = "/login";
+      }
     }
     return Promise.reject(error);
   }
@@ -143,11 +161,34 @@ function unwrap<T>(response: AxiosResponse<ApiEnvelope<T>>): T {
   return response.data.data;
 }
 
+function unwrapItems<T>(response: AxiosResponse<ApiEnvelope<PaginatedData<T>>>): T[] {
+  const data = unwrap(response);
+  if (data && typeof data === "object" && Array.isArray((data as PaginatedData<T>).items)) {
+    return (data as PaginatedData<T>).items;
+  }
+  throw new Error("Invalid paginated response payload");
+}
+
 export function toApiError(error: unknown): string {
-  if (axios.isAxiosError<ApiEnvelope<unknown>>(error)) {
+  if (axios.isAxiosError(error)) {
     const payload = error.response?.data;
-    if (payload?.error) {
-      return payload.error;
+
+    if (payload && typeof payload === "object") {
+      const envelope = payload as ApiEnvelope<unknown>;
+      if (typeof envelope.error === "string" && envelope.error) {
+        return envelope.error;
+      }
+
+      const shaped = payload as { message?: string; error?: string | { message?: string } };
+      if (typeof shaped.message === "string" && shaped.message) {
+        return shaped.message;
+      }
+      if (typeof shaped.error === "string" && shaped.error) {
+        return shaped.error;
+      }
+      if (shaped.error && typeof shaped.error === "object" && typeof shaped.error.message === "string") {
+        return shaped.error.message;
+      }
     }
 
     const detail = (error.response?.data as { detail?: string } | undefined)?.detail;
@@ -197,8 +238,8 @@ export const api = {
   },
   projects: {
     list: async (): Promise<Project[]> => {
-      const response = await apiClient.get<ApiEnvelope<Project[]>>("/projects");
-      return unwrap(response);
+      const response = await apiClient.get<ApiEnvelope<PaginatedData<Project>>>("/projects");
+      return unwrapItems(response);
     },
     create: async (payload: {
       name: string;
@@ -210,10 +251,10 @@ export const api = {
   },
   repositories: {
     listByProject: async (projectId: string): Promise<Repository[]> => {
-      const response = await apiClient.get<ApiEnvelope<Repository[]>>(
+      const response = await apiClient.get<ApiEnvelope<PaginatedData<Repository>>>(
         `/projects/${projectId}/repositories`
       );
-      return unwrap(response);
+      return unwrapItems(response);
     },
     add: async (
       projectId: string,
@@ -264,16 +305,16 @@ export const api = {
       return unwrap(response);
     },
     users: async (): Promise<AdminUser[]> => {
-      const response = await apiClient.get<ApiEnvelope<AdminUser[]>>("/admin/users");
-      return unwrap(response);
+      const response = await apiClient.get<ApiEnvelope<PaginatedData<AdminUser>>>("/admin/users");
+      return unwrapItems(response);
     },
     repositories: async (): Promise<Repository[]> => {
-      const response = await apiClient.get<ApiEnvelope<Repository[]>>("/admin/repositories");
-      return unwrap(response);
+      const response = await apiClient.get<ApiEnvelope<PaginatedData<Repository>>>("/admin/repositories");
+      return unwrapItems(response);
     },
     indexingStatus: async (): Promise<IndexingJob[]> => {
-      const response = await apiClient.get<ApiEnvelope<IndexingJob[]>>("/admin/indexing-status");
-      return unwrap(response);
+      const response = await apiClient.get<ApiEnvelope<PaginatedData<IndexingJob>>>("/admin/indexing-status");
+      return unwrapItems(response);
     },
     updateUserRole: async (userId: string, role: "USER" | "ADMIN"): Promise<AdminUser> => {
       const response = await apiClient.post<ApiEnvelope<AdminUser>>(`/admin/users/${userId}/role`, {
