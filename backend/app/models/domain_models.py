@@ -14,3 +14,5 @@ class CodeChunk:
     end_line: int
     content: str
     metadata: dict = field(default_factory=dict)
+    embedding: list[float] | None = None
+    repository_id: str | None = None

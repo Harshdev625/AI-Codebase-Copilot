@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import ast
-from hashlib import sha256
+import uuid
 from pathlib import Path
 
 from app.models.domain_models import CodeChunk
@@ -18,9 +18,9 @@ def chunk_python_file(repo_id: str, commit_sha: str, file_path: Path, source: st
             snippet = "\n".join(source.splitlines()[start_line - 1 : end_line])
             symbol = node.name
             chunk_type = "class" if isinstance(node, ast.ClassDef) else "function"
-            chunk_id = sha256(
-                f"{repo_id}|{file_path}|{symbol}|{start_line}|{end_line}|{snippet}".encode("utf-8")
-            ).hexdigest()
+            # Use UUID5 for deterministic, Qdrant-compatible IDs
+            raw_key = f"{repo_id}|{file_path}|{symbol}|{start_line}|{end_line}|{snippet}"
+            chunk_id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
             chunks.append(
                 CodeChunk(

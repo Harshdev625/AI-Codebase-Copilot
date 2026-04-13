@@ -1,8 +1,7 @@
-# ── Local-dev stack ──────────────────────────────────────────────────────────
-# Starts only postgres + pgAdmin.
-# Run backend (FastAPI) and frontend (Next.js) directly on the host.
-# For a fully-containerised run use: podman compose --profile full up
-# ─────────────────────────────────────────────────────────────────────────────
+
+# AI Codebase Copilot infra: Postgres, pgAdmin, Qdrant, Redis, Ollama
+# Backend & frontend run outside containers
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -21,6 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -36,47 +36,56 @@ services:
         condition: service_healthy
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
 
-  # ── Full-stack containers (opt-in) ──────────────────────────────────────────
-  api:
-    profiles: ["full"]
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.backend
-    container_name: aicc-api
-    environment:
-      APP_HOST: 0.0.0.0
-      APP_PORT: 8000
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-mxbai-embed-large}
-      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_DB: aicc
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mypassword
-      VECTOR_DIM: ${VECTOR_DIM:-1024}
-      REPO_CACHE_DIR: .repo_cache
-      MAX_INDEX_FILE_SIZE_BYTES: 1000000
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    container_name: aicc-qdrant
     ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
-  web:
-    profiles: ["full"]
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile.frontend
-    container_name: aicc-web
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/v1
+  redis:
+    image: redis:7-alpine
+    container_name: aicc-redis
     ports:
-      - "3000:3000"
-    depends_on:
-      - api
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aicc-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    restart: unless-stopped
 
 volumes:
   pgdata:
   pgadmin_data:
+  qdrant_data:
+  redis_data:
+  ollama_data:
