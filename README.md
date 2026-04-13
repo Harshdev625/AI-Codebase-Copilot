@@ -2,16 +2,17 @@
 
 # AI Codebase Copilot
 
-### Self-hosted code indexing, retrieval, and chat assistant for Git repositories
+### Agentic Platform for Codebase Search, Debugging, Indexing, and AI-Assisted Engineering
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![LangGraph](https://img.shields.io/badge/LangGraph-Workflow-111827?style=for-the-badge)
+![LangGraph](https://img.shields.io/badge/LangGraph-Orchestration-111827?style=for-the-badge)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-336791?style=for-the-badge&logo=postgresql&logoColor=white)
-![Ollama](https://img.shields.io/badge/Ollama-Local%20Embeddings-000000?style=for-the-badge)
-![Next.js](https://img.shields.io/badge/Next.js-Frontend-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=for-the-badge&logo=nextdotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-Local%20Models-000000?style=for-the-badge)
 
-[Overview](#overview) • [Features](#features) • [Quick Start](#quick-start) • [API](#api) • [Architecture](#architecture) • [Testing](#testing) • [Contributing](#contributing)
+[Overview](#overview) • [Features](#features) • [Architecture](#architecture) • [Tech Stack](#tech-stack) • [Quick Start](#quick-start) • [API--Routes](#api--routes) • [Project Structure](#project-structure) • [Testing](#testing) • [Documentation](#documentation)
 
 </div>
 
@@ -19,31 +20,47 @@
 
 ## Overview
 
-AI Codebase Copilot indexes any Git repository and exposes APIs for indexing, hybrid retrieval, and chat over code chunks. You can point it at a local path or a GitHub URL.
+AI Codebase Copilot is a local-first AI engineering platform for indexing repositories, searching code semantically, chatting with code context, and managing projects with role-based access. The backend uses FastAPI, LangGraph, PostgreSQL, and vector-based retrieval. The frontend uses Next.js and TypeScript to provide login, project setup, repository management, chat, and admin views.
 
-The system uses LangGraph for workflow orchestration, PostgreSQL + pgvector for storage/retrieval, and Ollama for local embeddings.
+This README is the single entry point for the project. Deep technical details live under [docs/README.md](docs/README.md).
 
 ## Features
 
-- **Hybrid retrieval** — dense cosine search (pgvector) + PostgreSQL full-text search, fused with Reciprocal Rank Fusion
-- **`.gitignore`-aware indexing** — uses `git ls-files --exclude-standard` to skip build artifacts, `node_modules`, virtualenvs, and anything in `.gitignore`
-- **Local + remote ingestion** — index from a local path or clone directly from a GitHub URL; clones are cached in `backend/.repo_cache`
-- **AST-based chunking** — Python files are chunked by function and class boundaries using the `ast` module; all other supported file types are chunked via tree-sitter
-- **Ollama embeddings** — uses `mxbai-embed-large` by default; fully local, no API key required
-- **LangGraph workflow** — planner → retrieval/tool_execution → code_understanding → patch_generation/answer, with conditional routing
-- **Tool execution endpoint** — execution of `read_file`, `git status`, and allowlisted shell commands via `/v1/tools/execute`
-- **Large-repo safeguards** — configurable file-size cutoff and extension allowlist prevent indexing binaries and generated files
+- Semantic code search backed by hybrid retrieval.
+- Codebase chat using repository-scoped context.
+- Repository indexing pipeline with snapshot and job tracking.
+- Project, repository, conversation, and message persistence.
+- JWT authentication with protected user and admin routes.
+- Admin metrics and user visibility for platform oversight.
+- Local model support through Ollama.
+
+## Auth and Admin Flow
+
+- User signup/login: `/register`, `/login` (developer role by default).
+- Admin signup/login: `/register/admin`, `/login/admin`.
+- Admin registration requires backend `ADMIN_REGISTRATION_SECRET_KEY`.
+- Admin dashboard is available at `/admin` for users with role `admin`.
+
+## Architecture
+
+```mermaid
+graph TD;
+  A[Next.js Frontend] --> B[Frontend API Routes];
+  B --> C[FastAPI Backend];
+  C --> D[LangGraph Query Flow];
+  C --> E[PostgreSQL];
+  C --> F[Qdrant or Vector Retrieval Layer];
+  D --> G[Ollama];
+```
+
+For detailed architecture, see [docs/architecture.md](docs/architecture.md).
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Backend API | FastAPI 0.115+ |
-| Workflow | LangGraph |
-| Vector DB | PostgreSQL 16 + pgvector |
-| Embeddings | Ollama (`mxbai-embed-large`) |
-| Frontend | Next.js, TypeScript, Tailwind CSS |
-| Infrastructure | Podman / Docker Compose |
+- Frontend: Next.js 16, React 19, TypeScript, Tailwind CSS, Jest
+- Backend: FastAPI, SQLAlchemy, LangGraph, PostgreSQL, pgvector
+- AI and retrieval: Ollama, LangGraph workflows, chunking and hybrid retrieval
+- Tooling: Docker or Podman, pytest, Jest
 
 ## Quick Start
 
@@ -51,49 +68,32 @@ The system uses LangGraph for workflow orchestration, PostgreSQL + pgvector for 
 
 - Python 3.11+
 - Node.js 20+
-- Git
-- Podman or Docker
-- [Ollama](https://ollama.com)
+- Docker or Podman
+- PostgreSQL with pgvector
+- Ollama
 
-### 1. Start Postgres with pgvector
+### 1. Start infrastructure
 
 ```bash
 cd infra
-podman compose up -d postgres
+podman compose up -d
 ```
 
-Apply the schema:
-
-```bash
-psql -U postgres -d aicc -f backend/scripts/init_pgvector.sql
-```
-
-### 2. Pull the embedding model
-
-```bash
-ollama pull mxbai-embed-large
-```
-
-### 3. Start the backend
+### 2. Start backend
 
 ```bash
 cd backend
 python -m venv .venv
-# Windows
 .\.venv\Scripts\Activate.ps1
-# macOS / Linux
-source .venv/bin/activate
-
 pip install -U pip
-pip install -e .
-copy .env.example .env   # edit credentials if needed
+pip install -e .[dev]
 python run.py
 ```
 
-Backend: `http://localhost:8000`  
-Docs: `http://localhost:8000/docs`
+Backend base URL: `http://localhost:8000`
+OpenAPI docs: `http://localhost:8000/docs`
 
-### 4. Start the frontend
+### 3. Start frontend
 
 ```bash
 cd frontend
@@ -101,141 +101,109 @@ npm install
 npm run dev
 ```
 
-Frontend: `http://localhost:3000`
+Frontend URL: `http://localhost:3000`
 
-### 5. Run backend tests
+## API & Routes
 
-```bash
-cd backend
-pytest tests/unit -v
+### Backend API summary
+
+- `POST /v1/auth/register`
+- `POST /v1/auth/login`
+- `POST /v1/auth/admin/register`
+- `POST /v1/auth/admin/login`
+- `GET /v1/auth/me`
+- `GET /v1/projects`
+- `POST /v1/projects`
+- `GET /v1/projects/{project_id}/repositories`
+- `POST /v1/projects/{project_id}/repositories`
+- `POST /v1/chat`
+- `POST /v1/chat/stream`
+- `POST /v1/index`
+- `GET /v1/dashboard/me`
+- `GET /v1/admin/users`
+- `GET /v1/admin/repositories`
+- `GET /v1/admin/indexing-status`
+- `GET /v1/admin/system-metrics`
+- `GET /v1/admin/recent-activity`
+- `GET /v1/admin/service-health`
+
+### Frontend routes summary
+
+- `/` landing page
+- `/login` sign in
+- `/register` sign up
+- `/login/admin` admin sign in
+- `/register/admin` admin sign up
+- `/dashboard` authenticated dashboard
+- `/repositories` project and repository management
+- `/chat` repository-scoped AI chat
+- `/admin` admin-only metrics and user management
+
+See [docs/backend.md](docs/backend.md) and [docs/frontend.md](docs/frontend.md) for request formats, flows, and route details.
+
+## Project Structure
+
+```text
+AI-Codebase-Copilot/
+├── README.md
+├── backend/
+│   ├── app/
+│   ├── tests/
+│   ├── pyproject.toml
+│   └── run.py
+├── frontend/
+│   ├── src/
+│   ├── tests/
+│   └── package.json
+├── docs/
+│   ├── README.md
+│   ├── architecture.md
+│   ├── backend.md
+│   ├── frontend.md
+│   ├── flow.md
+│   ├── Coverage.md
+│   └── testing.md
+└── infra/
 ```
-
-### 6. Run frontend tests
-
-```bash
-cd frontend
-npm test
-```
-
-## Configuration
-
-All settings live in `backend/.env` (copy from `.env.example`):
-
-| Variable | Default | Description |
-|---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_EMBEDDING_MODEL` | `mxbai-embed-large` | Embedding model name |
-| `VECTOR_DIM` | `1024` | Must match the model's output dimension |
-| `POSTGRES_HOST` | `localhost` | Postgres host |
-| `POSTGRES_DB` | `aicc` | Database name |
-| `POSTGRES_USER` | `postgres` | Database user |
-| `POSTGRES_PASSWORD` | `mypassword` | Database password |
-| `REPO_CACHE_DIR` | `.repo_cache` | Where cloned repos are stored |
-| `MAX_INDEX_FILE_SIZE_BYTES` | `1000000` | Skip files larger than this |
-
-> `VECTOR_DIM` must match the selected Ollama model. `mxbai-embed-large` outputs 1024 dimensions.
-
-## API
-
-### `POST /v1/index`
-
-Index a repository. Provide either `repo_path` or `repo_url`.
-
-```json
-{ "repo_id": "myrepo", "repo_path": "/absolute/path/to/repo" }
-```
-
-```json
-{ "repo_id": "myrepo", "repo_url": "https://github.com/owner/repo.git", "repo_ref": "main" }
-```
-
-Response: `{ "indexed_chunks": 1842, "status": "ok" }`
-
-### `POST /v1/search`
-
-```json
-{ "repo_id": "myrepo", "query": "Where is the authentication middleware?", "top_k": 8 }
-```
-
-Returns ranked code chunks with `path`, `symbol`, `content`, and `score`.
-
-### `POST /v1/chat`
-
-```json
-{ "repo_id": "myrepo", "query": "What does the planner node do?" }
-```
-
-Returns `answer`, `intent`, and `sources` (retrieved chunks). Intent is classified by keyword matching: `search`, `debug`, `refactor`, `docs`, or `tool`.
-
-### `POST /v1/tools/execute`
-
-Execute a safe tool against the server's working directory.
-
-```json
-{ "tool_name": "git_status", "args": { "repo_path": "." } }
-```
-
-Supported tools: `read_file`, `git_status`, `run_command` (allowlisted prefixes only: `python`, `pytest`, `ruff`, `mypy`, `git`).
-
-## Architecture
-
-```
-User query
-    │
-    ▼
- Planner node          (keyword intent routing)
-    │
-    ├─ intent=tool ──► Tool Execution node
-    │
-    └─ otherwise ────► Retrieval node
-                          │ hybrid_retrieve (dense + lexical + RRF)
-                          ▼
-                    Code Understanding node
-                          │
-                    ┌─────┴─────┐
-              refactor?         otherwise
-                    │                │
-             Patch node         Answer node
-                    └─────┬─────┘
-                          ▼
-                       Response
-```
-
-**Storage** — single `code_chunks` table in PostgreSQL with:
-- `embedding VECTOR(1024)` indexed with HNSW for fast cosine search
-- `content` indexed with GIN for full-text search
-- Upsert-on-conflict so re-indexing is safe to run repeatedly
-
-**Chunking** — Python files use AST-level chunking (function and class nodes). Other supported file types use tree-sitter chunking.
 
 ## Testing
+
+### Backend
 
 ```bash
 cd backend
 pytest tests/ -v
 ```
 
+### Frontend
+
 ```bash
 cd frontend
 npm test
+npm run test:coverage
 ```
 
-## Utility Scripts
+See [docs/testing.md](docs/testing.md) for test scope and commands.
 
-Reset the database (drops all indexed data):
+## Contribution Notes
 
-```bash
-python backend/scripts/clear_db.py
-```
+- Keep documentation updates in the same change as code updates.
+- Keep the root README concise; add technical detail under `docs/`.
+- Prefer minimal, focused changes over broad rewrites.
 
-## Contributing
+## Documentation
 
-1. Fork the repository
-2. Create a feature branch
-3. Add or update tests for any behaviour change
-4. Open a pull request
-4. Open PR with clear scope and rationale
+- [docs/README.md](docs/README.md) documentation index
+- [docs/architecture.md](docs/architecture.md) system architecture and data flow
+- [docs/backend.md](docs/backend.md) backend setup, APIs, and operational notes
+- [docs/frontend.md](docs/frontend.md) frontend routes, proxies, and user flows
+- [Project.md](Project.md) product scope, implementation status, and roadmap
+- [docs/testing.md](docs/testing.md) test commands and coverage notes
 
-## License
+---
 
-Add your preferred license before publishing to GitHub.
+<div align="center">
+
+[Issues](https://github.com/Harshdev625/AI-Codebase-Copilot/issues) • [Pull Requests](https://github.com/Harshdev625/AI-Codebase-Copilot/pulls)
+
+</div>

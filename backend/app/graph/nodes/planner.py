@@ -9,7 +9,7 @@ def planner_node(state: CopilotState) -> CopilotState:
         intent = "debug"
     elif any(token in query for token in ["run ", "terminal", "git "]):
         intent = "tool"
-    elif any(token in query for token in ["document", "docs", "readme"]):
+    elif any(token in query for token in ["document", "docs", "readme", "architecture", "design", "structure", "overview"]):
         intent = "docs"
     else:
         intent = "search"

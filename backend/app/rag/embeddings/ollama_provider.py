@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.core.http_client import get_http_client
 
 
 class OllamaEmbeddingProvider:
@@ -15,7 +16,7 @@ class OllamaEmbeddingProvider:
 
     def embed_text(self, text: str) -> list[float]:
         try:
-            response = httpx.post(
+            response = get_http_client().post(
                 f"{self.base_url}/api/embeddings",
                 json={"model": self.model, "prompt": text},
                 timeout=self.timeout,
