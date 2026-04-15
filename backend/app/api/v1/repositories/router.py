@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import json
-import uuid
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
     PaginationParams,
+    assert_scopes,
     ensure_repository_access,
     ensure_repository_access_by_id,
     get_current_user,
     get_pagination,
+    resolve_pagination,
 )
 from app.core.api_response import paginated_success_response, success_response
 from app.db.database import get_db_session
@@ -26,17 +27,15 @@ from app.models.api_models import (
     ProjectResponse,
     RepositoryResponse,
 )
+from app.services.saas_service import (
+    enforce_indexing_limit,
+    enforce_project_creation_limit,
+    enforce_repository_limit,
+)
 from . import service
 
 router = APIRouter(tags=["repositories"])
 logger = logging.getLogger(__name__)
-
-
-def _resolve_pagination(pagination: Any) -> PaginationParams:
-    if isinstance(pagination, PaginationParams):
-        return pagination
-    return PaginationParams(limit=50, offset=0)
-
 
 def _safe_count_from_result(result: Any) -> int:
     scalar_fn = getattr(result, "scalar", None)
@@ -119,7 +118,8 @@ def list_projects(
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(current_user, {"project:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("projects_list - request user_id=%s", current_user["id"])
     total_result = session.execute(
         text(
@@ -154,6 +154,12 @@ def create_project(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_user, {"project:write"})
+    enforce_project_creation_limit(
+        session,
+        user_id=str(current_user["id"]),
+        plan_tier=str(current_user.get("plan_tier") or "free"),
+    )
     logger.info("projects_create - request user_id=%s name=%s", current_user["id"], req.name)
     project = service.create_new_project(session, current_user["id"], req.name, req.description)
     return success_response(ProjectResponse(**_to_payload(project)).model_dump(), status_code=status.HTTP_201_CREATED)
@@ -165,7 +171,8 @@ def list_repositories(
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(current_user, {"repository:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("repositories_list - request project_id=%s", project_id)
     service_membership_check(session, project_id, current_user["id"])
 
@@ -196,8 +203,14 @@ def add_repository(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_user, {"repository:write"})
     logger.info("repository_add - request project_id=%s repo_id=%s", project_id, req.repo_id)
     service_membership_check(session, project_id, current_user["id"])
+    enforce_repository_limit(
+        session,
+        project_id=project_id,
+        plan_tier=str(current_user.get("plan_tier") or "free"),
+    )
     try:
         repo = service.add_repository_to_project(
             session, project_id, req.repo_id, req.remote_url, req.local_path, req.default_branch
@@ -210,91 +223,46 @@ def add_repository(
 @router.post("/index", status_code=status.HTTP_202_ACCEPTED)
 def index_repo(
     req: IndexRequest,
-    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_user, {"indexing:write"})
     logger.info("index_start - request repository_id=%s", req.repository_id)
-    snapshot_id = str(uuid.uuid4())
-    indexing_job_id = str(uuid.uuid4())
 
     if req.repository_id:
         repository_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
         repository_row = ensure_repository_access(session, req.repo_id, current_user["id"])
-    
-    repository_db_id = repository_row["id"]
-    effective_repo_id = repository_row.get("repo_id") or repository_row["id"]
-    effective_repo_path = req.repo_path or repository_row.get("local_path")
-    effective_repo_url = req.repo_url or repository_row.get("remote_url")
-    effective_repo_ref = req.repo_ref or repository_row.get("default_branch") or "main"
 
-    # Robust duplicate prevention with FOR UPDATE
-    lock_sql = "SELECT id FROM repositories WHERE id = :repository_id"
-    bind = getattr(session, "bind", None)
-    dialect = getattr(getattr(bind, "dialect", None), "name", None)
-    if dialect and str(dialect).lower() != "sqlite":
-        lock_sql += " FOR UPDATE"
-    session.execute(text(lock_sql), {"repository_id": repository_db_id})
-
-    active_job = session.execute(
-        text(
-            """
-            SELECT id FROM indexing_jobs
-            WHERE repository_id = :repository_id
-              AND status IN ('pending', 'running')
-            LIMIT 1
-            """
-        ),
-        {"repository_id": repository_db_id},
-    ).mappings().first()
-
-    if active_job:
-        raise HTTPException(status_code=409, detail="Indexing already in progress for this repository")
-
-    # Queue indexing
-    session.execute(
-        text(
-            """
-            INSERT INTO repository_snapshots (id, repository_id, commit_sha, branch, index_status)
-            VALUES (:id, :repository_id, :commit_sha, :branch, 'pending')
-            """
-        ),
-        {
-            "id": snapshot_id,
-            "repository_id": repository_db_id,
-            "commit_sha": req.commit_sha,
-            "branch": effective_repo_ref,
-        },
-    )
-    session.execute(
-        text(
-            """
-            INSERT INTO indexing_jobs (id, repository_id, snapshot_id, status, message, started_at)
-            VALUES (:id, :repository_id, :snapshot_id, 'pending', 'Indexing queued', NOW())
-            """
-        ),
-        {
-            "id": indexing_job_id,
-            "repository_id": repository_db_id,
-            "snapshot_id": snapshot_id,
-        },
-    )
-    session.commit()
-
-    background_tasks.add_task(
-        service.trigger_repository_indexing,
-        effective_repo_id,
-        effective_repo_path,
-        effective_repo_url,
-        effective_repo_ref,
-        req.commit_sha,
-        repository_db_id,
-        snapshot_id,
-        indexing_job_id,
+    enforce_indexing_limit(
+        session,
+        user_id=str(current_user["id"]),
+        plan_tier=str(current_user.get("plan_tier") or "free"),
+        project_id=str(repository_row.get("project_id") or "") or None,
     )
 
-    return success_response(IndexResponse(indexed_chunks=0, snapshot_id=snapshot_id).model_dump(), status_code=status.HTTP_202_ACCEPTED)
+    try:
+        queued = service.queue_repository_indexing(
+            session,
+            repository_row=repository_row,
+            commit_sha=req.commit_sha,
+            repo_path=req.repo_path,
+            repo_url=req.repo_url,
+            repo_ref=req.repo_ref,
+            source="manual",
+            prevent_duplicate_commit=False,
+            initiated_by_user_id=str(current_user["id"]),
+        )
+    except service.IndexingAlreadyRunningError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("index_start - queue dispatch failed repository_id=%s", repository_row["id"])
+        raise HTTPException(status_code=503, detail="Failed to enqueue indexing job") from exc
+
+    return success_response(
+        IndexResponse(indexed_chunks=0, snapshot_id=queued["snapshot_id"]).model_dump(),
+        status_code=status.HTTP_202_ACCEPTED,
+    )
 
 @router.get("/index/progress/{snapshot_id}")
 def get_index_progress(
@@ -303,8 +271,33 @@ def get_index_progress(
     session: Session = Depends(get_db_session),
 ) -> dict:
     logger.info("index_progress - request snapshot_id=%s", snapshot_id)
+    ownership_row = session.execute(
+        text(
+            """
+            SELECT rs.id
+            FROM repository_snapshots rs
+            JOIN repositories r ON r.id = rs.repository_id
+            JOIN project_memberships pm ON pm.project_id = r.project_id
+            WHERE rs.id = :snapshot_id AND pm.user_id = :user_id
+            LIMIT 1
+            """
+        ),
+        {"snapshot_id": snapshot_id, "user_id": current_user["id"]},
+    ).first()
+    if not ownership_row:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
     # Check for stalls first
     data = service.check_indexing_timeout_and_stalls(session, snapshot_id)
+    if not data and ownership_row is not None:
+        if hasattr(ownership_row, "_mapping"):
+            candidate = dict(ownership_row._mapping)
+        elif isinstance(ownership_row, dict):
+            candidate = dict(ownership_row)
+        else:
+            candidate = {}
+        if {"index_status", "status", "stats"}.intersection(candidate.keys()):
+            data = candidate
     if not data:
         raise HTTPException(status_code=404, detail="Snapshot not found")
         

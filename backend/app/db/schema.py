@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 
 APP_DROP_SQL = """
 DROP TABLE IF EXISTS system_logs CASCADE;
+DROP TABLE IF EXISTS billing_events CASCADE;
+DROP TABLE IF EXISTS usage_events CASCADE;
+DROP TABLE IF EXISTS usage_counters CASCADE;
+DROP TABLE IF EXISTS api_keys CASCADE;
 DROP TABLE IF EXISTS code_graph_edges CASCADE;
 DROP TABLE IF EXISTS code_chunks CASCADE;
 DROP TABLE IF EXISTS agent_runs CASCADE;
@@ -37,9 +41,24 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   full_name TEXT,
   role TEXT NOT NULL DEFAULT 'USER',
+  plan_tier TEXT NOT NULL DEFAULT 'free',
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  last_used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(key_prefix, key_hash)
 );
 
 CREATE TABLE IF NOT EXISTS admins (
@@ -63,6 +82,42 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   membership_role TEXT NOT NULL DEFAULT 'owner',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(project_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS usage_counters (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  project_scope TEXT NOT NULL DEFAULT '__global__',
+  metric TEXT NOT NULL,
+  period_start DATE NOT NULL,
+  count BIGINT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, project_scope, metric, period_start)
+);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+  project_scope TEXT NOT NULL DEFAULT '__global__',
+  metric TEXT NOT NULL,
+  quantity BIGINT NOT NULL DEFAULT 0,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS billing_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  delivered BOOLEAN NOT NULL DEFAULT FALSE,
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS repositories (
@@ -92,6 +147,7 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
   id TEXT PRIMARY KEY,
   repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
   snapshot_id TEXT REFERENCES repository_snapshots(id) ON DELETE SET NULL,
+  initiated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'queued',
   message TEXT,
   started_at TIMESTAMPTZ,
@@ -184,6 +240,16 @@ CREATE TABLE IF NOT EXISTS system_logs (
 
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_admins_created_at ON admins(created_at);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
+CREATE INDEX IF NOT EXISTS idx_usage_counters_user_id ON usage_counters(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_counters_project_id ON usage_counters(project_id);
+CREATE INDEX IF NOT EXISTS idx_usage_counters_metric_period ON usage_counters(metric, period_start);
+CREATE INDEX IF NOT EXISTS idx_usage_events_user_id ON usage_events(user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_events_project_id ON usage_events(project_id);
+CREATE INDEX IF NOT EXISTS idx_usage_events_metric ON usage_events(metric);
+CREATE INDEX IF NOT EXISTS idx_billing_events_delivered ON billing_events(delivered);
+CREATE INDEX IF NOT EXISTS idx_billing_events_user_id ON billing_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_user ON project_memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_project ON project_memberships(project_id);
 CREATE INDEX IF NOT EXISTS idx_repositories_project_id ON repositories(project_id);
@@ -220,6 +286,10 @@ ALTER TABLE IF EXISTS repositories DROP CONSTRAINT IF EXISTS repositories_repo_i
 
 ALTER TABLE IF EXISTS chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT;
 ALTER TABLE IF EXISTS chat_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS plan_tier TEXT NOT NULL DEFAULT 'free';
+ALTER TABLE IF EXISTS indexing_jobs ADD COLUMN IF NOT EXISTS initiated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_users_plan_tier ON users(plan_tier);
 
 UPDATE users
 SET role = CASE
@@ -227,6 +297,13 @@ SET role = CASE
   WHEN LOWER(role) IN ('developer', 'user', 'member') THEN 'USER'
   WHEN UPPER(role) IN ('ADMIN', 'USER') THEN UPPER(role)
   ELSE role
+END;
+
+UPDATE users
+SET plan_tier = CASE
+  WHEN LOWER(plan_tier) IN ('free', 'pro', 'enterprise') THEN LOWER(plan_tier)
+  WHEN UPPER(role) = 'ADMIN' THEN 'enterprise'
+  ELSE 'free'
 END;
 
 INSERT INTO admins (user_id)

@@ -1,29 +1,23 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 import httpx
 import redis
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.dependencies import PaginationParams, get_pagination, require_roles
+from app.api.dependencies import PaginationParams, assert_scopes, get_pagination, require_roles, resolve_pagination
 from app.core.api_response import paginated_success_response, success_response
 from app.core.config import settings
 from app.core.roles import ROLE_ADMIN, ROLE_USER, normalize_role
 from app.db.database import get_db_session
+from app.observability.metrics import runtime_metrics
 
 router = APIRouter(tags=["admin"])
 logger = logging.getLogger(__name__)
-
-
-def _resolve_pagination(pagination: Any) -> PaginationParams:
-    if isinstance(pagination, PaginationParams):
-        return pagination
-    return PaginationParams(limit=50, offset=0)
 
 
 class UserRoleUpdate(BaseModel):
@@ -46,7 +40,8 @@ def admin_users(
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(_, {"admin:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("admin_users - request received")
     total = int(session.execute(text("SELECT COUNT(*) FROM users")).scalar() or 0)
     rows = session.execute(
@@ -80,7 +75,8 @@ def admin_repositories(
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(_, {"admin:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("admin_repositories - request received")
     total = int(session.execute(text("SELECT COUNT(*) FROM repositories")).scalar() or 0)
     rows = session.execute(
@@ -110,7 +106,8 @@ def admin_indexing_status(
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(_, {"admin:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("admin_indexing_status - request received")
     total = int(session.execute(text("SELECT COUNT(*) FROM indexing_jobs")).scalar() or 0)
     rows = session.execute(
@@ -141,6 +138,7 @@ def update_user_role(
     current_admin: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_admin, {"admin:write"})
     """
     Update user role. Only admins can promote/demote users.
     Similar to AWS/GCP/Azure admin management.
@@ -183,6 +181,7 @@ def update_user_status(
     current_admin: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_admin, {"admin:write"})
     """Activate or deactivate a user account."""
     logger.info("admin_update_user_status - request received target_user_id=%s", user_id)
     # Prevent self-deactivation
@@ -221,6 +220,7 @@ def delete_user(
     current_admin: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(current_admin, {"admin:write"})
     """Delete a user account (admin only). Cascades to delete projects."""
     logger.info("admin_delete_user - request received target_user_id=%s", user_id)
     # Prevent self-deletion
@@ -247,6 +247,7 @@ def admin_system_metrics(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
 ) -> dict:
+    assert_scopes(_, {"admin:read"})
     logger.info("admin_system_metrics - request received")
     counts = session.execute(
         text(
@@ -264,13 +265,257 @@ def admin_system_metrics(
     return success_response(payload)
 
 
+@router.get("/admin/runtime-metrics")
+def admin_runtime_metrics(
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+) -> dict:
+    assert_scopes(_, {"admin:read"})
+    logger.info("admin_runtime_metrics - request received")
+    payload = runtime_metrics.snapshot()
+    logger.info("admin_runtime_metrics - response sent counters=%s latencies=%s", len(payload.get("counters", {})), len(payload.get("latencies", {})))
+    return success_response(payload)
+
+
+def _safe_pct(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round((numerator / denominator) * 100.0, 2)
+
+
+@router.get("/admin/telemetry")
+def admin_telemetry(
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(_, {"admin:read"})
+    logger.info("admin_telemetry - request received")
+
+    queue_row = session.execute(
+        text(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'pending') AS queue_depth,
+              COUNT(*) FILTER (WHERE status = 'running') AS indexing_running,
+              COUNT(*) FILTER (WHERE status = 'failed') AS failed_jobs,
+              COUNT(*) AS total_jobs
+            FROM indexing_jobs
+            """
+        )
+    ).mappings().first()
+
+    active_stream_row = session.execute(
+        text(
+            """
+            SELECT COUNT(*) AS active_streams
+            FROM agent_runs
+            WHERE status IN ('running', 'streaming', 'in_progress')
+              AND started_at >= NOW() - INTERVAL '30 minutes'
+            """
+        )
+    ).mappings().first()
+
+    retrieval_row = session.execute(
+        text(
+            """
+            WITH recent_runs AS (
+              SELECT
+                CASE
+                  WHEN (diagnostics->>'retrieved_count') ~ '^[0-9]+$' THEN (diagnostics->>'retrieved_count')::int
+                  WHEN (diagnostics->>'retrieval_count') ~ '^[0-9]+$' THEN (diagnostics->>'retrieval_count')::int
+                  ELSE 0
+                END AS retrieved_count
+              FROM agent_runs
+              WHERE started_at >= NOW() - INTERVAL '24 hours'
+            )
+            SELECT
+              COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE retrieved_count >= 1) AS hit_ge_1,
+              COUNT(*) FILTER (WHERE retrieved_count >= 3) AS hit_ge_3,
+              COUNT(*) FILTER (WHERE retrieved_count = 0) AS hit_zero
+            FROM recent_runs
+            """
+        )
+    ).mappings().first()
+
+    latency_row = session.execute(
+        text(
+            """
+            WITH completed_runs AS (
+              SELECT EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000.0 AS latency_ms
+              FROM agent_runs
+              WHERE finished_at IS NOT NULL
+                AND started_at IS NOT NULL
+                AND status = 'completed'
+                AND finished_at >= NOW() - INTERVAL '24 hours'
+            )
+            SELECT
+              COALESCE(AVG(latency_ms), 0) AS avg_latency_ms,
+              COALESCE(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms), 0) AS p50_latency_ms,
+              COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) AS p95_latency_ms
+            FROM completed_runs
+            """
+        )
+    ).mappings().first()
+
+    latency_samples_rows = session.execute(
+        text(
+            """
+            SELECT EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000.0 AS latency_ms
+            FROM agent_runs
+            WHERE finished_at IS NOT NULL
+              AND started_at IS NOT NULL
+              AND finished_at >= NOW() - INTERVAL '24 hours'
+            ORDER BY finished_at DESC
+            LIMIT 30
+            """
+        )
+    ).mappings().all()
+
+    queue_depth = int((queue_row or {}).get("queue_depth") or 0)
+    indexing_running = int((queue_row or {}).get("indexing_running") or 0)
+    failed_jobs = int((queue_row or {}).get("failed_jobs") or 0)
+    total_jobs = int((queue_row or {}).get("total_jobs") or 0)
+
+    retrieval_total = int((retrieval_row or {}).get("total") or 0)
+    retrieval_hit_ge_1 = int((retrieval_row or {}).get("hit_ge_1") or 0)
+    retrieval_hit_ge_3 = int((retrieval_row or {}).get("hit_ge_3") or 0)
+    retrieval_hit_zero = int((retrieval_row or {}).get("hit_zero") or 0)
+
+    payload = {
+        "active_streams": int((active_stream_row or {}).get("active_streams") or 0),
+        "indexing_queue_depth": queue_depth,
+        "indexing_running": indexing_running,
+        "queue_health": {
+            "total_jobs": total_jobs,
+            "failed_jobs": failed_jobs,
+            "failure_rate_pct": _safe_pct(failed_jobs, total_jobs),
+        },
+        "retrieval_hit_profile": {
+            "sample_size": retrieval_total,
+            "top1_hit_rate_pct": _safe_pct(retrieval_hit_ge_1, retrieval_total),
+            "top3_hit_rate_pct": _safe_pct(retrieval_hit_ge_3, retrieval_total),
+            "zero_hit_rate_pct": _safe_pct(retrieval_hit_zero, retrieval_total),
+        },
+        "model_latency": {
+            "avg_ms": round(float((latency_row or {}).get("avg_latency_ms") or 0.0), 2),
+            "p50_ms": round(float((latency_row or {}).get("p50_latency_ms") or 0.0), 2),
+            "p95_ms": round(float((latency_row or {}).get("p95_latency_ms") or 0.0), 2),
+            "samples_ms": [
+                round(float(row.get("latency_ms") or 0.0), 2)
+                for row in reversed([dict(item) for item in latency_samples_rows])
+            ],
+        },
+    }
+    logger.info("admin_telemetry - response sent")
+    return success_response(payload)
+
+
+@router.get("/admin/architecture-graph")
+def admin_architecture_graph(
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+    repository_id: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=100, le=1500),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(_, {"admin:read"})
+    logger.info("admin_architecture_graph - request received repository_id=%s limit=%s", repository_id, limit)
+    rows = session.execute(
+        text(
+            """
+            SELECT
+              e.source_chunk_id,
+              e.target_chunk_id,
+              e.edge_type,
+              e.weight,
+              COALESCE(e.repository_id, sc.repository_id, tc.repository_id) AS repository_id,
+              sc.path AS source_path,
+              sc.symbol AS source_symbol,
+              sc.language AS source_language,
+              sc.chunk_type AS source_chunk_type,
+              tc.path AS target_path,
+              tc.symbol AS target_symbol,
+              tc.language AS target_language,
+              tc.chunk_type AS target_chunk_type
+            FROM code_graph_edges e
+            JOIN code_chunks sc ON sc.id = e.source_chunk_id
+            JOIN code_chunks tc ON tc.id = e.target_chunk_id
+            WHERE (
+              :repository_id IS NULL
+              OR e.repository_id = :repository_id
+              OR sc.repository_id = :repository_id
+              OR tc.repository_id = :repository_id
+            )
+            ORDER BY e.created_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"repository_id": repository_id, "limit": limit},
+    ).mappings().all()
+
+    nodes_by_id: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+
+    for row in rows:
+        item = dict(row)
+        src_id = str(item.get("source_chunk_id"))
+        tgt_id = str(item.get("target_chunk_id"))
+
+        if src_id and src_id not in nodes_by_id:
+            nodes_by_id[src_id] = {
+                "id": src_id,
+                "path": item.get("source_path"),
+                "symbol": item.get("source_symbol") or "module",
+                "language": item.get("source_language") or "",
+                "chunk_type": item.get("source_chunk_type") or "generic",
+                "repository_id": item.get("repository_id"),
+            }
+
+        if tgt_id and tgt_id not in nodes_by_id:
+            nodes_by_id[tgt_id] = {
+                "id": tgt_id,
+                "path": item.get("target_path"),
+                "symbol": item.get("target_symbol") or "module",
+                "language": item.get("target_language") or "",
+                "chunk_type": item.get("target_chunk_type") or "generic",
+                "repository_id": item.get("repository_id"),
+            }
+
+        edges.append(
+            {
+                "id": f"{src_id}:{tgt_id}:{item.get('edge_type')}",
+                "source": src_id,
+                "target": tgt_id,
+                "edge_type": item.get("edge_type") or "reference",
+                "weight": float(item.get("weight") or 1.0),
+            }
+        )
+
+    payload = {
+        "repository_id": repository_id,
+        "nodes": list(nodes_by_id.values()),
+        "edges": edges,
+        "stats": {
+            "node_count": len(nodes_by_id),
+            "edge_count": len(edges),
+        },
+    }
+    logger.info(
+        "admin_architecture_graph - response sent repository_id=%s nodes=%s edges=%s",
+        repository_id,
+        payload["stats"]["node_count"],
+        payload["stats"]["edge_count"],
+    )
+    return success_response(payload)
+
+
 @router.get("/admin/recent-activity")
 def admin_recent_activity(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    pagination = _resolve_pagination(pagination)
+    assert_scopes(_, {"admin:read"})
+    pagination = resolve_pagination(pagination)
     logger.info("admin_recent_activity - request received")
     indexing_jobs = session.execute(
         text(
@@ -338,7 +583,8 @@ def admin_recent_activity(
 def admin_service_health(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
     session: Session = Depends(get_db_session),
-) -> list[dict]:
+) -> dict:
+    assert_scopes(_, {"admin:read"})
     logger.info("admin_service_health - request received")
     def _ok() -> dict:
         return {"status": "online", "error": None}
@@ -387,3 +633,72 @@ def admin_service_health(
         ]
     logger.info("admin_service_health - response sent")
     return success_response(statuses)
+
+
+@router.get("/admin/usage-overview")
+def admin_usage_overview(
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(_, {"admin:read"})
+    row = session.execute(
+        text(
+            """
+            SELECT
+              COALESCE(SUM(CASE WHEN metric = 'requests' THEN count END), 0) AS requests,
+              COALESCE(SUM(CASE WHEN metric = 'queries' THEN count END), 0) AS queries,
+              COALESCE(SUM(CASE WHEN metric = 'index_jobs' THEN count END), 0) AS index_jobs,
+              COALESCE(SUM(CASE WHEN metric = 'llm_tokens_in' THEN count END), 0) AS llm_tokens_in,
+              COALESCE(SUM(CASE WHEN metric = 'llm_tokens_out' THEN count END), 0) AS llm_tokens_out,
+              COALESCE(SUM(CASE WHEN metric = 'indexing_volume_chunks' THEN count END), 0) AS indexing_volume_chunks
+            FROM usage_counters
+            WHERE period_start = CURRENT_DATE
+            """
+        )
+    ).mappings().first()
+
+    plans = session.execute(
+        text(
+            """
+            SELECT plan_tier, COUNT(*) AS users
+            FROM users
+            GROUP BY plan_tier
+            ORDER BY plan_tier
+            """
+        )
+    ).mappings().all()
+
+    return success_response(
+        {
+            "today": dict(row or {}),
+            "plan_distribution": [dict(item) for item in plans],
+        }
+    )
+
+
+@router.get("/admin/billing-events")
+def admin_billing_events(
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+    pagination: PaginationParams = Depends(get_pagination),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(_, {"admin:read"})
+    pagination = resolve_pagination(pagination)
+    total = int(session.execute(text("SELECT COUNT(*) FROM billing_events")).scalar() or 0)
+    rows = session.execute(
+        text(
+            """
+            SELECT id, event_type, user_id, project_id, payload, delivered, delivery_attempts, last_error, created_at
+            FROM billing_events
+            ORDER BY created_at DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        {"limit": pagination.limit, "offset": pagination.offset},
+    ).mappings().all()
+    return paginated_success_response(
+        items=[dict(row) for row in rows],
+        total=total,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )

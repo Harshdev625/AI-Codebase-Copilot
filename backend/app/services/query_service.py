@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 import uuid
 
 from sqlalchemy.orm import Session
@@ -11,7 +12,11 @@ from sqlalchemy import text
 
 from app.graph.workflow import compiled_graph
 from app.llm.model_router import get_model_router
+from app.llm.prompt_builder import BASE_SYSTEM_PROMPT, build_context_packet
+from app.observability.metrics import runtime_metrics
+from app.rag.retrieval.service import get_retrieval_service
 from app.services.cache_service import get_cache_service
+from app.services.saas_service import record_query_usage
 
 
 logger = logging.getLogger(__name__)
@@ -42,15 +47,30 @@ class QueryService:
         self.session = session
         self.cache = get_cache_service()
         self.model_router = get_model_router()
+        self.retrieval_service = get_retrieval_service(session)
 
-    def run(self, repository_id: str, repo_id: str, query: str, *, user_id: str | None = None, project_id: str | None = None, session_id: str | None = None) -> dict:
+    def run(
+        self,
+        repository_id: str | None,
+        repo_id: str | None,
+        query: str,
+        *,
+        user_id: str | None = None,
+        project_id: str | None = None,
+        session_id: str | None = None,
+        federated: bool = False,
+    ) -> dict:
         logger.info(
-            "query_run - request received repository_id=%s repo_id=%s user_id=%s session_id=%s",
+            "query_run - request received repository_id=%s repo_id=%s project_id=%s user_id=%s session_id=%s federated=%s",
             repository_id,
             repo_id,
+            project_id,
             user_id,
             session_id,
+            federated,
         )
+        run_started = time.perf_counter()
+        runtime_metrics.increment("query_run_total", mode="federated" if federated else "single")
         # Ensure session exists or create new one
         active_session_id = self._ensure_session(session_id, user_id, project_id, repository_id)
 
@@ -61,17 +81,46 @@ class QueryService:
             user_id=user_id,
             project_id=project_id,
             session_id=active_session_id,
+            federated=federated,
         )
         if from_cache:
             logger.info("query_run - completed from cache repository_id=%s repo_id=%s", repository_id, repo_id)
-            result["session_id"] = active_session_id
+            if user_id and project_id:
+                result["session_id"] = active_session_id
+            runtime_metrics.increment("query_cache_hits_total", mode="federated" if federated else "single")
+            runtime_metrics.observe_ms(
+                "query_run_latency_ms",
+                (time.perf_counter() - run_started) * 1000.0,
+                mode="federated" if federated else "single",
+                stage="cache",
+            )
             return result
+
+        patch_proposal = result.get("patch_proposal")
+        if isinstance(patch_proposal, dict) and patch_proposal.get("diff"):
+            result["answer"] = str(patch_proposal.get("summary") or "Patch proposal ready for review.")
+            result["session_id"] = active_session_id
+            return self.finalize_result(
+                repository_id,
+                repo_id,
+                result,
+                cache_key,
+                user_id=user_id,
+                project_id=project_id,
+                session_id=active_session_id,
+            )
 
         deterministic_answer = self.build_deterministic_answer(query, result)
         if deterministic_answer is not None:
             result["answer"] = deterministic_answer
             result["session_id"] = active_session_id
             logger.info("query_run - deterministic answer used repository_id=%s", repository_id)
+            runtime_metrics.observe_ms(
+                "query_run_latency_ms",
+                (time.perf_counter() - run_started) * 1000.0,
+                mode="federated" if federated else "single",
+                stage="deterministic",
+            )
             return self.finalize_result(
                 repository_id,
                 repo_id,
@@ -83,9 +132,21 @@ class QueryService:
             )
 
         try:
-            llm_answer = self.model_router.chat(prompt=query, context=assembled_context)
+            with runtime_metrics.timer("llm_chat_latency_ms", mode="federated" if federated else "single"):
+                try:
+                    llm_answer = self.model_router.chat(
+                        prompt=query,
+                        context=assembled_context,
+                        system_prompt=BASE_SYSTEM_PROMPT,
+                    )
+                except TypeError:
+                    llm_answer = self.model_router.chat(
+                        prompt=query,
+                        context=assembled_context,
+                    )
         except RuntimeError as exc:
             logger.exception("LLM call failed repo_id=%s repository_id=%s", repo_id, repository_id)
+            runtime_metrics.increment("llm_chat_errors_total", mode="federated" if federated else "single")
             raise LLMUnavailableError(f"Language model unavailable: {exc}") from exc
 
         if not llm_answer.strip():
@@ -100,6 +161,12 @@ class QueryService:
             repo_id,
             len(llm_answer),
         )
+        runtime_metrics.observe_ms(
+            "query_run_latency_ms",
+            (time.perf_counter() - run_started) * 1000.0,
+            mode="federated" if federated else "single",
+            stage="llm",
+        )
         return self.finalize_result(
             repository_id,
             repo_id,
@@ -112,13 +179,14 @@ class QueryService:
 
     def prepare_generation(
         self,
-        repository_id: str,
-        repo_id: str,
+        repository_id: str | None,
+        repo_id: str | None,
         query: str,
         *,
         user_id: str | None = None,
         project_id: str | None = None,
         session_id: str | None = None,
+        federated: bool = False,
     ) -> tuple[dict, str, str, bool]:
         logger.debug(
             "query_prepare - start repository_id=%s repo_id=%s user_id=%s session_id=%s",
@@ -133,20 +201,46 @@ class QueryService:
 
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-        cache_key = f"chat:v2:{repository_id}:{query_hash}:{history_hash}"
+        mode_key = "federated" if federated else "single"
+        scope_key = project_id if federated else repository_id
+        cache_key = f"chat:v3:{mode_key}:{scope_key}:{query_hash}:{history_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
             logger.debug("QueryService cache hit repo_id=%s repository_id=%s", repo_id, repository_id)
             return cached, "", cache_key, True
 
+        if federated and project_id:
+            return self._prepare_federated_generation(
+                project_id=project_id,
+                query=query,
+                history=history,
+                cache_key=cache_key,
+            )
+
+        if not repository_id or not repo_id:
+            raise NoIndexedContextError("Repository context missing. Select a repository or use project federation.")
+
         state = {
             "repo_id": repo_id,
             "repository_id": repository_id,
+            "project_id": project_id,
             "query": query,
             "session": self.session,
             "history": history,
         }
         result = self._invoke_graph_with_trace(state)
+        proposal = self._build_patch_proposal_from_state(result)
+        if proposal:
+            result["patch_proposal"] = proposal
+
+        if not result.get("retrieved_context"):
+            retrieved = self.retrieval_service.retrieve_repository(
+                repository_id=repository_id,
+                query=query,
+                top_k=8,
+            )
+            if retrieved:
+                result["retrieved_context"] = retrieved
 
         snippets = result.get("retrieved_context", [])[:6]
         if not snippets:
@@ -155,21 +249,12 @@ class QueryService:
                 "No indexed context found for this query. Index the repository first and retry."
             )
 
-        context_parts = []
-        if history:
-            history_lines = ["Conversation history:"]
-            for item in history:
-                history_lines.append(f"User: {item['query']}")
-                history_lines.append(f"Assistant: {item['answer']}")
-                history_lines.append("")
-            context_parts.append("\n".join(history_lines).strip())
-
-        for snippet in snippets:
-            path = snippet.get("path", "unknown")
-            symbol = snippet.get("symbol") or "module"
-            content = snippet.get("content", "")
-            context_parts.append(f"File: {path} | Symbol: {symbol}\n{content}")
-        assembled_context = "\n\n---\n\n".join(context_parts)
+        assembled_context, source_index = build_context_packet(
+            query=query,
+            snippets=snippets,
+            history=history,
+        )
+        result["source_index"] = source_index
         logger.debug(
             "query_prepare - context assembled repository_id=%s snippets=%s context_chars=%s",
             repository_id,
@@ -177,6 +262,55 @@ class QueryService:
             len(assembled_context),
         )
         return result, assembled_context, cache_key, False
+
+    def _prepare_federated_generation(
+        self,
+        *,
+        project_id: str,
+        query: str,
+        history: list[dict],
+        cache_key: str,
+    ) -> tuple[dict, str, str, bool]:
+        snippets = self.retrieval_service.retrieve_project(
+            project_id=project_id,
+            query=query,
+            top_k=8,
+            per_repo_k=6,
+        )
+        if not snippets:
+            raise NoIndexedContextError("No indexed context found in this project. Index repositories and retry.")
+
+        assembled_context, source_index = build_context_packet(
+            query=query,
+            snippets=snippets[:8],
+            history=history,
+        )
+        result = {
+            "intent": "search",
+            "retrieval_strategy": "project_federation",
+            "retrieved_context": snippets,
+            "source_index": source_index,
+        }
+        return result, assembled_context, cache_key, False
+
+    def _build_patch_proposal_from_state(self, state: dict) -> dict | None:
+        patch_text = str(state.get("patch") or "").strip()
+        if not patch_text:
+            return None
+        query = str(state.get("query") or "").strip()
+        summary = str(state.get("refactor_plan") or state.get("analysis") or "Patch proposal generated.").strip()
+        files: list[str] = []
+        for line in patch_text.splitlines():
+            if line.startswith("+++ b/"):
+                files.append(line.replace("+++ b/", "", 1).strip())
+
+        return {
+            "title": f"Proposed change: {query[:72]}" if query else "Proposed code change",
+            "summary": summary,
+            "diff": patch_text,
+            "files": files,
+            "intent": "patch_generation",
+        }
 
     def build_deterministic_answer(self, query: str, result: dict) -> str | None:
         """Return a deterministic location answer with concrete code excerpts."""
@@ -303,8 +437,8 @@ class QueryService:
 
     def finalize_result(
         self,
-        repository_id: str,
-        repo_id: str,
+        repository_id: str | None,
+        repo_id: str | None,
         result: dict,
         cache_key: str,
         *,
@@ -319,6 +453,34 @@ class QueryService:
         self.cache.set_json(cache_key, safe_result)
         logger.debug("query_finalize - cache stored repository_id=%s key=%s", repository_id, cache_key)
 
+        if user_id:
+            try:
+                record_query_usage(
+                    self.session,
+                    user_id=str(user_id),
+                    project_id=project_id,
+                    query=str(safe_result.get("query") or ""),
+                    answer=str(safe_result.get("answer") or ""),
+                    retrieved_count=len(list(safe_result.get("retrieved_context", []) or [])),
+                    auto_commit=True,
+                )
+            except Exception:
+                logger.exception("query_finalize - usage tracking failed")
+
+        try:
+            self._record_agent_run(
+                user_id=user_id,
+                project_id=project_id,
+                repo_id=str(repo_id or ""),
+                repository_id=str(repository_id or ""),
+                query=str(safe_result.get("query") or ""),
+                intent=str(safe_result.get("intent") or "unknown"),
+                answer=str(safe_result.get("answer") or ""),
+                sources=safe_result.get("retrieved_context", []) or [],
+            )
+        except Exception:
+            logger.error("query_finalize - failed to record agent run", exc_info=True)
+
         # Record to persistent messages table
         if session_id:
             try:
@@ -329,6 +491,8 @@ class QueryService:
                     metadata={
                         "intent": str(safe_result.get("intent") or "unknown"),
                         "sources": safe_result.get("retrieved_context", []) or [],
+                        "source_index": safe_result.get("source_index", []) or [],
+                        "proposal": safe_result.get("patch_proposal"),
                     }
                 )
             except Exception:
@@ -342,7 +506,13 @@ class QueryService:
         )
         return safe_result
 
-    def _ensure_session(self, session_id: str | None, user_id: str | None, project_id: str | None, repository_id: str) -> str:
+    def _ensure_session(
+        self,
+        session_id: str | None,
+        user_id: str | None,
+        project_id: str | None,
+        repository_id: str | None,
+    ) -> str:
         """Verifies if a session exists, or creates a new one if needed."""
         if not user_id or not project_id:
              # Fallback for anonymous or system calls
@@ -393,6 +563,8 @@ class QueryService:
         """Loads previous turns from the messages table for context."""
         if not session_id:
             return []
+        if not hasattr(self.session, "execute"):
+            return []
 
         rows = self.session.execute(
             text(
@@ -416,6 +588,9 @@ class QueryService:
 
     def _persist_message_turn(self, session_id: str, query: str, answer: str, metadata: dict) -> None:
         """Saves a user query and assistant response as linked messages."""
+        if not hasattr(self.session, "execute") or not hasattr(self.session, "commit"):
+            return
+
         user_msg_id = str(uuid.uuid4())
         asst_msg_id = str(uuid.uuid4())
 
@@ -461,6 +636,12 @@ class QueryService:
             "answer": answer,
             "sources": sources[:10],
             "model": getattr(self.model_router, "chat_model", None),
+            "retrieved_count": len(sources),
+            "confidence": (
+                self._safe_float((sources[0].get("rerank_score") if sources else 0.0), default=0.0)
+                or self._safe_float((sources[0].get("federation_score") if sources else 0.0), default=0.0)
+                or self._safe_float((sources[0].get("score") if sources else 0.0), default=0.0)
+            ),
         }
 
         self.session.execute(
@@ -482,6 +663,12 @@ class QueryService:
         )
         self.session.commit()
         logger.debug("query_record_agent_run - persisted run_id=%s repository_id=%s", run_id, repository_id)
+
+    def _safe_float(self, value: object, *, default: float) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
 
     def _invoke_graph_with_trace(self, state: dict) -> dict:
         run_trace: list[dict] = []

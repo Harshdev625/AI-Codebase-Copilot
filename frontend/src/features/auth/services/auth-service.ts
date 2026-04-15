@@ -15,13 +15,13 @@ const unwrap = <T>(response: { data: ApiEnvelope<T> }): T => {
 };
 
 export const authService = {
-  login: async (payload: LoginPayload): Promise<AuthTokenResponse> => {
-    const response = await apiClient.post<ApiEnvelope<AuthTokenResponse>>('/auth/login', payload);
+  login: async (payload: LoginPayload, endpoint = '/auth/login'): Promise<AuthTokenResponse> => {
+    const response = await apiClient.post<ApiEnvelope<AuthTokenResponse>>(endpoint, payload);
     return unwrap(response);
   },
 
-  register: async (payload: RegisterPayload): Promise<User> => {
-    const response = await apiClient.post<ApiEnvelope<User>>('/auth/register', payload);
+  register: async (payload: RegisterPayload, endpoint = '/auth/register'): Promise<User> => {
+    const response = await apiClient.post<ApiEnvelope<User>>(endpoint, payload);
     return unwrap(response);
   },
 

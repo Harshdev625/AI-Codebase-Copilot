@@ -23,7 +23,7 @@ from app.core.config import settings
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
-from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.rag.embeddings.provider import embed_text_cached, get_embedding_provider, validate_embedding_dimension
 from app.rag.retrieval.code_graph import rebuild_code_graph
 from app.services.qdrant_service import QdrantService
 
@@ -374,9 +374,206 @@ class IndexingService:
                         continue
                     yield file_path
 
+    def _get_previous_completed_commit(self, repository_id: str, snapshot_id: str | None) -> str | None:
+        row = self.session.execute(
+            text(
+                """
+                SELECT commit_sha
+                FROM repository_snapshots
+                WHERE repository_id = :repository_id
+                  AND index_status = 'completed'
+                  AND (:snapshot_id IS NULL OR id <> :snapshot_id)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ),
+            {"repository_id": repository_id, "snapshot_id": snapshot_id},
+        ).mappings().first()
+        if not row:
+            return None
+        value = str(row.get("commit_sha") or "").strip()
+        return value or None
+
+    def _git_commit_exists(self, repo_root: Path, commit_sha: str) -> bool:
+        if not commit_sha:
+            return False
+        if not (repo_root / ".git").exists():
+            return False
+        try:
+            self._run_git(["-C", str(repo_root), "cat-file", "-e", f"{commit_sha}^{{commit}}"], timeout=60)
+            return True
+        except Exception:
+            return False
+
+    def _collect_git_diff_paths(
+        self,
+        repo_root: Path,
+        base_commit: str,
+        target_commit: str,
+    ) -> tuple[set[str], set[str]]:
+        if not (repo_root / ".git").exists():
+            raise RuntimeError("Repository is not a git checkout; cannot run incremental diff")
+        if not self._git_commit_exists(repo_root, base_commit):
+            raise RuntimeError(f"Base commit not available locally: {base_commit}")
+        if not self._git_commit_exists(repo_root, target_commit):
+            raise RuntimeError(f"Target commit not available locally: {target_commit}")
+
+        result = self._run_git(
+            [
+                "-C",
+                str(repo_root),
+                "diff",
+                "--name-status",
+                "--find-renames",
+                f"{base_commit}..{target_commit}",
+            ],
+            timeout=180,
+        )
+
+        changed_paths: set[str] = set()
+        deleted_paths: set[str] = set()
+        for line in (result.stdout or "").splitlines():
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            status_token = parts[0].strip().upper() if parts else ""
+            if status_token.startswith("R") and len(parts) >= 3:
+                old_path = parts[1].strip().replace("\\", "/")
+                new_path = parts[2].strip().replace("\\", "/")
+                if old_path:
+                    deleted_paths.add(old_path)
+                if new_path:
+                    changed_paths.add(new_path)
+                continue
+
+            if len(parts) < 2:
+                continue
+            rel_path = parts[-1].strip().replace("\\", "/")
+            if not rel_path:
+                continue
+            if status_token.startswith("D"):
+                deleted_paths.add(rel_path)
+            else:
+                changed_paths.add(rel_path)
+
+        return changed_paths, deleted_paths
+
+    def _filter_incremental_files(
+        self,
+        repo_root: Path,
+        spec: PathSpec,
+        changed_paths: set[str],
+    ) -> list[Path]:
+        files: list[Path] = []
+        for rel_path in sorted(changed_paths):
+            file_path = repo_root / rel_path
+            if not file_path.exists() or not file_path.is_file():
+                continue
+            if self._is_ignored(spec, repo_root, file_path):
+                continue
+            if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
+                continue
+            if self._is_low_signal_file(file_path, repo_root):
+                continue
+            if file_path.stat().st_size > settings.max_index_file_size_bytes:
+                continue
+            files.append(file_path)
+        return files
+
+    def _delete_all_repository_chunks(self, repository_id: str) -> None:
+        try:
+            self.qdrant.delete_points_by_repository(repository_id)
+        except Exception:
+            logger.warning("index_delete_qdrant - repository purge failed repository_id=%s", repository_id)
+        try:
+            self.session.execute(
+                text("DELETE FROM code_chunks WHERE repository_id = :repository_id"),
+                {"repository_id": repository_id},
+            )
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+
+    def _delete_repository_chunks_for_paths(
+        self,
+        repository_id: str,
+        repo_root: Path,
+        relative_paths: set[str],
+    ) -> None:
+        if not relative_paths:
+            return
+
+        stmt = text(
+            """
+            DELETE FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND (
+                path = :abs_path
+                OR path = :rel_path
+                OR path LIKE :unix_suffix
+                OR path LIKE :win_suffix
+              )
+            """
+        )
+        query_ids_stmt = text(
+            """
+            SELECT id
+            FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND (
+                path = :abs_path
+                OR path = :rel_path
+                OR path LIKE :unix_suffix
+                OR path LIKE :win_suffix
+              )
+            """
+        )
+        point_ids: set[str] = set()
+
+        try:
+            for rel in sorted(relative_paths):
+                normalized_rel = rel.replace("\\", "/").lstrip("/")
+                if not normalized_rel:
+                    continue
+
+                abs_path = str((repo_root / normalized_rel).resolve())
+                windows_rel = normalized_rel.replace("/", "\\")
+                params = {
+                    "repository_id": repository_id,
+                    "abs_path": abs_path,
+                    "rel_path": normalized_rel,
+                    "unix_suffix": f"%/{normalized_rel}",
+                    "win_suffix": f"%\\{windows_rel}",
+                }
+
+                id_rows = self.session.execute(query_ids_stmt, params).mappings().all()
+                for row in id_rows:
+                    chunk_id = str(row.get("id") or "").strip()
+                    if chunk_id:
+                        point_ids.add(chunk_id)
+
+                self.session.execute(stmt, params)
+
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
+            raise
+
+        if point_ids:
+            try:
+                self.qdrant.delete_points_by_ids(list(point_ids))
+            except Exception:
+                logger.warning(
+                    "index_delete_qdrant - path purge failed repository_id=%s point_count=%s",
+                    repository_id,
+                    len(point_ids),
+                )
+
     def __init__(self, session: Session) -> None:
         self.session = session
         self.embedder = get_embedding_provider()
+        self._prefer_cached_embeddings = self.embedder.__class__.__name__ == "OllamaEmbeddingProvider"
         self.qdrant = QdrantService()
         # Progress context for long-running store phase (set by index_repository).
         self._active_indexing_job_id: str | None = None
@@ -478,6 +675,7 @@ class IndexingService:
         repo_ref: str | None = None,
         indexing_job_id: str | None = None,
         snapshot_id: str | None = None,
+        full_reindex: bool = False,
     ) -> int:
         logger.info(
             "index_repository - start repo_id=%s repository_id=%s commit_sha=%s",
@@ -500,12 +698,106 @@ class IndexingService:
             self._update_progress(indexing_job_id, 0, 0, "Discovering files...", snapshot_id=snapshot_id)
 
             chunks: list[CodeChunk] = []
-            file_list = list(self._iter_indexable_files(root, ignore_spec))
+            file_list: list[Path]
+            changed_paths: set[str] = set()
+            deleted_paths: set[str] = set()
+
+            indexing_mode = "full"
+            mode_reason = "full reindex"
+            force_full_reindex = bool(full_reindex or settings.indexing_force_full_reindex)
+
+            can_attempt_incremental = (
+                not force_full_reindex
+                and settings.indexing_incremental_enabled
+                and repository_id is not None
+                and bool(str(commit_sha).strip())
+                and str(commit_sha).strip() != "local-working-copy"
+            )
+
+            if can_attempt_incremental:
+                previous_commit = self._get_previous_completed_commit(str(repository_id), snapshot_id)
+                if previous_commit and previous_commit != commit_sha:
+                    try:
+                        changed_paths, deleted_paths = self._collect_git_diff_paths(
+                            root,
+                            previous_commit,
+                            commit_sha,
+                        )
+                        file_list = self._filter_incremental_files(root, ignore_spec, changed_paths)
+                        indexing_mode = "incremental"
+                        mode_reason = (
+                            f"changed_paths={len(changed_paths)} deleted_paths={len(deleted_paths)} "
+                            f"from={previous_commit[:10]}"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "index_repository - incremental fallback repo_id=%s reason=%s",
+                            repo_id,
+                            self._format_process_error(exc, "incremental diff unavailable"),
+                        )
+                        file_list = list(self._iter_indexable_files(root, ignore_spec))
+                        indexing_mode = "full"
+                        mode_reason = "incremental fallback to full"
+                elif previous_commit == commit_sha:
+                    file_list = []
+                    indexing_mode = "incremental"
+                    mode_reason = "no code changes since previous indexed commit"
+                else:
+                    file_list = list(self._iter_indexable_files(root, ignore_spec))
+                    indexing_mode = "full"
+                    mode_reason = "no previous completed snapshot"
+            else:
+                file_list = list(self._iter_indexable_files(root, ignore_spec))
+                if force_full_reindex:
+                    mode_reason = "forced full reindex"
+                elif not settings.indexing_incremental_enabled:
+                    mode_reason = "incremental disabled"
+                elif not repository_id:
+                    mode_reason = "missing repository_id for incremental mode"
+                else:
+                    mode_reason = "non-commit indexing request"
+
             total_files = len(file_list)
             self._active_total_files = total_files
-            logger.info("index_repository - files discovered repo_id=%s total_files=%s", repo_id, total_files)
-            logger.info("indexing_progress - repo_id=%s stage=discover total_files=%s", repo_id, total_files)
-            self._update_progress(indexing_job_id, 0, total_files, f"Found {total_files} files to index", snapshot_id=snapshot_id)
+            logger.info(
+                "index_repository - files discovered repo_id=%s mode=%s total_files=%s reason=%s",
+                repo_id,
+                indexing_mode,
+                total_files,
+                mode_reason,
+            )
+            logger.info(
+                "indexing_progress - repo_id=%s stage=discover mode=%s total_files=%s",
+                repo_id,
+                indexing_mode,
+                total_files,
+            )
+            self._update_progress(
+                indexing_job_id,
+                0,
+                total_files,
+                f"{indexing_mode.title()} indexing selected: {total_files} files",
+                snapshot_id=snapshot_id,
+                extra_stats={
+                    "mode": indexing_mode,
+                    "mode_reason": mode_reason,
+                    "changed_paths": len(changed_paths),
+                    "deleted_paths": len(deleted_paths),
+                },
+            )
+
+            if repository_id:
+                if indexing_mode == "full":
+                    self._delete_all_repository_chunks(str(repository_id))
+                else:
+                    paths_to_refresh = set(changed_paths)
+                    paths_to_refresh.update(deleted_paths)
+                    paths_to_refresh.update(
+                        fp.relative_to(root).as_posix()
+                        for fp in file_list
+                        if fp.exists()
+                    )
+                    self._delete_repository_chunks_for_paths(str(repository_id), root, paths_to_refresh)
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
                 try:
@@ -610,6 +902,7 @@ class IndexingService:
                 snapshot_id=snapshot_id,
                 extra_stats={
                     "stage": "storing",
+                    "mode": indexing_mode,
                     "total_chunks": len(chunks),
                     "stored_chunks": 0,
                 },
@@ -767,7 +1060,10 @@ class IndexingService:
 
             for chunk in batch:
                 try:
-                    embedding = self.embedder.embed_text(chunk.content)
+                    if self._prefer_cached_embeddings:
+                        embedding = embed_text_cached(chunk.content)
+                    else:
+                        embedding = self.embedder.embed_text(chunk.content)
                     validate_embedding_dimension(embedding)
                     embeddings_by_id[chunk.id] = embedding
                 except Exception:

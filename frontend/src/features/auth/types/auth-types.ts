@@ -14,4 +14,5 @@ export interface LoginPayload {
 
 export interface RegisterPayload extends LoginPayload {
   full_name?: string;
+  admin_secret_key?: string;
 }

@@ -11,6 +11,8 @@ export interface User {
   email: string;
   full_name?: string;
   role: 'USER' | 'ADMIN';
+  plan_tier?: 'free' | 'pro' | 'enterprise';
+  token_scopes?: string[];
   is_active: boolean;
   created_at?: string;
 }

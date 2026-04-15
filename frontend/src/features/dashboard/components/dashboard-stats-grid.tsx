@@ -131,9 +131,31 @@ export function DashboardStatsGrid() {
   }
 
   const metrics = summary?.metrics as Record<string, number> | undefined;
+  const usage = summary?.usage;
+  const queryUsed = usage?.usage_today?.queries ?? 0;
+  const queryLimit = usage?.limits?.queries_per_day ?? 0;
+  const queryPct = queryLimit > 0 ? Math.min(100, Math.round((queryUsed / queryLimit) * 100)) : 0;
+  const planLabel = String(usage?.plan_tier || 'free').toUpperCase();
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-white/6 shadow-premium">
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between rounded-2xl border border-white/8 bg-[hsl(240,18%,7%)] px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Plan</span>
+          <span className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-cyan-200">
+            {planLabel}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+          <span className="font-semibold text-zinc-200 tabular-nums">{queryUsed}</span>
+          <span>/</span>
+          <span className="tabular-nums">{queryLimit}</span>
+          <span>queries today</span>
+          <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] font-bold text-zinc-300">{queryPct}%</span>
+        </div>
+      </div>
+
+      <div className="relative overflow-hidden rounded-3xl border border-white/6 shadow-premium">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/5">
         {STAT_CONFIG.map((cfg, i) => (
           <StatCard
@@ -147,6 +169,7 @@ export function DashboardStatsGrid() {
             delay={i * 80}
           />
         ))}
+      </div>
       </div>
     </div>
   );

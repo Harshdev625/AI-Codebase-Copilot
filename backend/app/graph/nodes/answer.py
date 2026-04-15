@@ -14,6 +14,7 @@ def answer_node(state: CopilotState) -> CopilotState:
     verification = state.get("verification", {})
     tools = state.get("tool_results", [])
     patch = state.get("patch", "")
+    patch_proposal = state.get("patch_proposal", {})
 
     parts = [analysis] if analysis else []
     if refactor_plan:
@@ -24,6 +25,11 @@ def answer_node(state: CopilotState) -> CopilotState:
         parts.append("Tool results: " + " | ".join([t.get("output", "") for t in tools]))
     if patch:
         parts.append("Patch suggestion:\n" + patch)
+    if isinstance(patch_proposal, dict) and patch_proposal.get("diff"):
+        parts.append(
+            "Patch proposal ready:\n"
+            + str(patch_proposal.get("summary") or "Review the generated diff proposal.")
+        )
     if verification:
         parts.append(
             "Verification: "

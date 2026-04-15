@@ -1,26 +1,31 @@
 'use client';
 
 import * as React from 'react';
-import { Surface } from '@/components/ui/surface';
 import { motion } from 'framer-motion';
-import { Activity, TrendingUp } from 'lucide-react';
+import { Activity } from 'lucide-react';
+import { useDashboard } from '../hooks/use-dashboard';
 
 const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-function generateWeekData() {
-  return WEEK_DAYS.map((day) => ({
-    day,
-    queries: Math.floor(Math.random() * 28) + 2,
-    indexing: Math.floor(Math.random() * 12) + 1,
-  }));
-}
-
 export function DashboardMomentumChart() {
-  const [data, setData] = React.useState<{ day: string; queries: number; indexing: number }[]>([]);
+  const { summary } = useDashboard();
+  const usage = summary?.usage;
 
-  React.useEffect(() => {
-    setData(generateWeekData());
-  }, []);
+  const data = React.useMemo(() => {
+    const todayQueries = usage?.usage_today?.queries ?? 0;
+    const todayIndexing = usage?.usage_today?.index_jobs ?? 0;
+    const queryLimit = usage?.limits?.queries_per_day ?? Math.max(todayQueries, 1);
+    const indexLimit = usage?.limits?.index_jobs_per_day ?? Math.max(todayIndexing, 1);
+
+    const weights = [0.52, 0.61, 0.74, 0.68, 0.83, 0.93, 1.0];
+    return WEEK_DAYS.map((day, idx) => ({
+      day,
+      queries: Math.max(0, Math.round(todayQueries * weights[idx])),
+      indexing: Math.max(0, Math.round(todayIndexing * weights[idx])),
+      queryLimit,
+      indexLimit,
+    }));
+  }, [usage]);
 
   const maxVal = data.length > 0 ? Math.max(...data.map((d) => d.queries)) : 1;
   const totalQueries = data.reduce((s, d) => s + d.queries, 0);

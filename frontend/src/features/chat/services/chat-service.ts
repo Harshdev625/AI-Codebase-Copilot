@@ -1,14 +1,5 @@
 import { apiClient, ApiEnvelope, PaginatedData } from '@/lib/api';
-import { ChatResponse } from '../types/chat-types';
-import { useAuthStore } from '@/store/auth-store';
-import { getAccessToken } from '@/lib/auth';
-
-interface AskPayload {
-  repository_id?: string;
-  repo_id?: string;
-  query: string;
-  session_id?: string;
-}
+import { AskPayload, ChatResponse } from '../types/chat-types';
 
 type PaginatedEnvelope<T> = ApiEnvelope<PaginatedData<T>>;
 
@@ -64,14 +55,19 @@ export const chatService = {
   },
 
   streamChat: async (payload: AskPayload, onEvent: (event: any) => void) => {
-    const token = useAuthStore.getState().token ?? getAccessToken();
-    const response = await fetch(`${apiClient.defaults.baseURL}/chat/stream`, {
+    const streamPath = '/chat/stream';
+    const configuredBase = String(apiClient.defaults.baseURL || '').replace(/\/$/, '');
+    const streamUrl = /^https?:\/\//i.test(configuredBase)
+      ? `${configuredBase}${streamPath}`
+      : `${streamPath}`;
+
+    const response = await fetch(streamUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(payload),
+      credentials: 'include',
     });
 
     if (!response.ok) {

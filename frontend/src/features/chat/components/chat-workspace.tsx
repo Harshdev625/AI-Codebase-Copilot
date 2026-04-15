@@ -15,6 +15,8 @@ import { cn } from '@/lib/utils';
 import {
   ChevronLeft,
   ChevronRight,
+  FileCode2,
+  GitPullRequest,
   History,
   Loader2,
   Menu,
@@ -26,7 +28,9 @@ import {
 } from 'lucide-react';
 
 interface ChatWorkspaceProps {
-  repositoryId: string;
+  projectId?: string;
+  repositoryId?: string;
+  mode: 'project' | 'repository';
 }
 
 interface ChatSession {
@@ -42,6 +46,63 @@ const QUICK_PROMPTS = [
   'Explain auth and role checks end-to-end.',
   'List dead code and modernization opportunities.',
 ];
+
+type ParsedSource = {
+  repositoryName: string;
+  filePath: string;
+  score?: number;
+};
+
+type ParsedProposal = {
+  title: string;
+  summary: string;
+  diff: string;
+  files: string[];
+};
+
+function parseSources(message: ChatMessage): ParsedSource[] {
+  const sources = message.metadata?.sources;
+  if (!Array.isArray(sources)) {
+    return [];
+  }
+
+  return sources
+    .map((source) => {
+      const repositoryName =
+        (typeof source.repository_name === 'string' && source.repository_name) ||
+        (typeof source.repo_id === 'string' && source.repo_id) ||
+        (typeof source.repository_id === 'string' && source.repository_id) ||
+        'Repository';
+
+      const filePath =
+        (typeof source.file_path === 'string' && source.file_path) ||
+        (typeof source.path === 'string' && source.path) ||
+        'Unknown file';
+
+      const score = typeof source.score === 'number' ? source.score : undefined;
+
+      return {
+        repositoryName,
+        filePath,
+        score,
+      };
+    })
+    .filter((source) => source.filePath !== 'Unknown file');
+}
+
+function parseProposal(message: ChatMessage): ParsedProposal | undefined {
+  const proposal = message.metadata?.proposal;
+  if (!proposal || !proposal.diff) {
+    return undefined;
+  }
+
+  return {
+    title: proposal.title || 'Proposed Patch',
+    summary: proposal.summary || 'Generated patch proposal from repository context.',
+    diff: proposal.diff,
+    files: proposal.files || [],
+  };
+}
 
 function SessionItem({
   session,
@@ -104,8 +165,16 @@ function SessionItem({
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onApproveProposal,
+}: {
+  message: ChatMessage;
+  onApproveProposal: (proposal: ParsedProposal) => void;
+}) {
   const isUser = message.role === 'user';
+  const sources = parseSources(message);
+  const proposal = parseProposal(message);
 
   return (
     <div className={cn('w-full', isUser ? 'flex justify-end' : 'block')}>
@@ -123,6 +192,62 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
       )}
+
+      {!isUser && proposal && (
+        <div className="mt-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <GitPullRequest className="h-4 w-4 text-cyan-300" />
+              <p className="text-sm font-semibold text-cyan-100">{proposal.title}</p>
+            </div>
+            <Button
+              type="button"
+              onClick={() => onApproveProposal(proposal)}
+              className="h-8 rounded-lg bg-cyan-400 px-3 text-xs font-semibold text-zinc-950 hover:bg-cyan-300"
+            >
+              Approve &amp; Draft PR
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-zinc-300">{proposal.summary}</p>
+          {proposal.files.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {proposal.files.slice(0, 6).map((file) => (
+                <span
+                  key={file}
+                  className="rounded-md border border-zinc-700 bg-zinc-900/70 px-2 py-1 text-[11px] text-zinc-300"
+                >
+                  {file}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/80">
+            <pre className="max-h-72 whitespace-pre p-3 text-[11px] leading-5 text-zinc-300">
+              {proposal.diff}
+            </pre>
+          </div>
+        </div>
+      )}
+
+      {!isUser && sources.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {sources.slice(0, 8).map((source) => (
+            <div
+              key={`${source.repositoryName}:${source.filePath}`}
+              className="rounded-lg border border-zinc-700 bg-zinc-900/70 px-2.5 py-1.5 text-[11px] text-zinc-300"
+            >
+              <div className="flex items-center gap-1.5 text-cyan-300">
+                <FileCode2 className="h-3 w-3" />
+                <span className="font-medium">{source.repositoryName}</span>
+              </div>
+              <p className="mt-0.5 max-w-[280px] truncate text-zinc-400">{source.filePath}</p>
+              {typeof source.score === 'number' && (
+                <p className="mt-0.5 text-zinc-500">score: {source.score.toFixed(2)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       
       {isUser && (
         <div className="mt-1 text-right text-[11px] text-zinc-500">You</div>
@@ -134,7 +259,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
+export function ChatWorkspace({ projectId, repositoryId, mode }: ChatWorkspaceProps) {
   const {
     messages,
     sendMessage,
@@ -143,7 +268,11 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
     clearMessages,
     currentSessionId,
     selectSession,
-  } = useChat(repositoryId);
+  } = useChat({
+    projectId,
+    repositoryId,
+    mode,
+  });
 
   const [query, setQuery] = React.useState('');
   const [sessions, setSessions] = React.useState<ChatSession[]>([]);
@@ -199,7 +328,8 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
 
   const handleSend = async () => {
     const trimmed = query.trim();
-    if (!trimmed || isSending || isHistoryLoading || !repositoryId) {
+    const hasScope = mode === 'project' ? !!projectId : !!repositoryId;
+    if (!trimmed || isSending || isHistoryLoading || !hasScope) {
       return;
     }
 
@@ -208,6 +338,22 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
     textareaRef.current?.focus();
     void fetchSessions();
   };
+
+  const handleApproveProposal = React.useCallback(async (proposal: ParsedProposal) => {
+    try {
+      if (proposal.diff) {
+        await navigator.clipboard.writeText(proposal.diff);
+      }
+      toast.success('Proposal Approved', 'Diff copied. Drafting PR brief in chat.');
+    } catch {
+      toast.info('Proposal Approved', 'Drafting PR brief in chat.');
+    }
+
+    await sendMessage(
+      `Approved proposal: ${proposal.title}\n` +
+        `Generate a pull request draft with title, summary, risk checklist, and test plan based on this patch.`
+    );
+  }, [sendMessage, toast]);
 
   const handleSelectSession = (sessionId: string) => {
     if (isSending) {
@@ -242,7 +388,11 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
     textareaRef.current?.focus();
   };
 
-  const canSend = !!query.trim() && !isSending && !isHistoryLoading && !!repositoryId;
+  const canSend =
+    !!query.trim() &&
+    !isSending &&
+    !isHistoryLoading &&
+    (mode === 'project' ? !!projectId : !!repositoryId);
 
   const sidebarContent = (
     <>
@@ -346,9 +496,11 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
               </div>
             ) : messages.length === 0 ? (
               <div className="mt-10">
-                <p className="text-lg font-semibold text-zinc-100">Ask anything about this repository</p>
+                <p className="text-lg font-semibold text-zinc-100">
+                  {mode === 'project' ? 'Ask across all repositories in this project' : 'Ask anything about this repository'}
+                </p>
                 <p className="mt-2 text-sm text-zinc-400">
-                  Session history is now synchronized per thread. Pick an old conversation from the sidebar or start a new one.
+                  Session history is synchronized per thread. Pick an old conversation from the sidebar or start a new one.
                 </p>
                 <div className="mt-5 grid gap-2 sm:grid-cols-2">
                   {QUICK_PROMPTS.map((prompt) => (
@@ -364,7 +516,13 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
                 </div>
               </div>
             ) : (
-              messages.map((message) => <MessageBubble key={message.id} message={message} />)
+              messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onApproveProposal={handleApproveProposal}
+                />
+              ))
             )}
 
             {isSending && (
@@ -389,7 +547,11 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
                     void handleSend();
                   }
                 }}
-                placeholder={repositoryId ? 'Message Copilot about this codebase...' : 'Choose a repository first...'}
+                placeholder={
+                  mode === 'project'
+                    ? (projectId ? 'Message Copilot across this project...' : 'Choose a project first...')
+                    : (repositoryId ? 'Message Copilot about this codebase...' : 'Choose a repository first...')
+                }
                 className="max-h-[220px] min-h-[52px] resize-none border-0 bg-transparent px-3 py-2 text-sm leading-6 text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-0"
               />
 

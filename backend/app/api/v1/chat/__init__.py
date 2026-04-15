@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
     PaginationParams,
+    assert_scopes,
     ensure_repository_access,
     ensure_repository_access_by_id,
     get_current_user,
@@ -32,6 +33,7 @@ from app.services.query_service import (
     NoIndexedContextError,
     WorkflowExecutionError,
 )
+from app.services.saas_service import enforce_query_limit
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -159,7 +161,6 @@ def delete_session(
     session.commit()
     return success_response({"deleted": True})
 
-
 @router.post("", response_model=ChatResponse)
 @router.post("/chat", response_model=ChatResponse, include_in_schema=False)
 def chat(
@@ -167,49 +168,99 @@ def chat(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ChatResponse:
+    assert_scopes(current_user, {"chat:query"})
     logger.info(
-        "chat - request received user_id=%s repository_id=%s",
+        "chat - request received user_id=%s repository_id=%s project_id=%s",
         current_user["id"],
         req.repository_id,
+        req.project_id,
     )
-    if req.repository_id:
-        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
-    else:
-        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
-    
+
     try:
         service = QueryService(session)
-        project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
-        try:
+        if req.project_id:
+            membership = session.execute(
+                text(
+                    """
+                    SELECT id
+                    FROM project_memberships
+                    WHERE project_id = :project_id AND user_id = :user_id
+                    LIMIT 1
+                    """
+                ),
+                {"project_id": req.project_id, "user_id": current_user["id"]},
+            ).first()
+            if not membership:
+                raise HTTPException(status_code=403, detail="Not authorized for this project")
+
+            enforce_query_limit(
+                session,
+                user_id=str(current_user["id"]),
+                plan_tier=str(current_user.get("plan_tier") or "free"),
+                project_id=str(req.project_id),
+            )
+
             result = service.run(
-                repository_id=repo_row["id"],
-                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                repository_id=None,
+                repo_id=None,
                 query=req.query,
                 user_id=str(current_user["id"]),
-                project_id=project_id,
+                project_id=str(req.project_id),
                 session_id=req.session_id,
+                federated=True,
             )
-        except TypeError:
-            # Backward compatibility for tests and legacy service signatures.
-            result = service.run(
-                repository_id=repo_row["id"],
-                repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                query=req.query,
+        else:
+            if req.repository_id:
+                repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+            else:
+                repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+            project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
+            enforce_query_limit(
+                session,
+                user_id=str(current_user["id"]),
+                plan_tier=str(current_user.get("plan_tier") or "free"),
+                project_id=project_id,
             )
+            try:
+                result = service.run(
+                    repository_id=repo_row["id"],
+                    repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                    query=req.query,
+                    user_id=str(current_user["id"]),
+                    project_id=project_id,
+                    session_id=req.session_id,
+                )
+            except TypeError:
+                # Backward compatibility for tests and legacy service signatures.
+                result = service.run(
+                    repository_id=repo_row["id"],
+                    repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                    query=req.query,
+                )
     except NoIndexedContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except HTTPException:
+        raise
     except (LLMUnavailableError, EmptyLLMResponseError) as exc:
         raise HTTPException(status_code=503, detail="AI service unavailable.")
     except Exception as exc:
         logger.exception("Chat failed")
-        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.")
+        raise HTTPException(status_code=503, detail="AI service is temporarily unavailable. Please retry shortly.") from exc
 
     return success_response(
         ChatResponse(
             answer=result.get("answer", ""),
             intent=result.get("intent", "unknown"),
             session_id=str(result.get("session_id") or req.session_id or ""),
-            sources=result.get("retrieved_context", []),
+            sources=[
+                *list(result.get("retrieved_context", []) or []),
+                *([
+                    {
+                        "kind": "patch_proposal",
+                        "proposal": result.get("patch_proposal"),
+                    }
+                ] if result.get("patch_proposal") else []),
+            ],
         ).model_dump()
     )
 
@@ -221,18 +272,55 @@ def chat_stream(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> StreamingResponse:
+    assert_scopes(current_user, {"chat:query"})
     logger.info(
-        "chat_stream - request user_id=%s repository_id=%s",
+        "chat_stream - request user_id=%s repository_id=%s project_id=%s",
         current_user["id"],
         req.repository_id,
+        req.project_id,
     )
-    if req.repository_id:
-        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
-    else:
-        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
-    
+
     service = QueryService(session)
-    project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
+    active_repository_id: str | None = None
+    active_repo_id: str | None = None
+    project_id: str | None = None
+
+    if req.project_id:
+        membership = session.execute(
+            text(
+                """
+                SELECT id
+                FROM project_memberships
+                WHERE project_id = :project_id AND user_id = :user_id
+                LIMIT 1
+                """
+            ),
+            {"project_id": req.project_id, "user_id": current_user["id"]},
+        ).first()
+        if not membership:
+            raise HTTPException(status_code=403, detail="Not authorized for this project")
+        project_id = str(req.project_id)
+        enforce_query_limit(
+            session,
+            user_id=str(current_user["id"]),
+            plan_tier=str(current_user.get("plan_tier") or "free"),
+            project_id=project_id,
+        )
+    else:
+        if req.repository_id:
+            repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+        else:
+            repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+        active_repository_id = str(repo_row["id"])
+        active_repo_id = str(repo_row.get("repo_id") or req.repo_id or repo_row["id"])
+        project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
+        enforce_query_limit(
+            session,
+            user_id=str(current_user["id"]),
+            plan_tier=str(current_user.get("plan_tier") or "free"),
+            project_id=project_id,
+        )
+
     active_session_id = req.session_id
     ensure_session = getattr(service, "_ensure_session", None)
     if callable(ensure_session) and project_id is not None:
@@ -240,24 +328,25 @@ def chat_stream(
             req.session_id,
             str(current_user["id"]),
             project_id,
-            str(repo_row["id"]),
+            active_repository_id,
         )
 
     try:
         try:
             result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                repo_row["id"],
-                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                active_repository_id,
+                active_repo_id,
                 req.query,
                 user_id=str(current_user["id"]),
                 project_id=project_id,
                 session_id=active_session_id,
+                federated=bool(req.project_id),
             )
         except TypeError:
             # Test doubles may expose the older prepare_generation signature.
             result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                repo_row["id"],
-                str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+                active_repository_id,
+                active_repo_id,
                 req.query,
             )
     except NoIndexedContextError as exc:
@@ -272,8 +361,8 @@ def chat_stream(
     if deterministic_answer is not None:
         result["answer"] = deterministic_answer
         service.finalize_result(
-            repo_row["id"],
-            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            active_repository_id,
+            active_repo_id,
             result,
             cache_key,
             user_id=str(current_user["id"]),
@@ -289,12 +378,50 @@ def chat_stream(
 
         if from_cache:
             yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
-            yield _event_success({"type": "done", "intent": intent, "sources": sources})
+            yield _event_success(
+                {
+                    "type": "done",
+                    "intent": intent,
+                    "sources": sources,
+                    "proposal": result.get("patch_proposal"),
+                    "trace": result.get("run_trace", []),
+                }
+            )
             return
 
         if deterministic_answer is not None:
             yield _event_success({"type": "chunk", "delta": deterministic_answer})
-            yield _event_success({"type": "done", "intent": intent, "sources": sources})
+            yield _event_success(
+                {
+                    "type": "done",
+                    "intent": intent,
+                    "sources": sources,
+                    "proposal": result.get("patch_proposal"),
+                    "trace": result.get("run_trace", []),
+                }
+            )
+            return
+
+        if result.get("patch_proposal"):
+            yield _event_success({"type": "chunk", "delta": str(result.get("answer", "Patch proposal ready."))})
+            service.finalize_result(
+                active_repository_id,
+                active_repo_id,
+                result,
+                cache_key,
+                user_id=str(current_user["id"]),
+                project_id=project_id,
+                session_id=active_session_id,
+            )
+            yield _event_success(
+                {
+                    "type": "done",
+                    "intent": intent,
+                    "sources": sources,
+                    "proposal": result.get("patch_proposal"),
+                    "trace": result.get("run_trace", []),
+                }
+            )
             return
 
         generated_parts: list[str] = []
@@ -309,16 +436,28 @@ def chat_stream(
 
         result["answer"] = "".join(generated_parts)
         service.finalize_result(
-            repo_row["id"],
-            str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            active_repository_id,
+            active_repo_id,
             result,
             cache_key,
             user_id=str(current_user["id"]),
             project_id=project_id,
             session_id=active_session_id,
         )
-        yield _event_success({"type": "done", "intent": intent, "sources": sources})
+        yield _event_success(
+            {
+                "type": "done",
+                "intent": intent,
+                "sources": sources,
+                "proposal": result.get("patch_proposal"),
+                "trace": result.get("run_trace", []),
+            }
+        )
 
-    return StreamingResponse(_iter_stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        _iter_stream(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 

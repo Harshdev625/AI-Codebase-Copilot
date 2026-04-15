@@ -2,14 +2,17 @@
 
 import * as React from 'react';
 import {
-  BrainCircuit, Database, GitBranch, ShieldCheck, Zap,
-  ChevronDown, CheckCircle, Clock, XCircle, History,
-  Plus, MessageSquare,
+  Database,
+  FolderGit2,
+  GitBranch,
+  ChevronDown,
+  CheckCircle,
+  Clock,
+  MessageSquare,
 } from 'lucide-react';
 import { ChatWorkspace } from '@/features/chat/components/chat-workspace';
 import { useProjects, useRepositories } from '@/features/repositories/hooks/use-repositories';
-import { Badge } from '@/components/ui/badge';
-import { Repository } from '@/features/repositories/types/repository-types';
+import { Project, Repository } from '@/features/repositories/types/repository-types';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -25,6 +28,87 @@ function RepoStatusDot({ status }: { status?: string }) {
   if (s === 'failed') return <span className="h-2 w-2 rounded-full bg-red-400 shrink-0" />;
   if (s === 'pending' || s === 'running') return <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse shrink-0" />;
   return <span className="h-2 w-2 rounded-full bg-zinc-600 shrink-0" />;
+}
+
+function ProjectDropdown({
+  projects,
+  selectedId,
+  onSelect,
+  isLoading,
+}: {
+  projects: Project[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  isLoading: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  const selected = projects.find((project) => project.id === selectedId);
+
+  React.useEffect(() => {
+    const fn = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', fn);
+    return () => document.removeEventListener('mousedown', fn);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={isLoading || projects.length === 0}
+        onClick={() => setOpen(!open)}
+        className={cn(
+          'flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold transition-all min-w-0 max-w-[220px]',
+          'bg-white/4 hover:bg-white/6',
+          open
+            ? 'border-cyan-500/50 shadow-[0_0_0_2px_hsl(185,80%,65%,0.15)]'
+            : 'border-white/10 hover:border-white/20',
+          (isLoading || projects.length === 0) && 'opacity-40 cursor-not-allowed'
+        )}
+      >
+        <FolderGit2 className="h-3.5 w-3.5 text-cyan-300 shrink-0" />
+        <span className="text-zinc-200 truncate">{selected?.name || (isLoading ? 'Loading…' : 'Select project')}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 text-zinc-500 shrink-0 transition-transform ml-auto', open && 'rotate-180')} />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.12 }}
+            className="absolute top-full mt-1.5 left-0 z-50 min-w-[240px] rounded-2xl border border-white/10 bg-[hsl(240,18%,8%)] shadow-2xl shadow-black/50 overflow-hidden"
+          >
+            {projects.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => {
+                  onSelect(project.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[12px] font-medium transition-colors',
+                  project.id === selectedId
+                    ? 'bg-cyan-500/12 text-cyan-300'
+                    : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+                )}
+              >
+                <FolderGit2 className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">{project.name}</span>
+                {project.id === selectedId && <CheckCircle className="h-3.5 w-3.5 text-cyan-400 shrink-0" />}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
 }
 
 /* ── Compact repo dropdown ───────────────────────────── */
@@ -115,9 +199,10 @@ function RepoDropdown({
 
 /* ── Chat Page ────────────────────────────────────────── */
 export default function ChatPage() {
-  const { projects } = useProjects();
+  const { projects, isLoading: isProjectsLoading } = useProjects();
   const [selectedProjectId, setSelectedProjectId] = React.useState<string>('');
   const [selectedRepositoryId, setSelectedRepositoryId] = React.useState<string>('');
+  const [queryScope, setQueryScope] = React.useState<'project' | 'repository'>('project');
 
   const { repositories, isLoading } = useRepositories(selectedProjectId);
 
@@ -126,6 +211,10 @@ export default function ChatPage() {
       setSelectedProjectId(projects[0].id);
     }
   }, [projects, selectedProjectId]);
+
+  React.useEffect(() => {
+    setSelectedRepositoryId('');
+  }, [selectedProjectId]);
 
   React.useEffect(() => {
     if (!selectedRepositoryId && repositories.length > 0) {
@@ -155,12 +244,44 @@ export default function ChatPage() {
 
         {/* Repo selector */}
         <div className="flex-shrink-0">
+          <ProjectDropdown
+            projects={projects}
+            selectedId={selectedProjectId}
+            onSelect={setSelectedProjectId}
+            isLoading={isProjectsLoading}
+          />
+        </div>
+
+        <div className="flex-shrink-0">
           <RepoDropdown
             repositories={repositories}
             selectedId={selectedRepositoryId}
             onSelect={setSelectedRepositoryId}
             isLoading={isLoading}
           />
+        </div>
+
+        <div className="flex items-center rounded-lg border border-white/10 bg-white/5 p-1 text-[10px] font-semibold">
+          <button
+            type="button"
+            onClick={() => setQueryScope('project')}
+            className={cn(
+              'rounded-md px-2 py-1 transition-colors',
+              queryScope === 'project' ? 'bg-cyan-500/20 text-cyan-200' : 'text-zinc-400 hover:text-zinc-200'
+            )}
+          >
+            Project Federation
+          </button>
+          <button
+            type="button"
+            onClick={() => setQueryScope('repository')}
+            className={cn(
+              'rounded-md px-2 py-1 transition-colors',
+              queryScope === 'repository' ? 'bg-violet-500/20 text-violet-200' : 'text-zinc-400 hover:text-zinc-200'
+            )}
+          >
+            Single Repo
+          </button>
         </div>
 
         {/* Branch badge — only when selected (hidden on mobile) */}
@@ -199,7 +320,11 @@ export default function ChatPage() {
 
       {/* ── Chat workspace (full height, full width) ─────── */}
       <div className="flex flex-1 overflow-hidden">
-        <ChatWorkspace repositoryId={selectedRepositoryId} />
+        <ChatWorkspace
+          mode={queryScope}
+          projectId={queryScope === 'project' ? selectedProjectId : undefined}
+          repositoryId={queryScope === 'repository' ? selectedRepositoryId : undefined}
+        />
       </div>
     </div>
   );

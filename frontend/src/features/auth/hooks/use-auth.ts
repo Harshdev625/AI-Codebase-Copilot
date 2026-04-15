@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/lib/api';
 import { setAccessToken } from '@/lib/auth';
+import { consumePendingOnboardingEmail, markBrandNewUser, markPendingOnboardingEmail } from '@/store/onboarding-store';
 
 export function useAuth() {
   const queryClient = useQueryClient();
@@ -14,7 +15,7 @@ export function useAuth() {
   const { setAuth, logout, user, isAuthenticated } = useAuthStore();
 
   const loginMutation = useMutation({
-    mutationFn: authService.login,
+    mutationFn: (payload: LoginPayload) => authService.login(payload),
     onSuccess: async (data) => {
       try {
         // Essential: Set token in store so 'me' request has it
@@ -22,6 +23,12 @@ export function useAuth() {
         useAuthStore.setState({ token: data.access_token });
         
         const profile = await authService.me();
+        const shouldTriggerOnboarding =
+          String(profile.role).toUpperCase() === 'USER' && consumePendingOnboardingEmail(profile.email);
+        if (shouldTriggerOnboarding) {
+          markBrandNewUser(profile.id);
+        }
+
         setAuth(profile, data.access_token);
         
         toast.success('Welcome back!', `Logged in as ${profile.email}`);
@@ -46,8 +53,11 @@ export function useAuth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: authService.register,
-    onSuccess: () => {
+    mutationFn: (payload: RegisterPayload) => authService.register(payload),
+    onSuccess: (_data, variables) => {
+      if (variables?.email) {
+        markPendingOnboardingEmail(variables.email);
+      }
       toast.success('Account Created', 'Please log in with your credentials.');
       setTimeout(() => {
         router.push('/login');

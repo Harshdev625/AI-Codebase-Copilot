@@ -20,7 +20,24 @@ logger = logging.getLogger(__name__)
 
 def route_after_retrieval(state: CopilotState) -> str:
     intent = state.get("intent")
-    logger.debug("graph_route_after_retrieval - intent=%s", intent)
+    retrieved = state.get("retrieved_context", [])
+    confidence = float(state.get("confidence", 0.4))
+    logger.debug("graph_route_after_retrieval - intent=%s retrieved=%s confidence=%s", intent, len(retrieved), confidence)
+
+    if not retrieved:
+        if intent == "debug":
+            return "debugger"
+        if intent == "refactor":
+            return "refactor_advisor"
+        if intent == "docs":
+            return "documentation"
+        return "code_understanding"
+
+    if confidence < 0.3 and intent in {"patch_generation", "refactor"}:
+        return "code_understanding"
+
+    if intent == "patch_generation":
+        return "patch_generation"
     if intent == "debug":
         return "debugger"
     if intent == "refactor":
@@ -28,6 +45,14 @@ def route_after_retrieval(state: CopilotState) -> str:
     if intent == "docs":
         return "documentation"
     return "code_understanding"
+
+
+def route_after_analysis(state: CopilotState) -> str:
+    intent = state.get("intent")
+    query = str(state.get("query", "")).lower()
+    if intent == "tool" or query.startswith("run ") or "git status" in query:
+        return "tool_execution"
+    return "verifier"
 
 
 def build_graph():
@@ -52,6 +77,7 @@ def build_graph():
         "retrieval",
         route_after_retrieval,
         {
+            "patch_generation": "patch_generation",
             "debugger": "debugger",
             "refactor_advisor": "refactor_advisor",
             "documentation": "documentation",
@@ -59,11 +85,32 @@ def build_graph():
         },
     )
 
-    graph.add_edge("code_understanding", "tool_execution")
-    graph.add_edge("debugger", "tool_execution")
-    graph.add_edge("documentation", "tool_execution")
+    graph.add_conditional_edges(
+        "code_understanding",
+        route_after_analysis,
+        {
+            "tool_execution": "tool_execution",
+            "verifier": "verifier",
+        },
+    )
+    graph.add_conditional_edges(
+        "debugger",
+        route_after_analysis,
+        {
+            "tool_execution": "tool_execution",
+            "verifier": "verifier",
+        },
+    )
+    graph.add_conditional_edges(
+        "documentation",
+        route_after_analysis,
+        {
+            "tool_execution": "tool_execution",
+            "verifier": "verifier",
+        },
+    )
     graph.add_edge("refactor_advisor", "patch_generation")
-    graph.add_edge("patch_generation", "tool_execution")
+    graph.add_edge("patch_generation", "verifier")
     graph.add_edge("tool_execution", "verifier")
     graph.add_edge("verifier", "answer")
     graph.add_edge("answer", END)

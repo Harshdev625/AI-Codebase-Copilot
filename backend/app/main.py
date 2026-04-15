@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
 import logging
-import threading
 import time
 import uuid
+
+# Import app first to apply Windows multiprocessing patch before RQ imports
+import app  # noqa: F401
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,9 +16,12 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.repositories import router as repositories_router
+from app.api.v1.webhooks import router as webhooks_router
 from app.core.api_response import error_response
 from app.core.config import settings
+from app.core.rate_limiter import get_rate_limiter
 from app.db.schema import ensure_app_schema
+from app.observability.metrics import runtime_metrics
 
 
 def _configure_logging() -> None:
@@ -41,43 +45,9 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT_LOCK = threading.Lock()
-_RATE_LIMIT_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
-
-
-def _client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    if request.client and request.client.host:
-        return str(request.client.host)
-    return "unknown"
-
-
-def _is_rate_limited(request: Request) -> bool:
-    path = request.url.path
-    if any(path.startswith(exempt) for exempt in settings.rate_limit_exempt_paths_list):
-        return False
-    if not path.startswith("/v1"):
-        return False
-
-    now = time.time()
-    window = float(settings.rate_limit_window_seconds)
-    max_requests = int(settings.rate_limit_requests_per_window)
-    key = f"{_client_ip(request)}:{request.method}:{path}"
-
-    with _RATE_LIMIT_LOCK:
-        queue = _RATE_LIMIT_BUCKETS[key]
-        while queue and (now - queue[0]) > window:
-            queue.popleft()
-        if len(queue) >= max_requests:
-            return True
-        queue.append(now)
-    return False
-
-
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version="0.1.0")
+    rate_limiter = get_rate_limiter()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins_list or ["http://localhost:3000"],
@@ -87,6 +57,7 @@ def create_app() -> FastAPI:
     )
     @app.on_event("startup")
     def on_startup() -> None:
+        settings.validate_runtime_configuration()
         logger.info("startup - ensuring database schema")
         ensure_app_schema()
         logger.info("startup - schema ready")
@@ -94,17 +65,21 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())[:12]
-        if _is_rate_limited(request):
+        limited, retry_after_seconds, limiter_identity = rate_limiter.is_limited(request)
+        if limited:
+            runtime_metrics.increment("http_requests_rate_limited_total", path=request.url.path, method=request.method)
             response = error_response(
                 "Rate limit exceeded. Please retry shortly.",
                 status_code=429,
                 error="Too Many Requests",
             )
-            response.headers["Retry-After"] = str(settings.rate_limit_window_seconds)
+            response.headers["Retry-After"] = str(retry_after_seconds or settings.rate_limit_window_seconds)
             response.headers["X-Request-Id"] = request_id
+            response.headers["X-RateLimit-Identity"] = limiter_identity
             return response
 
         started = time.perf_counter()
+        runtime_metrics.increment("http_requests_total", path=request.url.path, method=request.method)
         logger.info(
             "request - request received request_id=%s method=%s path=%s",
             request_id,
@@ -115,6 +90,8 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         except Exception:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
+            runtime_metrics.increment("http_request_errors_total", path=request.url.path, method=request.method)
+            runtime_metrics.observe_ms("http_request_latency_ms", elapsed_ms, path=request.url.path, method=request.method)
             logger.exception(
                 "request - unhandled failure request_id=%s method=%s path=%s elapsed_ms=%s",
                 request_id,
@@ -125,6 +102,13 @@ def create_app() -> FastAPI:
             raise
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        runtime_metrics.observe_ms("http_request_latency_ms", elapsed_ms, path=request.url.path, method=request.method)
+        runtime_metrics.increment(
+            "http_responses_total",
+            path=request.url.path,
+            method=request.method,
+            status=response.status_code,
+        )
         response.headers["X-Request-Id"] = request_id
         logger.info(
             "request - response sent request_id=%s method=%s path=%s status=%s elapsed_ms=%s",
@@ -145,7 +129,7 @@ def create_app() -> FastAPI:
             exc.detail,
         )
         detail = str(exc.detail) if exc.detail is not None else "HTTP request failed"
-        return error_response(detail, status_code=exc.status_code)
+        return error_response(detail, status_code=exc.status_code, error=detail)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -169,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard_router, prefix="/v1")
     app.include_router(chat_router, prefix="/v1/chat")
     app.include_router(repositories_router, prefix="/v1")
+    app.include_router(webhooks_router, prefix="/v1")
     return app
 
 

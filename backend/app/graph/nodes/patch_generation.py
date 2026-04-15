@@ -1,4 +1,5 @@
 import logging
+import re
 
 from app.graph.state import CopilotState
 from app.graph.nodes.common import build_context, llm_try
@@ -11,7 +12,16 @@ def patch_generation_node(state: CopilotState) -> CopilotState:
     logger.debug("graph_patch_generation - request")
     context = state.get("retrieved_context", [])
     if not context:
-        return {"patch": "No patch generated because retrieval returned no context."}
+        return {
+            "patch": "No patch generated because retrieval returned no context.",
+            "patch_proposal": {
+                "title": "No patch proposal generated",
+                "summary": "Retrieval returned no context, so no safe patch could be proposed.",
+                "diff": "",
+                "files": [],
+                "intent": "patch_generation",
+            },
+        }
 
     top = context[0]
     path = top.get("path", "unknown.py")
@@ -20,15 +30,29 @@ def patch_generation_node(state: CopilotState) -> CopilotState:
     generated = ""
     if query or refactor_plan:
         prompt = (
-            "Generate a minimal unified diff patch aligned with the requested refactor/debug goal. "
-            "Output only valid diff text. "
+            "Generate a production-grade unified diff patch aligned with the request. "
+            "Return only diff text beginning with 'diff --git'. "
             f"User request: {query}\n"
             f"Refactor plan: {refactor_plan}"
         )
         generated = llm_try(prompt=prompt, context=build_context(context, limit=4, max_chars=7000))
+
+    generated = generated.strip()
+    if generated.startswith("```"):
+        generated = re.sub(r"^```(?:diff)?\n", "", generated)
+        generated = re.sub(r"\n```$", "", generated)
+
     if generated and generated.startswith("diff --git"):
-        logger.debug("graph_patch_generation - generated diff chars=%s", len(generated))
-        return {"patch": generated}
+        files = [line.replace("+++ b/", "", 1).strip() for line in generated.splitlines() if line.startswith("+++ b/")]
+        proposal = {
+            "title": f"Patch proposal for: {query[:72]}" if query else "Patch proposal",
+            "summary": refactor_plan or "Generated a patch proposal from retrieved context and requested change.",
+            "diff": generated,
+            "files": files,
+            "intent": "patch_generation",
+        }
+        logger.debug("graph_patch_generation - generated structured proposal files=%s", len(files))
+        return {"patch": generated, "patch_proposal": proposal}
 
     patch = (
         "diff --git a/{path} b/{path}\n"
@@ -41,4 +65,13 @@ def patch_generation_node(state: CopilotState) -> CopilotState:
     ).format(path=path)
 
     logger.debug("graph_patch_generation - using fallback patch")
-    return {"patch": patch}
+    return {
+        "patch": patch,
+        "patch_proposal": {
+            "title": f"Patch proposal for: {query[:72]}" if query else "Patch proposal",
+            "summary": "Fallback patch template generated. Review and refine before applying.",
+            "diff": patch,
+            "files": [path],
+            "intent": "patch_generation",
+        },
+    }

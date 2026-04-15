@@ -27,6 +27,8 @@ function StatusDot({ status }: { status?: string }) {
 export function DashboardRecentRepositories() {
   const { summary, isLoading } = useDashboard();
   const router = useRouter();
+  const plan = String(summary?.usage?.plan_tier || 'free').toUpperCase();
+  const maxReposPerProject = summary?.usage?.limits?.max_repositories_per_project ?? 0;
 
   if (isLoading) {
     return (
@@ -52,6 +54,7 @@ export function DashboardRecentRepositories() {
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-zinc-700">No Sources Linked</p>
           <p className="text-[10px] text-zinc-800 mt-1">Connect a repository to begin analysis</p>
+          <p className="text-[10px] text-zinc-700 mt-1">{plan} plan supports up to {maxReposPerProject} repositories per project.</p>
         </div>
         <Button
           size="sm"

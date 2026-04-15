@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { Menu, Bell, LogOut, ChevronRight, Zap } from "lucide-react";
+import { Menu, LogOut, ChevronRight, Zap } from "lucide-react";
+import { NotificationDropdown } from "@/components/navbar/NotificationDropdown";
 
 import { Button } from "@/components/ui/button";
 
@@ -78,16 +79,8 @@ export function TopNavbar({ userEmail, onMenuClick, onSignOut }: TopNavbarProps)
 
             <div className="h-4 w-px bg-white/6 mx-0.5" />
 
-            {/* Notification bell */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="text-zinc-500 hover:text-white hover:bg-white/5 relative"
-              title="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-violet-400 shadow-[0_0_6px_2px_hsl(265,80%,65%,0.7)]" />
-            </Button>
+            {/* Notification dropdown */}
+            <NotificationDropdown />
 
             <div className="h-4 w-px bg-white/6 mx-0.5" />
 

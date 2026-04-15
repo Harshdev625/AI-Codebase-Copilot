@@ -59,6 +59,48 @@ class QdrantService:
             logger.exception("qdrant_upsert - failed collection=%s", self.collection)
             raise RuntimeError(f"Failed to upsert vectors into Qdrant: {exc}") from exc
 
+    def delete_points_by_ids(self, point_ids: list[str]) -> None:
+        if not point_ids:
+            return
+
+        chunk_size = 256
+        try:
+            for start in range(0, len(point_ids), chunk_size):
+                batch = point_ids[start : start + chunk_size]
+                response = get_http_client().post(
+                    f"{self.base_url}/collections/{self.collection}/points/delete",
+                    json={"points": batch},
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+            logger.debug("qdrant_delete_points - success collection=%s points=%s", self.collection, len(point_ids))
+        except httpx.HTTPError as exc:
+            logger.exception("qdrant_delete_points - failed collection=%s", self.collection)
+            raise RuntimeError(f"Failed to delete vectors from Qdrant: {exc}") from exc
+
+    def delete_points_by_repository(self, repository_id: str) -> None:
+        payload = {
+            "filter": {
+                "must": [
+                    {
+                        "key": "repository_id",
+                        "match": {"value": repository_id},
+                    }
+                ]
+            }
+        }
+        try:
+            response = get_http_client().post(
+                f"{self.base_url}/collections/{self.collection}/points/delete",
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            logger.debug("qdrant_delete_repo - success collection=%s repository_id=%s", self.collection, repository_id)
+        except httpx.HTTPError as exc:
+            logger.exception("qdrant_delete_repo - failed repository_id=%s", repository_id)
+            raise RuntimeError(f"Failed to delete repository vectors from Qdrant: {exc}") from exc
+
     def search(self, vector: list[float], repository_id: str, limit: int) -> list[dict[str, Any]]:
         logger.debug(
             "qdrant_search - request collection=%s repository_id=%s limit=%s",

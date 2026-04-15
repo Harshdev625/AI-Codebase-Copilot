@@ -73,6 +73,8 @@ def error_response(message: str, status_code: int, *, error: str | None = None) 
     return JSONResponse(
         status_code=status_code,
         content={
+            "success": False,
+            "data": None,
             "error": error_name,
             "status": status_code,
             "message": message,

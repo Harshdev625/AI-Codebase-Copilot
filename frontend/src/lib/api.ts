@@ -1,12 +1,10 @@
 import axios, { AxiosError, type AxiosResponse } from "axios";
 
 import { getAccessToken, type AuthUser } from "@/lib/auth";
+import { getFrontendApiBase } from "@/lib/api-proxy";
 import { useAuthStore } from "@/store/auth-store";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ??
-  "http://localhost:8000/v1";
+const API_BASE_URL = getFrontendApiBase();
 
 export interface ApiEnvelope<T> {
   success: boolean;
@@ -37,6 +35,28 @@ export interface DashboardSummary {
     projects_count?: number;
     repositories_count?: number;
     indexed_chunks_count?: number;
+    chat_count?: number;
+  };
+  usage?: {
+    plan_tier: "free" | "pro" | "enterprise";
+    limits: {
+      requests_per_day: number;
+      queries_per_day: number;
+      queries_per_project_per_day: number;
+      index_jobs_per_day: number;
+      index_jobs_per_project_per_day: number;
+      indexing_volume_chunks_per_day: number;
+      max_projects: number;
+      max_repositories_per_project: number;
+    };
+    usage_today: {
+      requests: number;
+      queries: number;
+      index_jobs: number;
+      indexing_volume_chunks: number;
+      tokens_in: number;
+      tokens_out: number;
+    };
   };
   recent_repositories: Array<{
     id: string;
@@ -119,6 +139,56 @@ export interface IndexingJob {
   status: string;
   message?: string;
   created_at: string;
+}
+
+export interface AdminTelemetry {
+  active_streams: number;
+  indexing_queue_depth: number;
+  indexing_running: number;
+  queue_health: {
+    total_jobs: number;
+    failed_jobs: number;
+    failure_rate_pct: number;
+  };
+  retrieval_hit_profile: {
+    sample_size: number;
+    top1_hit_rate_pct: number;
+    top3_hit_rate_pct: number;
+    zero_hit_rate_pct: number;
+  };
+  model_latency: {
+    avg_ms: number;
+    p50_ms: number;
+    p95_ms: number;
+    samples_ms: number[];
+  };
+}
+
+export interface ArchitectureGraphNode {
+  id: string;
+  path: string;
+  symbol: string;
+  language: string;
+  chunk_type: string;
+  repository_id?: string | null;
+}
+
+export interface ArchitectureGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  edge_type: string;
+  weight: number;
+}
+
+export interface ArchitectureGraphResponse {
+  repository_id?: string | null;
+  nodes: ArchitectureGraphNode[];
+  edges: ArchitectureGraphEdge[];
+  stats: {
+    node_count: number;
+    edge_count: number;
+  };
 }
 
 export const apiClient = axios.create({
@@ -304,6 +374,25 @@ export const api = {
       const response = await apiClient.get<ApiEnvelope<ServiceHealth[]>>("/admin/service-health");
       return unwrap(response);
     },
+    telemetry: async (): Promise<AdminTelemetry> => {
+      const response = await apiClient.get<ApiEnvelope<AdminTelemetry>>("/admin/telemetry");
+      return unwrap(response);
+    },
+    architectureGraph: async (payload?: {
+      repository_id?: string;
+      limit?: number;
+    }): Promise<ArchitectureGraphResponse> => {
+      const response = await apiClient.get<ApiEnvelope<ArchitectureGraphResponse>>(
+        "/admin/architecture-graph",
+        {
+          params: {
+            repository_id: payload?.repository_id,
+            limit: payload?.limit,
+          },
+        }
+      );
+      return unwrap(response);
+    },
     users: async (): Promise<AdminUser[]> => {
       const response = await apiClient.get<ApiEnvelope<PaginatedData<AdminUser>>>("/admin/users");
       return unwrapItems(response);
@@ -337,3 +426,68 @@ export const api = {
     },
   },
 };
+
+// Backward-compatible helper functions used by legacy tests/components.
+export async function sendChat(payload: { repo_id?: string; repository_id?: string; query: string }) {
+  const token = getAccessToken() ?? "";
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "Failed to call backend.");
+  }
+
+  return response.json();
+}
+
+export async function login(payload: { email: string; password: string }) {
+  const response = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    try {
+      const body = (await response.json()) as { detail?: string; error?: string; message?: string };
+      throw new Error(body.detail || body.error || body.message || "Login failed");
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("Login failed");
+    }
+  }
+
+  return response.json();
+}
+
+export async function getAdminMetrics(token: string) {
+  const response = await fetch("/api/admin/system-metrics", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    try {
+      const body = (await response.json()) as { detail?: string; error?: string; message?: string };
+      throw new Error(body.detail || body.error || body.message || "Failed to load admin metrics");
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("Failed to load admin metrics");
+    }
+  }
+
+  return response.json();
+}

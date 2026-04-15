@@ -21,30 +21,31 @@ class OllamaModelRouter:
         self.timeout = settings.ollama_timeout_seconds
         self.embedder = get_embedding_provider()
 
-    def chat(self, prompt: str, context: str = "") -> str:
+    def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> str:
         logger.debug("ollama_chat - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         full_context = context
         short_context = context[:6000] if context else ""
         last_error: RuntimeError | None = None
+        active_system_prompt = (
+            system_prompt
+            or (
+                "You are AI Codebase Copilot."
+                "\n\nRules:"
+                "\n- Use ONLY the provided code context."
+                "\n- Do NOT assume files or features that are not in the context."
+                "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
+                "\n- If the context is insufficient, say so and list what is missing."
+                "\n- When explaining architecture, output a short module-by-module outline."
+                "\n- For every major claim, include at least one file path that appears in the provided context."
+            )
+        )
 
         for candidate_context in (full_context, short_context):
             user_prompt = prompt if not candidate_context else f"Context:\n{candidate_context}\n\nQuestion:\n{prompt}"
             payload: dict[str, Any] = {
                 "model": self.chat_model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are AI Codebase Copilot."
-                            "\n\nRules:"
-                            "\n- Use ONLY the provided code context."
-                            "\n- Do NOT assume files or features that are not in the context."
-                            "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
-                            "\n- If the context is insufficient, say so and list what is missing."
-                            "\n- When explaining architecture, output a short module-by-module outline."
-                            "\n- For every major claim, include at least one file path that appears in the provided context."
-                        ),
-                    },
+                    {"role": "system", "content": active_system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 "options": {

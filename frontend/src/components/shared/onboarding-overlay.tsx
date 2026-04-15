@@ -43,7 +43,7 @@ const steps: Step[] = [
     badge: 'Step 1 of 3',
     title: 'Create a Project',
     description: 'Projects group related repositories together. Start by creating your first project — give it a meaningful name like "Backend Services" or "Mobile App".',
-    detail: 'Projects help you organize multiple repositories and switch context quickly when chatting.',
+    detail: 'Projects also define usage scope for SaaS limits and billing attribution, so keep boundaries intentional.',
     cta: 'Create my first project',
     ctaHref: '/repositories',
     color: 'text-indigo-500',
@@ -55,7 +55,7 @@ const steps: Step[] = [
     badge: 'Step 2 of 3',
     title: 'Add a Repository',
     description: 'Connect a GitHub URL or point to a local path. The AI will index your codebase — parsing functions, classes, and relationships — and store them as semantic vectors.',
-    detail: 'Indexing typically takes 1-5 minutes. You\'ll see real-time progress and can start chatting as soon as it\'s complete.',
+    detail: 'Indexing typically takes 1-5 minutes. You\'ll see real-time progress, and your dashboard now shows daily index quota usage.',
     cta: 'Add my first repository',
     ctaHref: '/repositories',
     color: 'text-emerald-500',
@@ -67,7 +67,7 @@ const steps: Step[] = [
     badge: 'Step 3 of 3',
     title: 'Start Your First Chat',
     description: 'Once indexed, head to the Chat workspace and ask anything: "Where is authentication handled?", "Explain the payment flow", "Why is this function slow?"',
-    detail: 'The AI cites exact source files and functions. No hallucinations — every answer is grounded in your actual code.',
+    detail: 'The AI cites exact source files and functions, and your usage meter tracks daily query/token consumption.',
     cta: 'Open Chat workspace',
     ctaHref: '/chat',
     color: 'text-violet-500',
@@ -82,9 +82,7 @@ export function OnboardingOverlay() {
   const router = useRouter();
 
   React.useEffect(() => {
-    if (user?.id) {
-      initializeForUser(user.id);
-    }
+    initializeForUser(user?.id ?? null);
   }, [user?.id, initializeForUser]);
 
   const step = steps[currentStep];

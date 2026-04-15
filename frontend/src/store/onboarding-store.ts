@@ -17,6 +17,8 @@ export interface OnboardingState {
 
 const TOTAL_STEPS = 4;
 const COMPLETED_WALKTHROUGH_KEY = 'tm.walkthrough.completedByUser';
+const BRAND_NEW_USER_KEY = 'tm.walkthrough.brandNewByUser';
+const PENDING_ONBOARDING_EMAIL_KEY = 'tm.walkthrough.pendingUserEmail';
 
 const isBrowser = () => typeof window !== 'undefined';
 
@@ -60,6 +62,73 @@ const markCompletedForUser = (userId: string, completed = true) => {
   writeCompletionMap(completionMap);
 };
 
+const readBrandNewMap = (): Record<string, boolean> => {
+  if (!isBrowser()) {
+    return {};
+  }
+
+  const raw = window.localStorage.getItem(BRAND_NEW_USER_KEY);
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      return parsed as Record<string, boolean>;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+};
+
+const writeBrandNewMap = (value: Record<string, boolean>) => {
+  if (!isBrowser()) {
+    return;
+  }
+  window.localStorage.setItem(BRAND_NEW_USER_KEY, JSON.stringify(value));
+};
+
+const consumeBrandNewForUser = (userId: string): boolean => {
+  const brandNewMap = readBrandNewMap();
+  if (!brandNewMap[userId]) {
+    return false;
+  }
+  delete brandNewMap[userId];
+  writeBrandNewMap(brandNewMap);
+  return true;
+};
+
+const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+export const markPendingOnboardingEmail = (email: string) => {
+  if (!isBrowser()) {
+    return;
+  }
+  window.localStorage.setItem(PENDING_ONBOARDING_EMAIL_KEY, normalizeEmail(email));
+};
+
+export const consumePendingOnboardingEmail = (email: string): boolean => {
+  if (!isBrowser()) {
+    return false;
+  }
+  const pendingEmail = window.localStorage.getItem(PENDING_ONBOARDING_EMAIL_KEY);
+  const normalized = normalizeEmail(email);
+  if (pendingEmail && pendingEmail === normalized) {
+    window.localStorage.removeItem(PENDING_ONBOARDING_EMAIL_KEY);
+    return true;
+  }
+  return false;
+};
+
+export const markBrandNewUser = (userId: string) => {
+  const brandNewMap = readBrandNewMap();
+  brandNewMap[userId] = true;
+  writeBrandNewMap(brandNewMap);
+};
+
 export const useOnboardingStore = create<OnboardingState>()((set, get) => ({
   isOpen: false,
   currentStep: 0,
@@ -73,10 +142,24 @@ export const useOnboardingStore = create<OnboardingState>()((set, get) => ({
     }
 
     const completed = hasCompletedForUser(userId);
+    const brandNew = consumeBrandNewForUser(userId);
+
+    if (!completed && !brandNew) {
+      // Existing accounts must not auto-open onboarding on login.
+      markCompletedForUser(userId, true);
+      set({
+        activeUserId: userId,
+        isCompleted: true,
+        isOpen: false,
+        currentStep: 0,
+      });
+      return;
+    }
+
     set({
       activeUserId: userId,
       isCompleted: completed,
-      isOpen: !completed,
+      isOpen: !completed && brandNew,
       currentStep: 0,
     });
   },
