@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import logging
+import re
+from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
-from app.rag.retrieval.code_graph import graph_expand_context
 from app.services.qdrant_service import QdrantService
+
+
+logger = logging.getLogger(__name__)
 
 
 NOISY_PATH_TOKENS = {
@@ -36,6 +42,80 @@ def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 60) -> list[str]:
     return [item_id for item_id, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)]
 
 
+def _rrf_score_map(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
+    scores: dict[str, float] = defaultdict(float)
+    for ranking in rankings:
+        for rank, item_id in enumerate(ranking, start=1):
+            scores[item_id] += 1.0 / (k + rank)
+    return scores
+
+
+def _tokenize_query(query: str) -> set[str]:
+    return {token for token in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{1,}", query.lower()) if len(token) >= 2}
+
+
+def _minmax_normalize(values: dict[str, float]) -> dict[str, float]:
+    if not values:
+        return {}
+    min_value = min(values.values())
+    max_value = max(values.values())
+    if max_value <= min_value:
+        return {key: 0.0 for key in values}
+    scale = max_value - min_value
+    return {key: (value - min_value) / scale for key, value in values.items()}
+
+
+def _rerank_candidates(
+    *,
+    query: str,
+    candidates: list[dict],
+    dense: list[dict],
+    lexical: list[dict],
+    rankings: list[list[str]],
+    is_high_level: bool,
+) -> list[dict]:
+    if len(candidates) <= 1:
+        return candidates
+
+    query_tokens = _tokenize_query(query)
+    dense_scores = {str(item.get("id")): float(item.get("score") or 0.0) for item in dense}
+    lexical_scores = {str(item.get("id")): float(item.get("score") or 0.0) for item in lexical}
+
+    rrf_scores = _rrf_score_map(rankings)
+    rrf_norm = _minmax_normalize(rrf_scores)
+    dense_norm = _minmax_normalize(dense_scores)
+    lexical_norm = _minmax_normalize(lexical_scores)
+
+    scored: list[tuple[float, dict]] = []
+    for item in candidates:
+        item_id = str(item.get("id"))
+        path = str(item.get("path") or "")
+        symbol = str(item.get("symbol") or "")
+        snippet = str(item.get("content") or "")[:1200]
+
+        overlap_score = 0.0
+        if query_tokens:
+            haystack_tokens = _tokenize_query(f"{path} {symbol} {snippet}")
+            overlap = len(query_tokens.intersection(haystack_tokens))
+            overlap_score = overlap / max(len(query_tokens), 1)
+
+        docs_boost = 0.08 if is_high_level and _looks_like_docs_path(path) else 0.0
+
+        final_score = (
+            0.55 * rrf_norm.get(item_id, 0.0)
+            + 0.20 * dense_norm.get(item_id, 0.0)
+            + 0.15 * lexical_norm.get(item_id, 0.0)
+            + 0.10 * overlap_score
+            + docs_boost
+        )
+        enriched = dict(item)
+        enriched["rerank_score"] = round(final_score, 6)
+        scored.append((final_score, enriched))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in scored]
+
+
 def _to_vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{v:.8f}" for v in values) + "]"
 
@@ -46,36 +126,24 @@ def _dense_search_postgres_with_embedding(
     embedding: list[float],
     top_k: int = 20,
 ) -> list[dict]:
-    validate_embedding_dimension(embedding)
-    vector_literal = _to_vector_literal(embedding)
-    stmt = text(
-        """
-        SELECT id, path, symbol, content,
-               1 - (embedding <=> CAST(:embedding AS vector)) AS score
-        FROM code_chunks
-        WHERE repository_id = :repository_id
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:embedding AS vector)
-        LIMIT :top_k
-        """
+    logger.debug(
+        "retrieval_dense_postgres_embedding - request repository_id=%s top_k=%s",
+        repository_id,
+        top_k,
     )
-    rows = session.execute(
-        stmt,
-        {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
-    ).mappings()
-    return [dict(row) for row in rows]
-
-
-def _dense_search_postgres(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     try:
-        embedding = get_embedding_provider().embed_text(query)
-    except RuntimeError:
-        return []  # Ollama unavailable; skip dense search
-    validate_embedding_dimension(embedding)
+        validate_embedding_dimension(embedding)
+    except Exception as exc:
+        logger.warning(
+            "retrieval_dense_postgres_embedding - invalid embedding repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
+        return []
     vector_literal = _to_vector_literal(embedding)
     stmt = text(
         """
-        SELECT id, path, symbol, content,
+        SELECT id, path, symbol, content, repository_id, repo_id,
                1 - (embedding <=> CAST(:embedding AS vector)) AS score
         FROM code_chunks
         WHERE repository_id = :repository_id
@@ -88,24 +156,40 @@ def _dense_search_postgres(session: Session, repository_id: str, query: str, top
         stmt,
         {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
     ).mappings()
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    logger.debug("retrieval_dense_postgres_embedding - response repository_id=%s count=%s", repository_id, len(result))
+    return result
+
+
 
 
 def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
+    logger.debug("retrieval_dense - request repository_id=%s top_k=%s", repository_id, top_k)
     try:
         embedding = get_embedding_provider().embed_text(query)
-    except RuntimeError:
+        validate_embedding_dimension(embedding)
+    except Exception as exc:
+        logger.warning(
+            "retrieval_dense - embed failed repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
         return []  # Ollama unavailable; dense search not possible
-    validate_embedding_dimension(embedding)
 
     try:
         matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k)
-    except RuntimeError:
+    except RuntimeError as exc:
+        logger.warning(
+            "retrieval_dense - qdrant failed; falling back to postgres repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
         return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     if not matches:
         # Qdrant can be reachable but missing points/payload indexes.
         # Fall back to Postgres dense search if embeddings are stored there.
+        logger.debug("retrieval_dense - qdrant empty; falling back to postgres repository_id=%s", repository_id)
         return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     matched_ids = [str(item.get("id")) for item in matches]
@@ -114,7 +198,7 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
     # Fetch only the matched rows by primary key (efficient vs. full table scan)
     placeholders = ", ".join(f":mid{i}" for i in range(len(matched_ids)))
     stmt = text(
-        f"SELECT id, path, symbol, content FROM code_chunks WHERE id IN ({placeholders})"
+        f"SELECT id, path, symbol, content, repository_id, repo_id FROM code_chunks WHERE id IN ({placeholders})"
     )
     params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
     rows = session.execute(stmt, params).mappings().all()
@@ -130,19 +214,22 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
             continue
         merged.append(row)
     if merged:
+        logger.debug("retrieval_dense - response repository_id=%s count=%s source=qdrant", repository_id, len(merged))
         return merged
 
     # Qdrant returned matches, but none could be hydrated (e.g., stale IDs).
+    logger.debug("retrieval_dense - qdrant stale ids; falling back to postgres repository_id=%s", repository_id)
     return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
 
 def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     if not query.strip():
         return []
+    logger.debug("retrieval_lexical - request repository_id=%s top_k=%s", repository_id, top_k)
 
     stmt = text(
         """
-        SELECT id, path, symbol, content,
+        SELECT id, path, symbol, content, repository_id, repo_id,
                ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
         FROM code_chunks
         WHERE repository_id = :repository_id
@@ -161,33 +248,32 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         if _is_noisy_path(str(item.get("path", ""))):
             continue
         filtered.append(item)
+    logger.debug("retrieval_lexical - response repository_id=%s count=%s", repository_id, len(filtered))
     return filtered
+
+
 
 
 HIGH_LEVEL_QUERY_TOKENS = {
     "architecture",
-    "design",
-    "structure",
     "overview",
-    "how does it work",
-    "project layout",
+    "structure",
+    "design",
+    "how does",
+    "explain",
+    "what is",
+    "document",
+    "documentation",
 }
 
-
-DOC_PATH_TOKENS = (
+DOC_PATH_TOKENS = {
     "readme",
-    "architecture",
-    "design",
     "docs/",
+    "doc/",
+    ".md",
     "documentation",
-    "getting-started",
-    "contributing",
-    "manifest.json",
-    "package.json",
-    "pyproject.toml",
-    "dockerfile",
-    "compose.yaml",
-)
+    "architecture",
+}
 
 
 def _is_high_level_query(query: str) -> bool:
@@ -201,41 +287,72 @@ def _looks_like_docs_path(path: str) -> bool:
 
 
 def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8) -> list[dict]:
-    dense = dense_search(session, repository_id, query, top_k=25)
-    lexical = lexical_search(session, repository_id, query, top_k=25)
+    logger.info("retrieval_hybrid - request repository_id=%s top_k=%s", repository_id, top_k)
+    candidate_pool = max(top_k, settings.retrieval_rerank_candidate_pool)
+    dense = dense_search(session, repository_id, query, top_k=candidate_pool)
+    lexical = lexical_search(session, repository_id, query, top_k=candidate_pool)
 
     # For "architecture" and similar high-level questions, boost documentation-ish files
     # so the model sees entrypoints/README/docs, not just arbitrary constructors.
     extra_rankings: list[list[str]] = []
-    if _is_high_level_query(query):
+    is_high_level_query = _is_high_level_query(query)
+    if is_high_level_query:
         doc_candidates = [*lexical, *dense]
         doc_ids = [str(item["id"]) for item in doc_candidates if _looks_like_docs_path(str(item.get("path", "")))]
         if doc_ids:
             extra_rankings.append(doc_ids)
 
-    dense_ids = [item["id"] for item in dense]
-    lexical_ids = [item["id"] for item in lexical]
-    merged_ids = reciprocal_rank_fusion([dense_ids, lexical_ids, *extra_rankings])[:top_k]
+    dense_ids = [str(item["id"]) for item in dense]
+    lexical_ids = [str(item["id"]) for item in lexical]
+    rankings = [dense_ids, lexical_ids, *extra_rankings]
+    merged_ids = reciprocal_rank_fusion(rankings)[:candidate_pool]
 
     items_by_id = {str(item["id"]): item for item in [*dense, *lexical]}
-    ordered_items = [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]
+    candidate_items = [items_by_id[item_id] for item_id in merged_ids if item_id in items_by_id]
+    if settings.retrieval_rerank_enabled:
+        ordered_items = _rerank_candidates(
+            query=query,
+            candidates=candidate_items,
+            dense=dense,
+            lexical=lexical,
+            rankings=rankings,
+            is_high_level=is_high_level_query,
+        )
+    else:
+        ordered_items = candidate_items
 
     if len(ordered_items) >= top_k:
+        logger.info(
+            "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s rerank=%s final=%s",
+            repository_id,
+            len(dense),
+            len(lexical),
+            settings.retrieval_rerank_enabled,
+            top_k,
+        )
         return ordered_items[:top_k]
-
-    try:
-        graph_items = graph_expand_context(session, repository_id, merged_ids, limit=max(top_k * 2, 8))
-    except Exception:
-        graph_items = []
-
-    seen_ids = {str(item.get("id")) for item in ordered_items}
-    for graph_item in graph_items:
-        item_id = str(graph_item.get("id"))
-        if not item_id or item_id in seen_ids:
-            continue
-        ordered_items.append(graph_item)
-        seen_ids.add(item_id)
-        if len(ordered_items) >= top_k:
-            break
-
+    logger.info(
+        "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s final=%s",
+        repository_id,
+        len(dense),
+        len(lexical),
+        len(ordered_items[:top_k]),
+    )
     return ordered_items[:top_k]
+
+
+def _federation_score(item: dict[str, Any], query: str) -> float:
+    base = float(item.get("rerank_score") or item.get("score") or 0.0)
+    path = str(item.get("path") or "")
+    symbol = str(item.get("symbol") or "")
+    content = str(item.get("content") or "")[:800]
+    q_tokens = _tokenize_query(query)
+    if not q_tokens:
+        return base
+    hit_tokens = _tokenize_query(f"{path} {symbol} {content}")
+    overlap = len(q_tokens.intersection(hit_tokens)) / max(len(q_tokens), 1)
+    return base + (0.12 * overlap)
+
+
+def project_federated_retrieve(*args, **kwargs) -> list[dict]:
+    raise RuntimeError("Project-scoped retrieval is not supported in the simplified schema.")

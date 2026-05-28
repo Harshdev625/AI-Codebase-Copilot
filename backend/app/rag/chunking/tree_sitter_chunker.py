@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from pathlib import Path
 
 from app.models.domain_models import CodeChunk
+
+
+logger = logging.getLogger(__name__)
 
 
 LANGUAGE_BY_SUFFIX = {
@@ -84,12 +88,14 @@ def _chunk_with_tree_sitter_parser(
     try:
         from tree_sitter_language_pack import get_parser
     except Exception:
+        logger.debug("chunk_tree_sitter - language pack unavailable language=%s", language)
         return []
 
     try:
         parser = get_parser(language)
         tree = parser.parse(source.encode("utf-8", errors="ignore"))
     except Exception:
+        logger.debug("chunk_tree_sitter - parser failed language=%s path=%s", language, file_path)
         return []
 
     lines = source.splitlines()
@@ -140,6 +146,12 @@ def _chunk_with_tree_sitter_parser(
             )
         )
 
+    logger.debug(
+        "chunk_tree_sitter - parser completed path=%s language=%s chunks=%s",
+        file_path,
+        language,
+        len(chunks),
+    )
     return chunks
 
 
@@ -176,14 +188,17 @@ def _fallback_structured_chunks(repo_id: str, commit_sha: str, file_path: Path, 
             )
         )
 
+    logger.debug("chunk_tree_sitter_fallback - completed path=%s chunks=%s", file_path, len(chunks))
     return chunks
 
 
 def chunk_with_tree_sitter(repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
+    logger.debug("chunk_tree_sitter - start repo_id=%s path=%s", repo_id, file_path)
     language = _detect_language(file_path)
     if language:
         chunks = _chunk_with_tree_sitter_parser(repo_id, commit_sha, file_path, source, language)
         if chunks:
             return chunks
 
+    logger.debug("chunk_tree_sitter - falling back to regex chunking path=%s", file_path)
     return _fallback_structured_chunks(repo_id, commit_sha, file_path, source)

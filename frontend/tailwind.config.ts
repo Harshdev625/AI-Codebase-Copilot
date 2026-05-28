@@ -1,66 +1,125 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  content: [
+    "./src/app/**/*.{ts,tsx}",
+    "./src/components/**/*.{ts,tsx}",
+    "./src/features/**/*.{ts,tsx}",
+    "./src/lib/**/*.{ts,tsx}",
+    "./src/store/**/*.{ts,tsx}",
+  ],
   theme: {
     extend: {
       colors: {
-        // Core backgrounds
-        background: "#070d1a",
-        surface:    "#0d1526",
-        surface2:   "#141e35",
-        surface3:   "#1a2540",
-        // Borders
-        border:     "#1e2d4a",
-        "border-active": "#2d4070",
-        // Brand
-        primary:    "#38bdf8",
-        "primary-hover": "#0ea5e9",
-        "primary-dim":   "rgba(56,189,248,0.12)",
-        accent:     "#818cf8",
-        "accent-dim":    "rgba(129,140,248,0.12)",
-        // Status
-        success:    "#22c55e",
-        warning:    "#f59e0b",
-        danger:     "#ef4444",
-        "success-dim":  "rgba(34,197,94,0.12)",
-        "warning-dim":  "rgba(245,158,11,0.12)",
-        "danger-dim":   "rgba(239,68,68,0.12)",
-        // Text
-        text:       "#e2e8f0",
-        muted:      "#94a3b8",
-        subtle:     "#64748b",
-        // Legacy aliases (keeps existing pages compiling)
-        bg:    "#070d1a",
-        panel: "#0d1526",
+        border:     "hsl(var(--border))",
+        input:      "hsl(var(--input))",
+        ring:       "hsl(var(--ring))",
+        background: "hsl(var(--background))",
+        foreground: "hsl(var(--foreground))",
+        primary: {
+          DEFAULT:    "hsl(var(--primary))",
+          foreground: "hsl(var(--primary-foreground))",
+        },
+        secondary: {
+          DEFAULT:    "hsl(var(--secondary))",
+          foreground: "hsl(var(--secondary-foreground))",
+        },
+        destructive: {
+          DEFAULT:    "hsl(var(--destructive))",
+          foreground: "hsl(var(--destructive-foreground))",
+        },
+        muted: {
+          DEFAULT:    "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT:    "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        card: {
+          DEFAULT:    "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+        /* ── Semantic brand colours ── */
+        success: {
+          DEFAULT:    "hsl(var(--success))",
+          foreground: "hsl(var(--success-foreground))",
+        },
+        warning: {
+          DEFAULT:    "hsl(var(--warning))",
+          foreground: "hsl(var(--warning-foreground))",
+        },
+        error: {
+          DEFAULT:    "hsl(var(--error))",
+          foreground: "hsl(var(--error-foreground))",
+        },
+        ai: {
+          DEFAULT:    "hsl(var(--ai))",
+          foreground: "hsl(var(--ai-foreground))",
+        },
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
-        mono: ["JetBrains Mono", "Fira Code", "Consolas", "monospace"],
-      },
-      boxShadow: {
-        glow:  "0 0 20px rgba(56,189,248,0.15)",
-        card:  "0 4px 24px rgba(0,0,0,0.4)",
-        inner: "inset 0 1px 0 rgba(255,255,255,0.04)",
-      },
-      backgroundImage: {
-        "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",
-        "hero-glow": "radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56,189,248,0.15), transparent)",
-        "card-shine": "linear-gradient(135deg, rgba(255,255,255,0.05) 0%, transparent 60%)",
+        sans: ["var(--font-space-grotesk)", "sans-serif"],
+        display: ["var(--font-fraunces)", "serif"],
+        mono: ["var(--font-plex-mono)", "monospace"],
       },
       animation: {
-        "fade-in":    "fadeIn 0.3s ease-out",
-        "slide-up":   "slideUp 0.3s ease-out",
-        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
-        "spin-slow":  "spin 3s linear infinite",
+        "fade-up":      "fadeUp 260ms ease-out both",
+        "fade-in":      "fadeIn 300ms ease-out both",
+        "slide-up":     "slideUp 400ms cubic-bezier(0.16, 1, 0.3, 1) both",
+        "shimmer":      "shimmer 1.8s infinite linear",
+        "float":        "float 6s ease-in-out infinite",
+        "gradient-x":   "gradientX 4s ease infinite",
+        "pulse-slow":   "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        "spin-slow":    "spin 3s linear infinite",
+        "bounce-sm":    "bounceSm 1s infinite",
       },
       keyframes: {
-        fadeIn:  { "0%": { opacity: "0" }, "100%": { opacity: "1" } },
-        slideUp: { "0%": { opacity: "0", transform: "translateY(10px)" }, "100%": { opacity: "1", transform: "translateY(0)" } },
+        fadeUp: {
+          "0%":   { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        fadeIn: {
+          "0%":   { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        slideUp: {
+          "0%":   { transform: "translateY(10px)", opacity: "0" },
+          "100%": { transform: "translateY(0)",    opacity: "1" },
+        },
+        shimmer: {
+          "0%":   { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
+        float: {
+          "0%, 100%": { transform: "translateY(0px)" },
+          "50%":      { transform: "translateY(-8px)" },
+        },
+        gradientX: {
+          "0%, 100%": { backgroundPosition: "0% 50%" },
+          "50%":      { backgroundPosition: "100% 50%" },
+        },
+        bounceSm: {
+          "0%, 100%": { transform: "translateY(0)",   animationTimingFunction: "cubic-bezier(0.8,0,1,1)" },
+          "50%":      { transform: "translateY(-4px)", animationTimingFunction: "cubic-bezier(0,0,0.2,1)" },
+        },
       },
-    }
+      boxShadow: {
+        premium: "0 1px 2px 0 rgb(0 0 0/0.04), 0 4px 6px -1px rgb(0 0 0/0.08)",
+        ai:      "0 0 0 1px hsl(var(--primary)/0.2), 0 4px 24px -4px hsl(var(--primary)/0.3)",
+        "glow-sm": "0 0 12px -2px hsl(var(--primary)/0.4)",
+      },
+      transitionTimingFunction: {
+        spring: "cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 };
 
 export default config;

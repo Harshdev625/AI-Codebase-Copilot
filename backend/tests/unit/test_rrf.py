@@ -1,6 +1,4 @@
 """Unit tests for the Reciprocal Rank Fusion algorithm."""
-import pytest
-
 from app.rag.retrieval.hybrid import reciprocal_rank_fusion
 
 

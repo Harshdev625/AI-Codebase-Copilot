@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import ast
+import logging
 import uuid
 from pathlib import Path
 
 from app.models.domain_models import CodeChunk
 
 
+logger = logging.getLogger(__name__)
+
+
 def chunk_python_file(repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
+    logger.debug("chunk_python_ast - start repo_id=%s path=%s", repo_id, file_path)
     tree = ast.parse(source)
     chunks: list[CodeChunk] = []
 
@@ -37,4 +42,5 @@ def chunk_python_file(repo_id: str, commit_sha: str, file_path: Path, source: st
                 )
             )
 
+    logger.debug("chunk_python_ast - completed repo_id=%s path=%s chunks=%s", repo_id, file_path, len(chunks))
     return chunks
