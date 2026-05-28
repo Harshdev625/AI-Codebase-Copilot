@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
-from app.rag.retrieval.code_graph import graph_expand_context
 from app.services.qdrant_service import QdrantService
 
 
@@ -132,7 +131,15 @@ def _dense_search_postgres_with_embedding(
         repository_id,
         top_k,
     )
-    validate_embedding_dimension(embedding)
+    try:
+        validate_embedding_dimension(embedding)
+    except Exception as exc:
+        logger.warning(
+            "retrieval_dense_postgres_embedding - invalid embedding repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
+        return []
     vector_literal = _to_vector_literal(embedding)
     stmt = text(
         """
@@ -154,47 +161,29 @@ def _dense_search_postgres_with_embedding(
     return result
 
 
-def _dense_search_postgres(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
-    try:
-        embedding = get_embedding_provider().embed_text(query)
-    except RuntimeError:
-        logger.warning("retrieval_dense_postgres - embed failed repository_id=%s", repository_id)
-        return []  # Ollama unavailable; skip dense search
-    validate_embedding_dimension(embedding)
-    vector_literal = _to_vector_literal(embedding)
-    stmt = text(
-        """
-        SELECT id, path, symbol, content, repository_id, repo_id,
-               1 - (embedding <=> CAST(:embedding AS vector)) AS score
-        FROM code_chunks
-        WHERE repository_id = :repository_id
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:embedding AS vector)
-        LIMIT :top_k
-        """
-    )
-    rows = session.execute(
-        stmt,
-        {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
-    ).mappings()
-    result = [dict(row) for row in rows]
-    logger.debug("retrieval_dense_postgres - response repository_id=%s count=%s", repository_id, len(result))
-    return result
 
 
 def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
     logger.debug("retrieval_dense - request repository_id=%s top_k=%s", repository_id, top_k)
     try:
         embedding = get_embedding_provider().embed_text(query)
-    except RuntimeError:
-        logger.warning("retrieval_dense - embed failed repository_id=%s", repository_id)
+        validate_embedding_dimension(embedding)
+    except Exception as exc:
+        logger.warning(
+            "retrieval_dense - embed failed repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
         return []  # Ollama unavailable; dense search not possible
-    validate_embedding_dimension(embedding)
 
     try:
         matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k)
-    except RuntimeError:
-        logger.warning("retrieval_dense - qdrant failed; falling back to postgres repository_id=%s", repository_id)
+    except RuntimeError as exc:
+        logger.warning(
+            "retrieval_dense - qdrant failed; falling back to postgres repository_id=%s error=%s",
+            repository_id,
+            exc,
+        )
         return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
 
     if not matches:
@@ -263,14 +252,6 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
     return filtered
 
 
-HIGH_LEVEL_QUERY_TOKENS = {
-    "architecture",
-    "design",
-    "structure",
-    "overview",
-    "how does it work",
-    "project layout",
-}
 
 
 HIGH_LEVEL_QUERY_TOKENS = {
@@ -350,29 +331,11 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
             top_k,
         )
         return ordered_items[:top_k]
-
-    try:
-        seed_ids = [str(item.get("id")) for item in ordered_items]
-        graph_items = graph_expand_context(session, repository_id, seed_ids, limit=max(top_k * 2, 8))
-    except Exception:
-        graph_items = []
-
-    seen_ids = {str(item.get("id")) for item in ordered_items}
-    for graph_item in graph_items:
-        item_id = str(graph_item.get("id"))
-        if not item_id or item_id in seen_ids:
-            continue
-        ordered_items.append(graph_item)
-        seen_ids.add(item_id)
-        if len(ordered_items) >= top_k:
-            break
-
     logger.info(
-        "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s graph=%s final=%s",
+        "retrieval_hybrid - response repository_id=%s dense=%s lexical=%s final=%s",
         repository_id,
         len(dense),
         len(lexical),
-        len(graph_items),
         len(ordered_items[:top_k]),
     )
     return ordered_items[:top_k]
@@ -391,65 +354,5 @@ def _federation_score(item: dict[str, Any], query: str) -> float:
     return base + (0.12 * overlap)
 
 
-def project_federated_retrieve(
-    session: Session,
-    project_id: str,
-    query: str,
-    top_k: int = 8,
-    per_repo_k: int = 6,
-) -> list[dict]:
-    repo_rows = session.execute(
-        text(
-            """
-            SELECT id, repo_id
-            FROM repositories
-            WHERE project_id = :project_id
-            ORDER BY created_at DESC
-            """
-        ),
-        {"project_id": project_id},
-    ).mappings().all()
-
-    if not repo_rows:
-        return []
-
-    merged: list[dict[str, Any]] = []
-    for repo in repo_rows:
-        repository_id = str(repo.get("id"))
-        repository_name = str(repo.get("repo_id") or repository_id)
-        repo_items = hybrid_retrieve(session, repository_id=repository_id, query=query, top_k=per_repo_k)
-        for item in repo_items:
-            enriched = dict(item)
-            enriched["repository_id"] = enriched.get("repository_id") or repository_id
-            enriched["repository_name"] = repository_name
-            enriched["federation_score"] = _federation_score(enriched, query)
-            merged.append(enriched)
-
-    if not merged:
-        return []
-
-    merged.sort(key=lambda item: float(item.get("federation_score") or 0.0), reverse=True)
-
-    deduped: list[dict] = []
-    seen_keys: set[tuple[str, str, str]] = set()
-    for item in merged:
-        dedupe_key = (
-            str(item.get("repository_id") or ""),
-            str(item.get("path") or ""),
-            str(item.get("symbol") or ""),
-        )
-        if dedupe_key in seen_keys:
-            continue
-        seen_keys.add(dedupe_key)
-        deduped.append(item)
-        if len(deduped) >= top_k:
-            break
-
-    logger.info(
-        "retrieval_federated - response project_id=%s repos=%s candidates=%s final=%s",
-        project_id,
-        len(repo_rows),
-        len(merged),
-        len(deduped),
-    )
-    return deduped
+def project_federated_retrieve(*args, **kwargs) -> list[dict]:
+    raise RuntimeError("Project-scoped retrieval is not supported in the simplified schema.")

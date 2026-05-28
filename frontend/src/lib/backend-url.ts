@@ -1,4 +1,6 @@
-const DEFAULT_BACKEND_URL = "http://localhost:8000/v1";
+﻿const DEFAULT_BACKEND_URL = "http://localhost:8000/v1";
+
+export const API_V1_BASE_URL = DEFAULT_BACKEND_URL;
 
 export function getBackendUrl(): string {
   const configured =

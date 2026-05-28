@@ -1,101 +1,140 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, LogOut, ChevronRight, Zap } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { LogOut, LayoutDashboard, FolderGit2, Bot, ChevronRight, Settings } from "lucide-react";
+import { motion } from "framer-motion";
 import { NotificationDropdown } from "@/components/navbar/NotificationDropdown";
-
+import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
-/* Route → display name map */
-const PAGE_LABELS: Record<string, string> = {
-  "/dashboard":    "Dashboard",
-  "/repositories": "Repositories",
-  "/chat":         "TimeMachine Chat",
-  "/admin":        "Admin Panel",
-};
+export interface NavItem {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+  badge?: string;
+}
+
+const mainNavItems: NavItem[] = [
+  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { label: "Repositories", href: "/repositories", icon: FolderGit2 },
+  { label: "Chat", href: "/chat", icon: Bot },
+];
 
 interface TopNavbarProps {
   sectionTitle: string;
   userEmail?: string;
-  onMenuClick: () => void;
-  onSidebarToggle: () => void;
-  isSidebarCollapsed: boolean;
   onSignOut: () => void;
 }
 
-export function TopNavbar({ userEmail, onMenuClick, onSignOut }: TopNavbarProps): React.JSX.Element {
+export function TopNavbar({ sectionTitle, userEmail, onSignOut }: TopNavbarProps): React.JSX.Element {
   const pathname = usePathname();
-  const segments = pathname.split("/").filter(Boolean);
-  const currentPageLabel = PAGE_LABELS[`/${segments[0] ?? ""}`] ?? segments[0] ?? "Workspace";
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+
+  const isActive = (href: string): boolean => {
+    return pathname === href || (href !== "/" && pathname.startsWith(href));
+  };
 
   return (
-    <header className="sticky top-0 z-20 shrink-0">
-      {/* Glass surface */}
-      <div className="border-b border-white/6 bg-[hsl(240,18%,4%)/80] backdrop-blur-2xl">
-        {/* Gradient accent line at very top */}
-        <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-violet-500/50 to-transparent" />
+    <header className="sticky top-0 z-30 shrink-0">
+      <div className="border-b border-border/60 bg-background/80 backdrop-blur-2xl">
+        <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
 
-        <div className="flex h-14 w-full items-center justify-between px-5 lg:px-6">
-
-          {/* Left: Mobile hamburger + breadcrumb */}
-          <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="md:hidden text-zinc-500 hover:text-white hover:bg-white/5"
-              onClick={onMenuClick}
+        <div className="flex h-14 w-full items-center justify-between px-4 sm:px-5 lg:px-6">
+          {/* Left: Logo + Primary Nav */}
+          <div className="flex items-center gap-6 min-w-0">
+            {/* Logo */}
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
             >
-              <Menu className="h-4 w-4" />
-            </Button>
-
-            {/* Breadcrumb */}
-            <nav className="flex items-center gap-1.5 text-[12px]" aria-label="Breadcrumb">
-              <span className="text-zinc-600 font-medium">Workspace</span>
-              <ChevronRight className="h-3 w-3 text-zinc-700" />
-              <div className="relative">
-                <span className="font-bold text-white/90 tracking-tight">{currentPageLabel}</span>
-                {/* Gradient underline accent */}
-                <div className="absolute -bottom-0.5 left-0 right-0 h-px bg-gradient-to-r from-violet-500/60 to-transparent" />
+              <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15">
+                <div className="text-[10px] font-bold text-primary">ACC</div>
               </div>
-              {segments.length > 1 && (
-                <>
-                  <ChevronRight className="h-3 w-3 text-zinc-700" />
-                  <span className="font-semibold text-zinc-500 truncate max-w-[140px]">
-                    {segments.slice(1).join(" / ")}
-                  </span>
-                </>
-              )}
+              <span className="hidden sm:block text-xs font-bold tracking-tight text-foreground">{sectionTitle}</span>
+            </Link>
+
+            {/* Desktop Navigation */}
+            <nav className="hidden md:flex items-center gap-0.5">
+              {mainNavItems.map((item) => {
+                const Icon = item.icon;
+                const active = isActive(item.href);
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={cn(
+                      "relative flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium transition-all",
+                      active
+                        ? "text-foreground bg-primary/8"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                    )}
+                  >
+                    {active && (
+                      <motion.div
+                        layoutId="navbar-indicator"
+                        className="absolute inset-0 rounded-lg border border-primary/20 bg-primary/8"
+                        transition={{ type: "spring", bounce: 0.2, duration: 0.4 }}
+                      />
+                    )}
+                    <Icon className={cn("h-4 w-4 relative z-10", active && "text-primary")} />
+                    <span className="relative z-10">{item.label}</span>
+                  </Link>
+                );
+              })}
             </nav>
           </div>
 
-          {/* Right: actions */}
-          <div className="flex items-center gap-2">
-            {/* AI engine badge */}
-            <div className="hidden lg:flex items-center gap-1.5 rounded-full border border-violet-500/15 bg-violet-500/5 px-2.5 py-1 text-[9px] font-bold uppercase tracking-widest text-violet-500/70">
-              <Zap className="h-2.5 w-2.5" />
-              LangGraph Active
-            </div>
+          {/* Right: Actions */}
+          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+            {/* Mobile menu toggle */}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="md:hidden text-muted-foreground hover:text-foreground hover:bg-accent"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </Button>
 
-            <div className="h-4 w-px bg-white/6 mx-0.5" />
+            <div className="h-4 w-px bg-border/40 mx-0.5 hidden sm:block" />
 
             {/* Notification dropdown */}
             <NotificationDropdown />
 
-            <div className="h-4 w-px bg-white/6 mx-0.5" />
+            <div className="h-4 w-px bg-border/40 mx-0.5 hidden sm:block" />
+
+            {/* Theme toggle */}
+            <ThemeToggle />
 
             {/* User email */}
             {userEmail && (
-              <span className="hidden lg:block text-[11px] font-medium text-zinc-600 max-w-[140px] truncate">
+              <span className="hidden lg:block text-[11px] font-medium text-muted-foreground max-w-[140px] truncate">
                 {userEmail}
               </span>
             )}
+
+            {/* Settings */}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="Settings"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
 
             {/* Sign out */}
             <Button
               variant="ghost"
               size="icon-sm"
-              className="text-zinc-600 hover:text-red-400 hover:bg-red-500/8 transition-colors"
+              className="text-muted-foreground hover:text-destructive hover:bg-destructive/8 transition-colors"
               onClick={onSignOut}
               title="Sign out"
             >
@@ -103,6 +142,40 @@ export function TopNavbar({ userEmail, onMenuClick, onSignOut }: TopNavbarProps)
             </Button>
           </div>
         </div>
+
+        {/* Mobile Navigation Menu */}
+        {mobileMenuOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            className="md:hidden border-t border-border/40 bg-card/50 backdrop-blur"
+          >
+            <nav className="flex flex-col gap-0.5 p-3">
+              {mainNavItems.map((item) => {
+                const Icon = item.icon;
+                const active = isActive(item.href);
+
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={() => setMobileMenuOpen(false)}
+                    className={cn(
+                      "flex items-center gap-3 h-10 px-3 rounded-lg text-sm font-medium transition-all",
+                      active
+                        ? "text-foreground bg-primary/12 border border-primary/20"
+                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </nav>
+          </motion.div>
+        )}
       </div>
     </header>
   );

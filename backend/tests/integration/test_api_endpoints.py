@@ -4,6 +4,7 @@ import json
 import os
 import httpx
 import pytest
+import asyncio
 
 
 _RUN_LIVE = os.getenv("RUN_LIVE_INTEGRATION_TESTS", "").strip().lower() in {"1", "true", "yes"}
@@ -118,12 +119,13 @@ def test_project_creation(api_client, authenticated_user):
     assert "pagination" in projects
 
 
-def test_repository_management(api_client, authenticated_user):
+@pytest.mark.asyncio
+async def test_repository_management(api_client, authenticated_user):
     """Test repository addition and listing."""
     headers = {"Authorization": f"Bearer {authenticated_user['token']}"}
 
     # Create project first
-    r = api_client.post(
+    r = await api_client.post(
         f"{BASE}/projects",
         json={"name": "repo-test-project", "description": "For repo tests"},
         headers=headers,
@@ -134,7 +136,7 @@ def test_repository_management(api_client, authenticated_user):
     repo_id = f"test-repo-{uuid.uuid4().hex[:8]}"
 
     # Add repository
-    r = api_client.post(
+    r = await api_client.post(
         f"{BASE}/projects/{project_id}/repositories",
         json={
             "repo_id": repo_id,
@@ -148,19 +150,20 @@ def test_repository_management(api_client, authenticated_user):
     assert repo.get("repo_id") == repo_id
 
     # List repositories
-    r = api_client.get(f"{BASE}/projects/{project_id}/repositories", headers=headers)
+    r = await api_client.get(f"{BASE}/projects/{project_id}/repositories", headers=headers)
     assert r.status_code == 200
     repos = _payload(r)
     assert len(repos.get("items", [])) > 0
     assert "pagination" in repos
 
 
-def test_index_endpoint(api_client, authenticated_user):
+@pytest.mark.asyncio
+async def test_index_endpoint(api_client, authenticated_user):
     """Test indexing endpoint response format."""
     headers = {"Authorization": f"Bearer {authenticated_user['token']}"}
 
     # Create project and repository
-    r = api_client.post(
+    r = await api_client.post(
         f"{BASE}/projects",
         json={"name": "index-test-project", "description": "For indexing tests"},
         headers=headers,
@@ -169,7 +172,7 @@ def test_index_endpoint(api_client, authenticated_user):
 
     repo_id = f"index-test-repo-{uuid.uuid4().hex[:8]}"
 
-    r = api_client.post(
+    r = await api_client.post(
         f"{BASE}/projects/{project_id}/repositories",
         json={
             "repo_id": repo_id,
@@ -178,18 +181,32 @@ def test_index_endpoint(api_client, authenticated_user):
         headers=headers,
     )
     assert r.status_code in (200, 201)
+    repo_db_id = _payload(r).get("id")
 
     # Call index endpoint
-    r = api_client.post(
-        f"{BASE}/index",
-        json={"repo_id": repo_id},
+    r = await api_client.post(
+        f"{BASE}/repositories/{repo_db_id}/index",
+        json={"commit_sha": "master"},
         headers=headers,
-        timeout=15.0,  # Indexing might take a while
+        timeout=30.0,  # Indexing might take a while
     )
     assert r.status_code == 202  # Accepted for background task
     response = r.json()
     if isinstance(response, dict) and "success" in response and "data" in response:
         response = response["data"]
-    assert "indexed_chunks" in response
-    assert "snapshot_id" in response
-    assert "status" in response
+    
+    assert "indexing_job_id" in response
+    job_id = response["indexing_job_id"]
+
+    # Poll for completion
+    for _ in range(10):
+        await asyncio.sleep(2)
+        r_poll = await api_client.get(f"{BASE}/index/{job_id}", headers=headers)
+        if r_poll.status_code == 200:
+            poll_data = _payload(r_poll)
+            if poll_data.get("job_status") in ("completed", "failed"):
+                assert poll_data.get("job_status") == "completed"
+                assert poll_data.get("stats", {}).get("total_files", 0) > 0
+                return
+    
+    pytest.fail("Indexing job did not complete in time")

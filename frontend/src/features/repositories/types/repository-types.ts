@@ -1,56 +1,70 @@
-export interface Project {
+export type RepositoryRecord = {
   id: string;
-  name: string;
-  description?: string | null;
-  created_by: string;
-  created_at: string;
-}
-
-export interface Repository {
-  id: string;
-  project_id: string;
+  owner_user_id?: string | null;
   repo_id: string;
-  remote_url?: string | null;
-  local_path?: string | null;
+  remote_url: string | null;
+  local_path: string | null;
   default_branch: string;
   created_at: string;
-  updated_at?: string;
-  latest_snapshot_id?: string | null;
+  latest_job_status?: string | null;
+  latest_job_stats?: Record<string, unknown> | null;
+  // Compatibility aliases consumed by older components.
   latest_index_status?: string | null;
   latest_index_stats?: Record<string, unknown> | null;
   latest_indexed_chunks?: number | null;
-  has_completed_index?: boolean;
-  indexing_version?: number;
-}
+  updated_at?: string | null;
+  indexing_version?: number | null;
+};
 
-export interface AddRepositoryPayload {
+export type Repository = RepositoryRecord;
+export type Project = never;
+export type ProjectRecord = never;
+export type CreateProjectPayload = never;
+
+export type AddRepositoryPayload = {
   repo_id: string;
-  remote_url?: string;
-  local_path?: string;
+  remote_url?: string | null;
+  local_path?: string | null;
   default_branch?: string;
-}
+};
 
-export interface IndexRepositoryPayload {
-  repository_id: string;
+export type IndexRequestPayload = {
+  repository_id?: string;
+  repo_id?: string;
+  repo_path?: string | null;
+  repo_url?: string | null;
+  repo_ref?: string | null;
   commit_sha?: string;
-  repo_ref?: string;
-}
+};
 
-export interface IndexResponse {
+export type IndexResponse = {
   indexed_chunks: number;
-  status: 'ok';
-  snapshot_id?: string | null;
-}
+  status: "ok";
+  indexing_job_id?: string | null;
+};
 
-export interface IndexProgressResponse {
-  snapshot_id: string;
-  index_status: string;
+export type IndexProgress = {
+  indexing_job_id: string;
   job_status: string;
   message: string;
+  stats: {
+    percentage?: number;
+    eta_seconds?: number;
+    total_files?: number;
+    current_file?: string | null;
+    total_chunks?: number;
+    current_stage?: string;
+    stored_chunks?: number;
+    processed_files?: number;
+    updated_at_epoch?: number;
+    embeddings_skipped?: number;
+    avg_seconds_per_file?: number;
+    qdrant_chunks_queued?: number;
+  } | null;
   total_files: number;
   processed_files: number;
   percentage: number;
   current_file?: string | null;
   eta_seconds?: number | null;
-  stats?: Record<string, unknown>;
-}
+  started_at?: string | null;
+};

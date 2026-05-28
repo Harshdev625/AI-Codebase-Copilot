@@ -40,9 +40,9 @@ function PasswordStrength({ password }: { password: string }) {
         {checks.map((c) => (
           <div key={c.label} className="flex items-center gap-1.5">
             {c.met ? (
-              <CheckCircle className="h-2.5 w-2.5 text-success shrink-0" />
+              <CheckCircle className="h-4 w-4 text-success shrink-0" />
             ) : (
-              <XCircle className="h-2.5 w-2.5 text-muted-foreground/30 shrink-0" />
+              <XCircle className="h-4 w-4 text-muted-foreground/30 shrink-0" />
             )}
             <span className={cn('text-[9px] font-semibold', c.met ? 'text-foreground/70' : 'text-muted-foreground/40')}>
               {c.label}
@@ -75,9 +75,9 @@ export function AuthenticationRegisterForm() {
   return (
     <div className="space-y-7 animate-fade-up">
       <div className="space-y-1.5">
-        <h1 className="text-3xl font-bold tracking-tight">Create Account</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Create Account</h1>
         <p className="text-sm text-muted-foreground">
-          Start your journey with precision code intelligence.
+          Build your workspace and start indexing immediately.
         </p>
       </div>
 
@@ -85,7 +85,7 @@ export function AuthenticationRegisterForm() {
         <div className="space-y-4">
           {/* Full Name */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground" htmlFor="reg-name">
+            <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground" htmlFor="reg-name">
               Full Name
             </label>
             <div className="relative">
@@ -94,7 +94,7 @@ export function AuthenticationRegisterForm() {
                 id="reg-name"
                 type="text"
                 placeholder="John Doe"
-                className="pl-11 h-11 border-border/50 bg-muted/20 focus:bg-background transition-all focus:border-primary/50"
+                className="pl-11"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 autoComplete="name"
@@ -104,7 +104,7 @@ export function AuthenticationRegisterForm() {
 
           {/* Email */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground" htmlFor="reg-email">
+            <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground" htmlFor="reg-email">
               Email Address
             </label>
             <div className="relative">
@@ -113,7 +113,7 @@ export function AuthenticationRegisterForm() {
                 id="reg-email"
                 type="email"
                 placeholder="name@example.com"
-                className="pl-11 h-11 border-border/50 bg-muted/20 focus:bg-background transition-all focus:border-primary/50"
+                className="pl-11"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -124,7 +124,7 @@ export function AuthenticationRegisterForm() {
 
           {/* Password */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground" htmlFor="reg-password">
+            <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground" htmlFor="reg-password">
               Password
             </label>
             <div className="relative">
@@ -133,7 +133,7 @@ export function AuthenticationRegisterForm() {
                 id="reg-password"
                 type={showPassword ? 'text' : 'password'}
                 placeholder="Min. 8 characters"
-                className="pl-11 pr-11 h-11 border-border/50 bg-muted/20 focus:bg-background transition-all focus:border-primary/50"
+                className="pl-11 pr-11"
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); setShowStrength(true); }}
                 required
@@ -152,7 +152,7 @@ export function AuthenticationRegisterForm() {
 
           {/* Confirm Password */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground" htmlFor="reg-confirm">
+            <label className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground" htmlFor="reg-confirm">
               Confirm Password
             </label>
             <div className="relative">
@@ -162,8 +162,8 @@ export function AuthenticationRegisterForm() {
                 type={showConfirm ? 'text' : 'password'}
                 placeholder="Repeat password"
                 className={cn(
-                  'pl-11 pr-11 h-11 bg-muted/20 focus:bg-background transition-all',
-                  passwordMismatch ? 'border-error/50 focus:border-error/70' : 'border-border/50 focus:border-primary/50'
+                  'pl-11 pr-11',
+                  passwordMismatch ? 'border-error/50 focus:border-error/70' : 'border-border/60 focus:border-primary/40'
                 )}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -186,7 +186,7 @@ export function AuthenticationRegisterForm() {
 
         <Button
           type="submit"
-          className="w-full h-11 font-bold tracking-tight text-sm shadow-lg shadow-primary/15"
+          className="w-full h-11 font-semibold tracking-tight text-sm shadow-lg shadow-primary/15"
           disabled={isRegistering || passwordMismatch}
         >
           {isRegistering ? (
@@ -202,8 +202,14 @@ export function AuthenticationRegisterForm() {
 
       <div className="text-center text-sm text-muted-foreground/70">
         Already have an account?{' '}
-        <Link href="/login" className="font-bold text-foreground hover:text-primary transition-colors">
+        <Link href="/login" className="font-semibold text-foreground hover:text-primary transition-colors">
           Sign in
+        </Link>
+      </div>
+      <div className="text-center text-[12px] text-muted-foreground">
+        Need an admin seat?{' '}
+        <Link href="/admin/register" className="font-semibold text-primary hover:text-primary/80 transition-colors">
+          Register as admin
         </Link>
       </div>
     </div>

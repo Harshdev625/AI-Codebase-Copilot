@@ -1,12 +1,18 @@
-import type { Metadata } from "next";
-import { IBM_Plex_Mono, Manrope } from "next/font/google";
+﻿import type { Metadata } from "next";
+import { Fraunces, IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 
-import { AppProviders } from "@/components/providers";
+import { AppProviders } from "@/components/app-providers";
 import "@/styles/globals.css";
 
-const manrope = Manrope({
+const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
-  variable: "--font-manrope",
+  variable: "--font-space-grotesk",
+});
+
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-fraunces",
+  weight: ["400", "600", "700"],
 });
 
 const plexMono = IBM_Plex_Mono({
@@ -22,8 +28,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body suppressHydrationWarning className={`${manrope.variable} ${plexMono.variable} font-sans antialiased`}>
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
+      <body
+        suppressHydrationWarning
+        className={`${spaceGrotesk.variable} ${fraunces.variable} ${plexMono.variable} font-sans antialiased`}
+      >
         <AppProviders>{children}</AppProviders>
       </body>
     </html>

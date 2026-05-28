@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import logging
 import sys
 from pathlib import Path
 
+import httpx
 from sqlalchemy import text
+
+from app.core.config import settings
 
 # Ensure backend package imports resolve when script is run directly.
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -22,14 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-INDEX_ONLY_TABLES = [
-    "embedding_references",
-    "code_graph_edges",
-    "code_chunks",
-    "indexing_status",
-    "indexing_jobs",
-    "repository_snapshots",
-]
+INDEX_ONLY_TABLES = ["code_chunks", "indexing_jobs"]
 
 
 def clear_index_only_data() -> None:
@@ -39,10 +37,6 @@ def clear_index_only_data() -> None:
             connection.execute(text(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE"))
             logger.info("db_clear - truncated table=%s", table)
     logger.warning("db_clear - index-only reset completed")
-
-
-import httpx
-from app.core.config import settings
 
 def clear_vdb() -> None:
     logger.warning("db_clear - vector store reset start")

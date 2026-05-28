@@ -1,5 +1,5 @@
 from typing import Any, Literal
-import re
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,6 +14,15 @@ UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 SCOPE_PATTERN = r"^[a-z*]+:[a-z*]+$"
 
 
+class ChatMode(str, Enum):
+    """Chat workflow modes."""
+    QUESTION = "question"
+    REFACTOR = "refactor"
+    DEBUG = "debug"
+    DOCUMENTATION = "documentation"
+    TOOL = "tool"
+
+
 class StrictRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -21,18 +30,16 @@ class StrictRequestModel(BaseModel):
 class ChatRequest(StrictRequestModel):
     repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
-    project_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     query: str = Field(..., min_length=3, max_length=4000)
     session_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    mode: ChatMode = Field(default=ChatMode.QUESTION, description="Chat workflow mode")
+    include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
         has_repository = bool(self.repository_id) or bool(self.repo_id)
-        has_project = bool(self.project_id)
-        if has_repository and has_project:
-            raise ValueError("Provide project_id for federation OR repository_id/repo_id for single-repo chat")
-        if not has_repository and not has_project:
-            raise ValueError("Provide project_id or one of repository_id/repo_id")
+        if not has_repository:
+            raise ValueError("Provide one of repository_id/repo_id")
         if bool(self.repository_id) and bool(self.repo_id):
             raise ValueError("Provide exactly one of repository_id or repo_id")
         if self.repo_id is not None:
@@ -47,9 +54,25 @@ class ChatResponse(BaseModel):
     sources: list[dict[str, Any]] = []
 
 
+class ApplyPatchRequest(StrictRequestModel):
+    repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    diff: str = Field(..., description="The Unified Diff string to apply")
+
+    @model_validator(mode="after")
+    def normalize_repo_id(self) -> "ApplyPatchRequest":
+        has_repository = bool(self.repository_id) or bool(self.repo_id)
+        if not has_repository:
+            raise ValueError("Provide one of repository_id/repo_id")
+        if bool(self.repository_id) and bool(self.repo_id):
+            raise ValueError("Provide exactly one of repository_id or repo_id")
+        if self.repo_id is not None:
+            self.repo_id = _normalize_repo_id(self.repo_id)
+        return self
+
+
 class ChatSessionResponse(BaseModel):
     id: str
-    project_id: str
     repository_id: str | None = None
     title: str | None = None
     summary: str | None = None
@@ -85,7 +108,7 @@ class IndexRequest(StrictRequestModel):
 class IndexResponse(BaseModel):
     indexed_chunks: int
     status: Literal["ok"] = "ok"
-    snapshot_id: str | None = None
+    indexing_job_id: str | None = None
 
 
 class AuthRegisterRequest(StrictRequestModel):
@@ -116,7 +139,6 @@ class UserResponse(BaseModel):
     email: str
     full_name: str | None = None
     role: str
-    plan_tier: Literal["free", "pro", "enterprise"] = "free"
     token_scopes: list[str] = []
     is_active: bool
 
@@ -161,40 +183,6 @@ class AddRepositoryRequest(StrictRequestModel):
         return self
 
 
-class ApiKeyCreateRequest(StrictRequestModel):
-    name: str = Field(..., min_length=2, max_length=80)
-    scopes: list[str] = Field(default_factory=list, max_length=24)
-    expires_in_days: int | None = Field(default=180, ge=1, le=3650)
-
-    @model_validator(mode="after")
-    def validate_scopes(self) -> "ApiKeyCreateRequest":
-        cleaned: list[str] = []
-        for scope in self.scopes:
-            item = str(scope or "").strip().lower()
-            if not item:
-                continue
-            if not re.match(SCOPE_PATTERN, item):
-                raise ValueError(f"Invalid scope format: {item}")
-            cleaned.append(item)
-        self.scopes = cleaned
-        return self
-
-
-class ApiKeyResponse(BaseModel):
-    id: str
-    name: str
-    key_prefix: str
-    scopes: list[str]
-    is_active: bool
-    created_at: str
-    last_used_at: str | None = None
-    expires_at: str | None = None
-
-
-class ApiKeyCreateResponse(ApiKeyResponse):
-    api_key: str
-
-
 def _normalize_repo_id(repo_id: str) -> str:
     value = (repo_id or "").strip()
     if value.lower().endswith(".git"):
@@ -215,16 +203,11 @@ def _normalize_repo_id(repo_id: str) -> str:
 
 class RepositoryResponse(BaseModel):
     id: str
-    project_id: str
+    owner_user_id: str | None = None
     repo_id: str
     remote_url: str | None = None
     local_path: str | None = None
     default_branch: str
     created_at: str
-    latest_snapshot_id: str | None = None
-    latest_index_status: str | None = None
-    latest_index_stats: dict[str, Any] | None = None
-    latest_indexed_chunks: int | None = None
-    has_completed_index: bool = False
-    latest_completed_index_stats: dict[str, Any] | None = None
-    latest_completed_indexed_chunks: int | None = None
+    latest_job_status: str | None = None
+    latest_job_stats: dict[str, Any] | None = None

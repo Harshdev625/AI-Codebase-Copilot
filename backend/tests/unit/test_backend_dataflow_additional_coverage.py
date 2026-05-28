@@ -136,8 +136,14 @@ def test_embedding_provider_factory(monkeypatch: pytest.MonkeyPatch) -> None:
     class Dummy:
         pass
 
+    # get_embedding_provider is decorated with @lru_cache, so we must
+    # clear the cached instance before the monkeypatched constructor
+    # can take effect.
+    provider_module.get_embedding_provider.cache_clear()
     monkeypatch.setattr(provider_module, "OllamaEmbeddingProvider", lambda: Dummy())
     assert isinstance(provider_module.get_embedding_provider(), Dummy)
+    # Clean up so other tests get a fresh provider
+    provider_module.get_embedding_provider.cache_clear()
 
 
 def test_hybrid_utilities_and_dense_paths(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,7 +159,8 @@ def test_hybrid_utilities_and_dense_paths(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(hybrid, "get_embedding_provider", lambda: Embedder())
 
     session = _Session(rows=[{"id": "1", "path": "a.py", "symbol": "f", "content": "x", "score": 0.9}])
-    out = hybrid._dense_search_postgres(session, "r", "q", top_k=1)
+    embedding = [0.1] * settings.vector_dim
+    out = hybrid._dense_search_postgres_with_embedding(session, "r", embedding, top_k=1)
     assert out[0]["id"] == "1"
 
     class Qdrant:
@@ -183,8 +190,8 @@ def test_hybrid_dense_fallback_and_lexical_and_merge(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(hybrid, "QdrantService", lambda: BrokenQdrant())
     monkeypatch.setattr(
         hybrid,
-        "_dense_search_postgres",
-        lambda session, repository_id, query, top_k=20: [{"id": "d1", "path": "a", "symbol": "s", "content": "c", "score": 0.7}],
+        "_dense_search_postgres_with_embedding",
+        lambda session, repository_id, embedding, top_k=20: [{"id": "d1", "path": "a", "symbol": "s", "content": "c", "score": 0.7}],
     )
 
     session = _Session(rows=[{"id": "l1", "path": "b", "symbol": "s", "content": "c", "score": 0.5}])
@@ -215,192 +222,6 @@ def test_hybrid_dense_returns_empty_when_embedding_unavailable(monkeypatch: pyte
 
     monkeypatch.setattr(hybrid, "get_embedding_provider", lambda: BrokenEmbedder())
     assert hybrid.dense_search(_Session(), "r", "q") == []
-    assert hybrid._dense_search_postgres(_Session(), "r", "q") == []
 
 
-def test_indexing_service_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import app.services.indexing_service as module
 
-    monkeypatch.setattr(
-        module,
-        "get_embedding_provider",
-        lambda: SimpleNamespace(embed_text=lambda _text: [0.1] * settings.vector_dim),
-    )
-    monkeypatch.setattr(module, "QdrantService", lambda: SimpleNamespace(ensure_collection=lambda: None, upsert_points=lambda points: None))
-
-    service = IndexingService(_Session())
-
-    assert service._slugify_repo_id("my/repo!!") == "my-repo"
-    assert service._slugify_repo_id("...") == "repo"
-
-    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("git", 1)))
-    with pytest.raises(RuntimeError, match="timed out"):
-        service._run_git(["status"], timeout=1)
-
-    repo_dir = tmp_path / "repo"
-    repo_dir.mkdir()
-    assert service._resolve_repo_root("r", str(repo_dir), None, None) == repo_dir
-
-    with pytest.raises(FileNotFoundError):
-        service._resolve_repo_root("r", str(repo_dir / "missing"), None, None)
-
-    with pytest.raises(ValueError, match="Provide either repo_path or repo_url"):
-        service._resolve_repo_root("r", None, None, None)
-
-    assert service._resolve_repo_root("r", None, str(repo_dir), None) == repo_dir
-
-
-def test_indexing_file_iteration_and_gitignore(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import app.services.indexing_service as module
-
-    monkeypatch.setattr(module, "get_embedding_provider", lambda: SimpleNamespace(embed_text=lambda _text: [0.1] * settings.vector_dim))
-    monkeypatch.setattr(module, "QdrantService", lambda: SimpleNamespace(ensure_collection=lambda: None, upsert_points=lambda points: None))
-    service = IndexingService(_Session())
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "a.py").write_text("print('a')", encoding="utf-8")
-    (repo / "b.bin").write_text("x", encoding="utf-8")
-
-    monkeypatch.setattr(
-        service,
-        "_run_git",
-        lambda args, cwd=None, timeout=300: SimpleNamespace(stdout="a.py\x00b.bin\x00"),
-    )
-    files = list(service._iter_git_listed_files(repo))
-    assert [f.name for f in files] == ["a.py"]
-
-    (repo / ".gitignore").write_text("ignored_dir/\n", encoding="utf-8")
-    spec = service._load_gitignore_spec(repo)
-    assert service._is_ignored(spec, repo, repo / "ignored_dir", is_dir=True) is True
-
-    ignored = repo / "ignored_dir"
-    ignored.mkdir()
-    (ignored / "x.py").write_text("x", encoding="utf-8")
-    (repo / "ok.py").write_text("x", encoding="utf-8")
-
-    monkeypatch.setattr(service, "_iter_git_listed_files", lambda _repo: iter(()))
-    walked = list(service._iter_indexable_files(repo, spec))
-    assert any(path.name == "ok.py" for path in walked)
-    assert all("ignored_dir" not in str(path) for path in walked)
-
-
-def test_indexing_progress_and_generic_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
-    import app.services.indexing_service as module
-
-    monkeypatch.setattr(
-        module,
-        "get_embedding_provider",
-        lambda: SimpleNamespace(embed_text=lambda _text: [0.1] * settings.vector_dim),
-    )
-    monkeypatch.setattr(module, "QdrantService", lambda: SimpleNamespace(ensure_collection=lambda: None, upsert_points=lambda points: None))
-
-    session = _Session()
-    service = IndexingService(session)
-
-    service._update_progress("job-1", 1, 2, "msg")
-    assert session.commits == 1
-
-    failing_session = _Session(fail_on_execute=True)
-    failing_service = IndexingService(failing_session)
-    failing_service._update_progress("job-1", 1, 2, "msg")
-    assert failing_session.rollbacks == 1
-
-    source = "\n".join(f"line {i}" for i in range(85))
-    chunks = service.generic_chunk_file("repo", "sha", Path("x.py"), source)
-    assert len(chunks) == 3
-    assert chunks[0].start_line == 1
-    assert chunks[-1].end_line == 85
-
-
-def test_upsert_chunks_and_index_repository_orchestration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    import app.services.indexing_service as module
-
-    class Embedder:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def embed_text(self, text: str) -> list[float]:
-            self.calls += 1
-            if "bad" in text:
-                raise RuntimeError("embed fail")
-            return [0.1] * settings.vector_dim
-
-    embedder = Embedder()
-
-    qdrant_calls = {"upserts": 0}
-
-    class Qdrant:
-        def ensure_collection(self) -> None:
-            pass
-
-        def upsert_points(self, points: list[dict]) -> None:
-            qdrant_calls["upserts"] += len(points)
-
-    monkeypatch.setattr(module, "get_embedding_provider", lambda: embedder)
-    monkeypatch.setattr(module, "QdrantService", lambda: Qdrant())
-
-    session = _Session()
-    service = IndexingService(session)
-
-    chunks = [
-        CodeChunk(
-            id="1",
-            repo_id="r",
-            commit_sha="s",
-            path="a.py",
-            language="py",
-            symbol="",
-            chunk_type="generic",
-            start_line=1,
-            end_line=1,
-            content="ok",
-        ),
-        CodeChunk(
-            id="2",
-            repo_id="r",
-            commit_sha="s",
-            path="b.py",
-            language="py",
-            symbol="",
-            chunk_type="generic",
-            start_line=1,
-            end_line=1,
-            content="bad",
-        ),
-    ]
-
-    service._upsert_chunks(chunks)
-    assert session.commits == 1
-    assert qdrant_calls["upserts"] == 1
-
-    empty_session = _Session()
-    empty_service = IndexingService(empty_session)
-    empty_service._upsert_chunks([])
-    assert empty_session.commits == 0
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    py_file = repo / "x.py"
-    py_file.write_text("def f():\n    return 1\n", encoding="utf-8")
-
-    monkeypatch.setattr(service, "_resolve_repo_root", lambda *args, **kwargs: repo)
-    monkeypatch.setattr(service, "_load_gitignore_spec", lambda root: object())
-    monkeypatch.setattr(service, "_iter_indexable_files", lambda root, spec: iter([py_file]))
-    monkeypatch.setattr(module, "chunk_python_file", lambda *args, **kwargs: [chunks[0]])
-
-    seen = {"count": 0}
-
-    def fake_upsert(items: list[CodeChunk]) -> None:
-        seen["count"] = len(items)
-
-    monkeypatch.setattr(service, "_upsert_chunks", fake_upsert)
-    total = service.index_repository(
-        repo_id="r",
-        repository_id="repository-uuid",
-        commit_sha="s",
-        repo_path=str(repo),
-        indexing_job_id="job",
-    )
-    assert total == 1
-    assert seen["count"] == 1

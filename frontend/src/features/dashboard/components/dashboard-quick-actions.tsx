@@ -24,10 +24,10 @@ const ACTIONS: QuickAction[] = [
     label: 'Start AI Chat',
     description: 'Ask questions about your codebase',
     href: '/chat',
-    color: 'text-violet-400',
-    gradient: 'from-violet-500/15 to-violet-600/5',
-    borderColor: 'border-violet-500/15 hover:border-violet-500/40',
-    glow: 'hover:shadow-[0_0_20px_-8px_hsl(265,80%,65%,0.6)]',
+    color: 'text-primary',
+    gradient: 'from-primary/15 to-primary/5',
+    borderColor: 'border-primary/20 hover:border-primary/40',
+    glow: 'hover:shadow-glow-sm',
   },
   {
     id: 'repos',
@@ -35,10 +35,10 @@ const ACTIONS: QuickAction[] = [
     label: 'Add Repository',
     description: 'Connect a new codebase to index',
     href: '/repositories',
-    color: 'text-indigo-400',
-    gradient: 'from-indigo-500/15 to-indigo-600/5',
-    borderColor: 'border-indigo-500/15 hover:border-indigo-500/40',
-    glow: 'hover:shadow-[0_0_20px_-8px_hsl(240,80%,65%,0.6)]',
+    color: 'text-warning',
+    gradient: 'from-warning/15 to-warning/5',
+    borderColor: 'border-warning/20 hover:border-warning/40',
+    glow: 'hover:shadow-[0_0_20px_-8px_hsl(var(--warning)/0.45)]',
   },
   {
     id: 'search',
@@ -46,10 +46,10 @@ const ACTIONS: QuickAction[] = [
     label: 'Search Code',
     description: 'Semantic search across files',
     href: '/chat',
-    color: 'text-emerald-400',
-    gradient: 'from-emerald-500/15 to-emerald-600/5',
-    borderColor: 'border-emerald-500/15 hover:border-emerald-500/40',
-    glow: 'hover:shadow-[0_0_20px_-8px_hsl(142,65%,45%,0.6)]',
+    color: 'text-success',
+    gradient: 'from-success/15 to-success/5',
+    borderColor: 'border-success/20 hover:border-success/40',
+    glow: 'hover:shadow-[0_0_20px_-8px_hsl(var(--success)/0.4)]',
   },
   {
     id: 'index',
@@ -57,10 +57,10 @@ const ACTIONS: QuickAction[] = [
     label: 'Re-Index Repos',
     description: 'Sync changes to vector store',
     href: '/repositories',
-    color: 'text-amber-400',
-    gradient: 'from-amber-500/15 to-amber-600/5',
-    borderColor: 'border-amber-500/15 hover:border-amber-500/40',
-    glow: 'hover:shadow-[0_0_20px_-8px_hsl(38,92%,50%,0.6)]',
+    color: 'text-ai',
+    gradient: 'from-ai/15 to-ai/5',
+    borderColor: 'border-ai/20 hover:border-ai/40',
+    glow: 'hover:shadow-[0_0_20px_-8px_hsl(var(--ai)/0.4)]',
   },
 ];
 
@@ -76,7 +76,7 @@ export function DashboardQuickActions() {
           onClick={() => router.push(action.href)}
           className={cn(
             'group relative flex items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-300',
-            'bg-[hsl(240,18%,7%)] hover:bg-[hsl(240,18%,8%)] hover:-translate-y-0.5',
+            'bg-card/80 hover:bg-card hover:-translate-y-0.5',
             action.borderColor,
             action.glow,
             'animate-fade-up'
@@ -97,7 +97,7 @@ export function DashboardQuickActions() {
             <div className={cn('text-[13px] font-bold transition-colors', action.color)}>
               {action.label}
             </div>
-            <p className="text-[11px] text-zinc-600 leading-snug mt-0.5 group-hover:text-zinc-500 transition-colors">
+            <p className="text-[11px] text-muted-foreground leading-snug mt-0.5 group-hover:text-foreground/70 transition-colors">
               {action.description}
             </p>
           </div>

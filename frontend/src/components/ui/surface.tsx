@@ -19,10 +19,10 @@ export const Surface = React.forwardRef<HTMLDivElement, SurfaceProps>(
         ref={ref}
         className={cn(
           'rounded-2xl border transition-all duration-300',
-          variant === 'flat'        && 'bg-card border-border/40 shadow-sm',
+          variant === 'flat'        && 'bg-card border-border/50 shadow-sm',
           variant === 'elevated'    && 'bg-card border-border/60 shadow-xl shadow-black/5',
-          variant === 'sunken'      && 'bg-muted/30 border-border/20 shadow-inner',
-          variant === 'interactive' && 'bg-card border-border/40 shadow-sm cursor-pointer hover:border-primary/30 hover:shadow-ai hover:bg-card/80',
+          variant === 'sunken'      && 'bg-muted/40 border-border/30 shadow-inner',
+          variant === 'interactive' && 'bg-card border-border/50 shadow-sm cursor-pointer hover:border-primary/40 hover:shadow-ai hover:bg-card/90',
           variant === 'ghost'       && 'bg-transparent border-transparent',
           className
         )}
@@ -46,7 +46,7 @@ export const Glass = React.forwardRef<HTMLDivElement, GlassProps>(
       <motion.div
         ref={ref}
         className={cn(
-          'relative border border-white/8 overflow-hidden rounded-2xl',
+          'relative border border-border/60 overflow-hidden rounded-2xl',
           intensity === 'low'    && 'bg-background/20 backdrop-blur-md',
           intensity === 'medium' && 'bg-background/40 backdrop-blur-xl',
           intensity === 'high'   && 'bg-background/60 backdrop-blur-2xl',

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     log_level: str = "INFO"
+    log_format: str = "text"  # "text" or "json" (PHASE 2: structured logging)
     production_enforce_secure_secrets: bool = True
 
     cors_allow_origins: str = "http://localhost:3000"
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
     ollama_embedding_model: str = "mxbai-embed-large:latest"
     ollama_chat_model: str = "tinyllama:latest"
     ollama_timeout_seconds: float = 600.0
+    ollama_chat_timeout_seconds: float = 15.0
+    ollama_embedding_timeout_seconds: float = 600.0
 
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333
@@ -48,10 +51,8 @@ class Settings(BaseSettings):
     indexing_worker_job_timeout_seconds: int = 60 * 45
     indexing_worker_max_retries: int = 3
     indexing_worker_retry_backoff_seconds: str = "10,30,60"
-
     github_webhook_secret: str = ""
-    billing_webhook_url: str = ""
-    api_key_prefix: str = "tmk"
+
     secrets_mount_path: str = "./config/secrets"
 
     postgres_host: str = "localhost"
@@ -59,6 +60,8 @@ class Settings(BaseSettings):
     postgres_db: str = "aicc"
     postgres_user: str = "postgres"
     postgres_password: str = "mypassword"
+
+    database_url: str | None = None
 
     postgres_pool_size: int = 5
     postgres_max_overflow: int = 10
@@ -71,6 +74,8 @@ class Settings(BaseSettings):
     max_index_file_size_bytes: int = 1_000_000
     indexing_timeout_seconds: int = 60 * 30
     indexing_stall_timeout_seconds: int = 60 * 5
+    indexing_pending_timeout_seconds: int = 60 * 2
+    indexing_local_fallback_enabled: bool = True
     indexing_incremental_enabled: bool = True
     indexing_force_full_reindex: bool = False
 
@@ -86,32 +91,12 @@ class Settings(BaseSettings):
     jwt_access_token_expire_seconds: int = 60 * 60 * 8
     admin_registration_secret_key: str = ""
 
-    plan_free_requests_per_day: int = 1500
-    plan_free_queries_per_day: int = 200
-    plan_free_queries_per_project_per_day: int = 120
-    plan_free_index_jobs_per_day: int = 8
-    plan_free_index_jobs_per_project_per_day: int = 5
-    plan_free_indexing_volume_chunks_per_day: int = 40_000
-    plan_free_max_projects: int = 3
-    plan_free_max_repositories_per_project: int = 5
+    # NOTE: SaaS limits/billing intentionally removed in Phase 3.
 
-    plan_pro_requests_per_day: int = 15_000
-    plan_pro_queries_per_day: int = 2_000
-    plan_pro_queries_per_project_per_day: int = 1_200
-    plan_pro_index_jobs_per_day: int = 60
-    plan_pro_index_jobs_per_project_per_day: int = 30
-    plan_pro_indexing_volume_chunks_per_day: int = 400_000
-    plan_pro_max_projects: int = 25
-    plan_pro_max_repositories_per_project: int = 40
-
-    plan_enterprise_requests_per_day: int = 150_000
-    plan_enterprise_queries_per_day: int = 20_000
-    plan_enterprise_queries_per_project_per_day: int = 12_000
-    plan_enterprise_index_jobs_per_day: int = 500
-    plan_enterprise_index_jobs_per_project_per_day: int = 200
-    plan_enterprise_indexing_volume_chunks_per_day: int = 4_000_000
-    plan_enterprise_max_projects: int = 500
-    plan_enterprise_max_repositories_per_project: int = 1_000
+    @property
+    def repo_cache_path(self) -> str:
+        """Alias for repo_cache_dir used by IndexingService._cache_root()."""
+        return self.repo_cache_dir
 
     @property
     def postgres_dsn(self) -> str:
@@ -177,9 +162,17 @@ class Settings(BaseSettings):
         return str(self.app_env).strip().lower() in {"production", "staging"}
 
     def validate_runtime_configuration(self) -> None:
+        """H3 FIX: Comprehensive configuration validation."""
+        from urllib.parse import urlparse
+        import logging
+        
+        logger_local = logging.getLogger(__name__)
+        
         if not self.production_enforce_secure_secrets or not self.is_production_like:
+            logger_local.debug("config_validation - skipped (not production-like)")
             return
 
+        # Check for weak secrets in production
         insecure_values = {
             "jwt_secret_key": self.jwt_secret_key,
             "postgres_password": self.postgres_password,
@@ -195,6 +188,34 @@ class Settings(BaseSettings):
         if weak_fields:
             joined = ", ".join(sorted(weak_fields))
             raise RuntimeError(f"Unsafe production configuration: {joined}")
+        
+        # H3: Validate external service URLs
+        try:
+            parsed = urlparse(self.ollama_base_url)
+            if not parsed.scheme or not parsed.netloc:
+                raise RuntimeError(f"Invalid ollama_base_url: {self.ollama_base_url}")
+        except Exception as exc:
+            raise RuntimeError(f"Invalid ollama_base_url: {exc}") from exc
+        
+        # H3: Validate Qdrant configuration
+        if not self.qdrant_host or not self.qdrant_host.strip():
+            raise RuntimeError("qdrant_host cannot be empty")
+        if self.qdrant_port <= 0 or self.qdrant_port > 65535:
+            raise RuntimeError(f"qdrant_port out of range: {self.qdrant_port}")
+        
+        # H3: Validate database configuration
+        if self.postgres_pool_size <= 0:
+            raise RuntimeError(f"postgres_pool_size must be > 0: {self.postgres_pool_size}")
+        if self.postgres_max_overflow < 0:
+            raise RuntimeError(f"postgres_max_overflow cannot be negative: {self.postgres_max_overflow}")
+        
+        # H3: Validate vector dimension matches embedding model expectations
+        if self.vector_dim <= 0:
+            raise RuntimeError(f"vector_dim must be > 0: {self.vector_dim}")
+        if self.vector_dim > 4096:
+            raise RuntimeError(f"vector_dim suspiciously large: {self.vector_dim}")
+        
+        logger_local.info("config_validation - all checks passed")
 
 
 @lru_cache

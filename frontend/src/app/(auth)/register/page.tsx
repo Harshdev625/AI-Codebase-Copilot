@@ -4,7 +4,7 @@ import { AuthenticationRegisterForm } from "@/features/auth/components/auth-regi
 
 export default function RegisterPage() {
   return (
-    <div className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       <AuthenticationRegisterForm />
     </div>
   );

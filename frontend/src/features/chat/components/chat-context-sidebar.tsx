@@ -20,11 +20,11 @@ interface ChatContextSidebarProps {
 /* ── Repo status icon ─────────────────────────────────── */
 function RepoStatusIcon({ status }: { status?: string }) {
   const s = (status ?? '').toLowerCase();
-  if (s === 'completed') return <CheckCircle className="h-3 w-3 text-emerald-400" />;
-  if (s === 'failed')    return <XCircle className="h-3 w-3 text-red-400" />;
+  if (s === 'completed') return <CheckCircle className="h-4 w-4 text-success" />;
+  if (s === 'failed')    return <XCircle className="h-4 w-4 text-destructive" />;
   if (s === 'pending' || s === 'running')
-    return <Clock className="h-3 w-3 text-amber-400 animate-pulse" />;
-  return <Clock className="h-3 w-3 text-zinc-700" />;
+    return <Clock className="h-4 w-4 text-warning animate-pulse" />;
+  return <Clock className="h-4 w-4 text-muted-foreground/40" />;
 }
 
 /* ── Custom animated dropdown ─────────────────────────── */
@@ -50,26 +50,26 @@ function RepositoryDropdown({
         disabled={isLoading}
         onClick={() => setOpen(!open)}
         className={cn(
-          'flex w-full items-center justify-between gap-2 rounded-xl border bg-[hsl(240,18%,8%)] px-3.5 py-2.5 text-left transition-all',
+          'flex w-full items-center justify-between gap-2 rounded-xl border bg-input px-3.5 py-2.5 text-left transition-all',
           'text-[13px] font-medium focus:outline-none',
           open
-            ? 'border-violet-500/40 shadow-[0_0_0_1px_hsl(265,80%,65%,0.15),0_0_20px_-8px_hsl(265,80%,65%,0.3)]'
-            : 'border-white/8 hover:border-violet-500/25 hover:shadow-[0_0_16px_-8px_hsl(265,80%,65%,0.2)]'
+            ? 'border-primary/40 shadow-[0_0_0_1px_primary/15,0_0_20px_-8px_primary/30]'
+            : 'border-border/50 hover:border-primary/25 hover:shadow-[0_0_16px_-8px_primary/20]'
         )}
       >
         <div className="flex items-center gap-2 min-w-0">
           {selected ? (
             <>
               <RepoStatusIcon status={selected.latest_index_status ?? undefined} />
-              <span className="truncate text-[13px] font-semibold text-zinc-300">{selected.repo_id}</span>
+              <span className="truncate text-[13px] font-semibold text-foreground">{selected.repo_id}</span>
             </>
           ) : (
-            <span className="text-zinc-700 text-[12px]">
+            <span className="text-muted-foreground/60 text-[12px]">
               {repositories.length === 0 ? 'No sources available' : 'Select a repository…'}
             </span>
           )}
         </div>
-        <ChevronDown className={cn('h-3.5 w-3.5 text-zinc-600 transition-transform shrink-0', open && 'rotate-180')} />
+        <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform shrink-0', open && 'rotate-180')} />
       </button>
 
       <AnimatePresence>
@@ -79,7 +79,7 @@ function RepositoryDropdown({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.98 }}
             transition={{ duration: 0.15 }}
-            className="absolute top-full mt-1 w-full z-50 rounded-2xl border border-white/8 bg-[hsl(240,18%,8%)] shadow-2xl overflow-hidden"
+            className="absolute top-full mt-1 w-full z-50 rounded-2xl border border-border/50 bg-card shadow-2xl overflow-hidden"
           >
             {repositories.map((repo) => (
               <button
@@ -89,13 +89,13 @@ function RepositoryDropdown({
                 className={cn(
                   'flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left text-[12px] font-medium transition-all',
                   repo.id === selectedId
-                    ? 'bg-violet-500/10 text-violet-300'
-                    : 'text-zinc-500 hover:bg-white/3 hover:text-zinc-300'
+                    ? 'bg-primary/10 text-primary'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                 )}
               >
                 <RepoStatusIcon status={repo.latest_index_status ?? undefined} />
                 <span className="flex-1 truncate">{repo.repo_id}</span>
-                {repo.id === selectedId && <CheckCircle className="h-3.5 w-3.5 text-violet-400 shrink-0" />}
+                {repo.id === selectedId && <CheckCircle className="h-4 w-4 text-primary shrink-0" />}
               </button>
             ))}
           </motion.div>
@@ -107,10 +107,10 @@ function RepositoryDropdown({
 
 /* ── Capability shortcuts ─────────────────────────────── */
 const CAPABILITIES = [
-  { label: 'Explain Architecture', shortcut: '/', description: 'Full system walkthrough', color: 'text-violet-400 bg-violet-500/8 border-violet-500/15 hover:bg-violet-500/20 hover:border-violet-500/40 hover:shadow-[0_0_12px_-4px_hsl(265,80%,65%,0.5)]' },
-  { label: 'Security Audit',       shortcut: '!', description: 'Identify vulnerabilities',  color: 'text-red-400    bg-red-500/8    border-red-500/15    hover:bg-red-500/20    hover:border-red-500/40    hover:shadow-[0_0_12px_-4px_hsl(0,84%,60%,0.5)]' },
-  { label: 'Refactor Suggestion',  shortcut: '@', description: 'Improve code structure',    color: 'text-indigo-400 bg-indigo-500/8 border-indigo-500/15 hover:bg-indigo-500/20 hover:border-indigo-500/40 hover:shadow-[0_0_12px_-4px_hsl(240,80%,65%,0.5)]' },
-  { label: 'Fix Bugs',             shortcut: '#', description: 'Diagnose & solve errors',   color: 'text-emerald-400 bg-emerald-500/8 border-emerald-500/15 hover:bg-emerald-500/20 hover:border-emerald-500/40 hover:shadow-[0_0_12px_-4px_hsl(142,65%,45%,0.5)]' },
+  { label: 'Explain Architecture', shortcut: '/', description: 'Full system walkthrough', color: 'text-primary bg-primary/8 border-primary/15 hover:bg-primary/15 hover:border-primary/40 hover:shadow-[0_0_12px_-4px_hsl(var(--primary)/0.4)]' },
+  { label: 'Security Audit',       shortcut: '!', description: 'Identify vulnerabilities',  color: 'text-error bg-error/8 border-error/15 hover:bg-error/15 hover:border-error/40 hover:shadow-[0_0_12px_-4px_hsl(var(--error)/0.4)]' },
+  { label: 'Refactor Suggestion',  shortcut: '@', description: 'Improve code structure',    color: 'text-ai bg-ai/8 border-ai/15 hover:bg-ai/15 hover:border-ai/40 hover:shadow-[0_0_12px_-4px_hsl(var(--ai)/0.4)]' },
+  { label: 'Fix Bugs',             shortcut: '#', description: 'Diagnose & solve errors',   color: 'text-success bg-success/8 border-success/15 hover:bg-success/15 hover:border-success/40 hover:shadow-[0_0_12px_-4px_hsl(var(--success)/0.4)]' },
 ];
 
 /* ── Main sidebar ─────────────────────────────────────── */
@@ -122,14 +122,14 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
     <div className="hidden lg:flex flex-col gap-4 w-[280px] shrink-0">
 
       {/* Knowledge Base card */}
-      <div className="relative overflow-hidden rounded-3xl border border-white/6 bg-[hsl(240,18%,6%)] shadow-premium">
+      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/80 shadow-premium">
         {/* Gradient header */}
-        <div className="relative flex items-center gap-2.5 px-4 py-3.5 border-b border-white/5 bg-gradient-to-r from-violet-500/10 to-transparent">
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-violet-500/8 to-transparent" />
-          <div className="relative flex h-6 w-6 items-center justify-center rounded-lg bg-violet-500/15 border border-violet-500/20">
-            <Database className="h-3.5 w-3.5 text-violet-400" />
+        <div className="relative flex items-center gap-2.5 px-4 py-3.5 border-b border-border/50 bg-gradient-to-r from-primary/10 to-transparent">
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/8 to-transparent" />
+          <div className="relative flex h-6 w-6 items-center justify-center rounded-lg bg-primary/15 border border-primary/20">
+            <Database className="h-3.5 w-3.5 text-primary" />
           </div>
-          <span className="relative text-[10px] font-bold uppercase tracking-[0.2em] text-violet-300">Knowledge Base</span>
+          <span className="relative text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">Knowledge Base</span>
 
           {/* Shimmer line */}
           <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-px shimmer opacity-40" />
@@ -137,7 +137,7 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
 
         <div className="p-4 space-y-4">
           <div className="space-y-2">
-            <label className="text-[9px] font-bold uppercase tracking-[0.25em] text-zinc-700">
+            <label className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
               Active Repository
             </label>
             <RepositoryDropdown
@@ -149,19 +149,19 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
           </div>
 
           {selectedRepo && (
-            <div className="rounded-2xl border border-white/6 bg-[hsl(240,18%,8%)] p-3.5 space-y-3">
+            <div className="rounded-2xl border border-border/60 bg-background/70 p-3.5 space-y-3">
               <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-2 font-medium text-zinc-600">
+                <div className="flex items-center gap-2 font-medium text-muted-foreground">
                   <GitBranch className="h-3 w-3" />
                   Branch
                 </div>
-                <code className="text-[10px] font-bold text-zinc-400 bg-white/4 px-2 py-0.5 rounded-lg border border-white/6">
+                <code className="text-[10px] font-semibold text-muted-foreground bg-background/70 px-2 py-0.5 rounded-lg border border-border/60">
                   {selectedRepo.default_branch}
                 </code>
               </div>
 
               <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-2 font-medium text-zinc-600">
+                <div className="flex items-center gap-2 font-medium text-muted-foreground">
                   <ShieldCheck className="h-3 w-3" />
                   Status
                 </div>
@@ -171,19 +171,19 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
               </div>
 
               <div className="flex items-center justify-between text-[11px]">
-                <div className="flex items-center gap-2 font-medium text-zinc-600">
+                <div className="flex items-center gap-2 font-medium text-muted-foreground">
                   <Zap className="h-3 w-3" />
                   Engine
                 </div>
-                <span className="text-[10px] font-bold text-violet-400">RAG · LangGraph</span>
+                <span className="text-[10px] font-semibold text-primary">RAG · LangGraph</span>
               </div>
             </div>
           )}
 
           {!selectedRepo && !isLoading && (
-            <div className="rounded-2xl border border-dashed border-white/8 bg-white/2 p-5 text-center">
-              <Layers className="h-6 w-6 text-zinc-800 mx-auto mb-2" />
-              <p className="text-[10px] text-zinc-700 font-medium">
+            <div className="rounded-2xl border border-dashed border-border/60 bg-background/50 p-5 text-center">
+              <Layers className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+              <p className="text-[10px] text-muted-foreground font-medium">
                 Select a repository to start chatting
               </p>
             </div>
@@ -192,12 +192,12 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
       </div>
 
       {/* Capabilities card */}
-      <div className="relative overflow-hidden rounded-3xl border border-white/6 bg-[hsl(240,18%,6%)] shadow-premium flex-1">
-        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-white/5">
-          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-white/4 border border-white/6">
-            <Layers className="h-3.5 w-3.5 text-zinc-500" />
+      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/80 shadow-premium flex-1">
+        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border/50">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-background/70 border border-border/60">
+            <Layers className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
-          <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-500">Capabilities</span>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">Capabilities</span>
         </div>
 
         <div className="p-3 space-y-1.5">
@@ -210,8 +210,8 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
               )}
             >
               <div>
-                <p className="text-[11px] font-bold text-foreground/90">{item.label}</p>
-                <p className="text-[9px] text-zinc-700">{item.description}</p>
+                <p className="text-[11px] font-semibold text-foreground/90">{item.label}</p>
+                <p className="text-[9px] text-muted-foreground">{item.description}</p>
               </div>
               <kbd className={cn(
                 'rounded-lg border px-2 py-1 text-[11px] font-bold shadow-sm transition-all duration-250',

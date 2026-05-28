@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -10,36 +11,24 @@ import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+from app.core.config import settings
 from app.graph.workflow import compiled_graph
 from app.llm.model_router import get_model_router
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT, build_context_packet
 from app.observability.metrics import runtime_metrics
 from app.rag.retrieval.service import get_retrieval_service
 from app.services.cache_service import get_cache_service
-from app.services.saas_service import record_query_usage
+from app.core.exceptions import (
+    DatabaseException,
+    ExternalServiceError,
+    NoContextError,
+    LLMRequestError,
+    WorkflowError,
+)
+from app.core.resilience import retry, circuit_breaker
 
 
 logger = logging.getLogger(__name__)
-
-
-class QueryServiceError(RuntimeError):
-    """Base error for QueryService failures."""
-
-
-class NoIndexedContextError(QueryServiceError):
-    """Raised when retrieval returns no usable context (likely not indexed yet)."""
-
-
-class LLMUnavailableError(QueryServiceError):
-    """Raised when the LLM backend cannot be reached or returns an error."""
-
-
-class WorkflowExecutionError(QueryServiceError):
-    """Raised when the LangGraph workflow fails."""
-
-
-class EmptyLLMResponseError(QueryServiceError):
-    """Raised when the LLM returns an empty response."""
 
 
 class QueryService:
@@ -49,22 +38,21 @@ class QueryService:
         self.model_router = get_model_router()
         self.retrieval_service = get_retrieval_service(session)
 
-    def run(
+    @retry(attempts=2, delay_seconds=1, retryable_exceptions=(ExternalServiceError,))
+    async def run(
         self,
         repository_id: str | None,
         repo_id: str | None,
         query: str,
         *,
         user_id: str | None = None,
-        project_id: str | None = None,
         session_id: str | None = None,
         federated: bool = False,
     ) -> dict:
         logger.info(
-            "query_run - request received repository_id=%s repo_id=%s project_id=%s user_id=%s session_id=%s federated=%s",
+            "query_run - request received repository_id=%s repo_id=%s user_id=%s session_id=%s federated=%s",
             repository_id,
             repo_id,
-            project_id,
             user_id,
             session_id,
             federated,
@@ -72,21 +60,19 @@ class QueryService:
         run_started = time.perf_counter()
         runtime_metrics.increment("query_run_total", mode="federated" if federated else "single")
         # Ensure session exists or create new one
-        active_session_id = self._ensure_session(session_id, user_id, project_id, repository_id)
+        active_session_id = await self._ensure_session(session_id, user_id, repository_id)
 
-        result, assembled_context, cache_key, from_cache = self.prepare_generation(
+        result, assembled_context, cache_key, from_cache = await self.prepare_generation(
             repository_id,
             repo_id,
             query,
             user_id=user_id,
-            project_id=project_id,
             session_id=active_session_id,
             federated=federated,
         )
         if from_cache:
             logger.info("query_run - completed from cache repository_id=%s repo_id=%s", repository_id, repo_id)
-            if user_id and project_id:
-                result["session_id"] = active_session_id
+            result["session_id"] = active_session_id
             runtime_metrics.increment("query_cache_hits_total", mode="federated" if federated else "single")
             runtime_metrics.observe_ms(
                 "query_run_latency_ms",
@@ -100,13 +86,12 @@ class QueryService:
         if isinstance(patch_proposal, dict) and patch_proposal.get("diff"):
             result["answer"] = str(patch_proposal.get("summary") or "Patch proposal ready for review.")
             result["session_id"] = active_session_id
-            return self.finalize_result(
+            return await self.finalize_result(
                 repository_id,
                 repo_id,
                 result,
                 cache_key,
                 user_id=user_id,
-                project_id=project_id,
                 session_id=active_session_id,
             )
 
@@ -121,36 +106,45 @@ class QueryService:
                 mode="federated" if federated else "single",
                 stage="deterministic",
             )
-            return self.finalize_result(
+            return await self.finalize_result(
                 repository_id,
                 repo_id,
                 result,
                 cache_key,
                 user_id=user_id,
-                project_id=project_id,
                 session_id=active_session_id,
             )
 
         try:
-            with runtime_metrics.timer("llm_chat_latency_ms", mode="federated" if federated else "single"):
-                try:
-                    llm_answer = self.model_router.chat(
-                        prompt=query,
-                        context=assembled_context,
-                        system_prompt=BASE_SYSTEM_PROMPT,
-                    )
-                except TypeError:
-                    llm_answer = self.model_router.chat(
-                        prompt=query,
-                        context=assembled_context,
-                    )
-        except RuntimeError as exc:
+            llm_answer = await self._get_llm_answer_with_timeout(
+                query,
+                assembled_context,
+                mode="federated" if federated else "single",
+            )
+        except (LLMRequestError, ExternalServiceError) as exc:
             logger.exception("LLM call failed repo_id=%s repository_id=%s", repo_id, repository_id)
             runtime_metrics.increment("llm_chat_errors_total", mode="federated" if federated else "single")
-            raise LLMUnavailableError(f"Language model unavailable: {exc}") from exc
+            fallback = self._select_fallback_answer(query, result)
+            result["answer"] = fallback
+            result["session_id"] = active_session_id
+            result["intent"] = result.get("intent", "unknown")
+            logger.warning(
+                "query_run - fallback response used repo_id=%s repository_id=%s answer_chars=%s",
+                repo_id,
+                repository_id,
+                len(fallback),
+            )
+            return await self.finalize_result(
+                repository_id,
+                repo_id,
+                result,
+                cache_key,
+                user_id=user_id,
+                session_id=active_session_id,
+            )
 
-        if not llm_answer.strip():
-            raise EmptyLLMResponseError("Language model returned an empty response")
+        if not llm_answer or not llm_answer.strip():
+            raise LLMRequestError("Language model returned an empty response")
 
         result["answer"] = llm_answer
         result["session_id"] = active_session_id
@@ -167,24 +161,43 @@ class QueryService:
             mode="federated" if federated else "single",
             stage="llm",
         )
-        return self.finalize_result(
+        return await self.finalize_result(
             repository_id,
             repo_id,
             result,
             cache_key,
             user_id=user_id,
-            project_id=project_id,
             session_id=active_session_id,
         )
 
-    def prepare_generation(
+    @circuit_breaker(failure_threshold=3, recovery_timeout_seconds=300, service_name="LLM")
+    async def _get_llm_answer_with_timeout(self, query: str, context: str, mode: str) -> str:
+        with runtime_metrics.timer("llm_chat_latency_ms", mode=mode):
+            timeout_seconds = max(5.0, float(settings.ollama_chat_timeout_seconds))
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self.model_router.chat,
+                        prompt=query,
+                        context=context,
+                        system_prompt=BASE_SYSTEM_PROMPT,
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                logger.warning("llm_chat - timeout after %s seconds", timeout_seconds)
+                raise LLMRequestError(f"Language model timed out after {timeout_seconds}s") from exc
+            except Exception as exc:
+                logger.exception("llm_chat - unexpected error")
+                raise LLMRequestError("Language model request failed") from exc
+
+    async def prepare_generation(
         self,
         repository_id: str | None,
         repo_id: str | None,
         query: str,
         *,
         user_id: str | None = None,
-        project_id: str | None = None,
         session_id: str | None = None,
         federated: bool = False,
     ) -> tuple[dict, str, str, bool]:
@@ -196,39 +209,30 @@ class QueryService:
             session_id,
         )
         # Load history specifically from the active session
-        history = self._load_session_history(session_id)
+        history = await self._load_session_history(session_id)
         history_hash = self._history_hash(history)
 
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
         mode_key = "federated" if federated else "single"
-        scope_key = project_id if federated else repository_id
+        scope_key = repository_id
         cache_key = f"chat:v3:{mode_key}:{scope_key}:{query_hash}:{history_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
             logger.debug("QueryService cache hit repo_id=%s repository_id=%s", repo_id, repository_id)
             return cached, "", cache_key, True
 
-        if federated and project_id:
-            return self._prepare_federated_generation(
-                project_id=project_id,
-                query=query,
-                history=history,
-                cache_key=cache_key,
-            )
-
         if not repository_id or not repo_id:
-            raise NoIndexedContextError("Repository context missing. Select a repository or use project federation.")
+            raise NoContextError("Repository context missing. Select a repository and retry.")
 
         state = {
             "repo_id": repo_id,
             "repository_id": repository_id,
-            "project_id": project_id,
             "query": query,
             "session": self.session,
             "history": history,
         }
-        result = self._invoke_graph_with_trace(state)
+        result = await self._invoke_graph_with_trace(state)
         proposal = self._build_patch_proposal_from_state(result)
         if proposal:
             result["patch_proposal"] = proposal
@@ -245,7 +249,7 @@ class QueryService:
         snippets = result.get("retrieved_context", [])[:6]
         if not snippets:
             logger.warning("query_prepare - no indexed context repository_id=%s repo_id=%s", repository_id, repo_id)
-            raise NoIndexedContextError(
+            raise NoContextError(
                 "No indexed context found for this query. Index the repository first and retry."
             )
 
@@ -261,36 +265,6 @@ class QueryService:
             len(snippets),
             len(assembled_context),
         )
-        return result, assembled_context, cache_key, False
-
-    def _prepare_federated_generation(
-        self,
-        *,
-        project_id: str,
-        query: str,
-        history: list[dict],
-        cache_key: str,
-    ) -> tuple[dict, str, str, bool]:
-        snippets = self.retrieval_service.retrieve_project(
-            project_id=project_id,
-            query=query,
-            top_k=8,
-            per_repo_k=6,
-        )
-        if not snippets:
-            raise NoIndexedContextError("No indexed context found in this project. Index repositories and retry.")
-
-        assembled_context, source_index = build_context_packet(
-            query=query,
-            snippets=snippets[:8],
-            history=history,
-        )
-        result = {
-            "intent": "search",
-            "retrieval_strategy": "project_federation",
-            "retrieved_context": snippets,
-            "source_index": source_index,
-        }
         return result, assembled_context, cache_key, False
 
     def _build_patch_proposal_from_state(self, state: dict) -> dict | None:
@@ -425,6 +399,9 @@ class QueryService:
             seen.add(key)
             deduped.append((score, path, symbol, excerpt, is_code_file))
 
+        if not deduped:
+            return None
+
         lines = [f"I found {target} related implementation. Showing code excerpts:"]
         for _, path, symbol, excerpt, _ in deduped[:3]:
             lines.append(f"- {path} (symbol: {symbol})")
@@ -435,7 +412,44 @@ class QueryService:
         lines.append("If you want, I can show a longer excerpt from one specific file.")
         return "\n".join(lines)
 
-    def finalize_result(
+    def _build_fallback_answer(self, query: str, result: dict) -> str:
+        sources = result.get("retrieved_context", []) or []
+        top_sources = sources[:3]
+        lines = [
+            "The language model is temporarily unavailable.",
+            "Here are the most relevant files I found from your index:",
+        ]
+        if not top_sources:
+            lines.append("- (no indexed sources available)")
+        else:
+            for item in top_sources:
+                path = str(item.get("path") or "unknown")
+                symbol = str(item.get("symbol") or "module")
+                lines.append(f"- {path} ({symbol})")
+        lines.append("Please retry your request once the model is reachable.")
+        return "\n".join(lines)
+
+    def _select_fallback_answer(self, query: str, result: dict) -> str:
+        """Select the best available fallback answer: graph -> deterministic -> generic."""
+        # Try graph-generated answer first
+        graph_answer = str(result.get("answer") or "").strip()
+        if graph_answer:
+            logger.info("fallback_select - using graph answer chars=%s", len(graph_answer))
+            return graph_answer
+
+        # Try deterministic answer extraction
+        deterministic = self.build_deterministic_answer(query, result)
+        if deterministic is not None and deterministic.strip():
+            logger.info("fallback_select - using deterministic answer chars=%s", len(deterministic))
+            return deterministic
+
+        # Fall back to generic answer
+        generic = self._build_fallback_answer(query, result)
+        generic = generic or "I was unable to process your question with the current context. Please check the indexed content and try again."
+        logger.info("fallback_select - using generic fallback chars=%s", len(generic))
+        return generic
+
+    async def finalize_result(
         self,
         repository_id: str | None,
         repo_id: str | None,
@@ -443,268 +457,178 @@ class QueryService:
         cache_key: str,
         *,
         user_id: str | None = None,
-        project_id: str | None = None,
         session_id: str | None = None,
     ) -> dict:
-        if not str(result.get("answer", "")).strip():
-            raise EmptyLLMResponseError("Language model returned an empty response")
+        answer = str(result.get("answer") or "").strip()
+        if not answer:
+            logger.error(
+                "finalize_result - empty answer repository_id=%s repo_id=%s answer=%s",
+                repository_id,
+                repo_id,
+                repr(result.get("answer")),
+            )
+            raise LLMRequestError("Language model returned an empty response")
+        
+        result["answer"] = answer
 
         safe_result = json.loads(json.dumps(result, default=str))
         self.cache.set_json(cache_key, safe_result)
         logger.debug("query_finalize - cache stored repository_id=%s key=%s", repository_id, cache_key)
 
-        if user_id:
-            try:
-                record_query_usage(
-                    self.session,
-                    user_id=str(user_id),
-                    project_id=project_id,
-                    query=str(safe_result.get("query") or ""),
-                    answer=str(safe_result.get("answer") or ""),
-                    retrieved_count=len(list(safe_result.get("retrieved_context", []) or [])),
-                    auto_commit=True,
-                )
-            except Exception:
-                logger.exception("query_finalize - usage tracking failed")
-
         try:
-            self._record_agent_run(
+            await self._record_agent_run(
                 user_id=user_id,
-                project_id=project_id,
                 repo_id=str(repo_id or ""),
                 repository_id=str(repository_id or ""),
                 query=str(safe_result.get("query") or ""),
                 intent=str(safe_result.get("intent") or "unknown"),
                 answer=str(safe_result.get("answer") or ""),
-                sources=safe_result.get("retrieved_context", []) or [],
+                source_index=safe_result.get("source_index", []) or [],
+                stats=safe_result.get("stats", {}) or {},
+                patch_proposal=safe_result.get("patch_proposal"),
+                session_id=session_id,
             )
         except Exception:
-            logger.error("query_finalize - failed to record agent run", exc_info=True)
+            logger.exception("Failed to record agent run")
 
-        # Record to persistent messages table
-        if session_id:
-            try:
-                self._persist_message_turn(
-                    session_id=session_id,
-                    query=str(safe_result.get("query") or ""),
-                    answer=str(safe_result.get("answer") or ""),
-                    metadata={
-                        "intent": str(safe_result.get("intent") or "unknown"),
-                        "sources": safe_result.get("retrieved_context", []) or [],
-                        "source_index": safe_result.get("source_index", []) or [],
-                        "proposal": safe_result.get("patch_proposal"),
-                    }
-                )
-            except Exception:
-                logger.error("Failed to persist message turn session_id=%s", session_id, exc_info=True)
+        return result
 
-        logger.info(
-            "QueryService completed repo_id=%s repository_id=%s intent=%s",
-            repo_id,
-            repository_id,
-            safe_result.get("intent", "unknown"),
-        )
-        return safe_result
-
-    def _ensure_session(
+    async def _ensure_session(
         self,
         session_id: str | None,
         user_id: str | None,
-        project_id: str | None,
         repository_id: str | None,
     ) -> str:
-        """Verifies if a session exists, or creates a new one if needed."""
-        if not user_id or not project_id:
-             # Fallback for anonymous or system calls
-             return session_id or str(uuid.uuid4())
-
         if session_id:
-            # check if exists
-            row = self.session.execute(
-                text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
-                {"id": session_id, "user_id": user_id}
-            ).fetchone()
-            if row:
-                # Update timestamp
-                self.session.execute(
-                    text("UPDATE chat_sessions SET updated_at = NOW() WHERE id = :id"),
-                    {"id": session_id}
-                )
-                self.session.commit()
-                return session_id
-
-        # Create new
-        new_id = session_id or str(uuid.uuid4())
-        self.session.execute(
-            text(
-                "INSERT INTO chat_sessions (id, project_id, repository_id, user_id, created_at, updated_at) "
-                "VALUES (:id, :project_id, :repository_id, :user_id, NOW(), NOW())"
-            ),
-            {
-                "id": new_id,
-                "project_id": project_id,
-                "repository_id": repository_id,
-                "user_id": user_id,
-            }
-        )
-        self.session.commit()
-        logger.debug("query_session - created new session_id=%s", new_id)
-        return new_id
-
-    def _history_hash(self, history: list[dict]) -> str:
-        """Generate a hash based on conversation history for cache key."""
-        if not history:
-            return hashlib.sha256(b"").hexdigest()[:16]
+            return session_id
         
-        history_str = json.dumps(history, sort_keys=True)
-        return hashlib.sha256(history_str.encode("utf-8")).hexdigest()[:16]
+        new_session_id = str(uuid.uuid4())
+        try:
+            self.session.execute(
+                text(
+                    """
+                    INSERT INTO chat_sessions (id, user_id, repository_id)
+                    VALUES (:id, :user_id, :repository_id)
+                    """
+                ),
+                {
+                    "id": new_session_id,
+                    "user_id": user_id,
+                    "repository_id": repository_id,
+                },
+            )
+            self.session.commit()
+            return new_session_id
+        except Exception as exc:
+            self.session.rollback()
+            raise DatabaseException("Failed to create new chat session") from exc
 
-    def _load_session_history(self, session_id: str | None, limit: int = 10) -> list[dict]:
-        """Loads previous turns from the messages table for context."""
+    async def _load_session_history(self, session_id: str | None) -> list[dict]:
         if not session_id:
             return []
-        if not hasattr(self.session, "execute"):
-            return []
-
-        rows = self.session.execute(
-            text(
-                "SELECT content, role FROM messages WHERE chat_session_id = :session_id ORDER BY created_at ASC LIMIT :limit"
-            ),
-            {"session_id": session_id, "limit": limit * 2}
-        ).fetchall()
-
-        history: list[dict] = []
-        # Group pairs of user/assistant messages
-        current_turn: dict = {}
-        for row in rows:
-            if row.role == "user":
-                current_turn = {"query": row.content}
-            elif row.role == "assistant" and "query" in current_turn:
-                current_turn["answer"] = row.content
-                history.append(current_turn)
-                current_turn = {}
         
-        return history
-
-    def _persist_message_turn(self, session_id: str, query: str, answer: str, metadata: dict) -> None:
-        """Saves a user query and assistant response as linked messages."""
-        if not hasattr(self.session, "execute") or not hasattr(self.session, "commit"):
-            return
-
-        user_msg_id = str(uuid.uuid4())
-        asst_msg_id = str(uuid.uuid4())
-
-        # Save User prompt
-        self.session.execute(
-            text("INSERT INTO messages (id, chat_session_id, role, content, created_at) VALUES (:id, :sid, 'user', :content, NOW())"),
-            {"id": user_msg_id, "sid": session_id, "content": query}
-        )
-        # Save Assistant response
-        self.session.execute(
-            text("INSERT INTO messages (id, chat_session_id, role, content, metadata, created_at) VALUES (:id, :sid, 'assistant', :content, CAST(:meta AS jsonb), NOW())"),
-            {"id": asst_msg_id, "sid": session_id, "content": answer, "meta": json.dumps(metadata)}
-        )
-        
-        # Update session summary if it's the first message
-        self.session.execute(
-            text("UPDATE chat_sessions SET summary = :summary WHERE id = :id AND summary IS NULL"),
-            {"id": session_id, "summary": (query[:50] + "...") if len(query) > 50 else query}
-        )
-        
-        self.session.commit()
-        logger.debug("query_persistence - saved turn for session_id=%s", session_id)
-
-    def _record_agent_run(
-        self,
-        *,
-        user_id: str | None,
-        project_id: str | None,
-        repo_id: str,
-        repository_id: str,
-        query: str,
-        intent: str,
-        answer: str,
-        sources: list[dict],
-    ) -> None:
-        if not user_id or not project_id:
-            logger.debug("query_record_agent_run - skipped missing user/project context")
-            return
-
-        run_id = str(uuid.uuid4())
-        diagnostics = {
-            "repository_id": repository_id,
-            "answer": answer,
-            "sources": sources[:10],
-            "model": getattr(self.model_router, "chat_model", None),
-            "retrieved_count": len(sources),
-            "confidence": (
-                self._safe_float((sources[0].get("rerank_score") if sources else 0.0), default=0.0)
-                or self._safe_float((sources[0].get("federation_score") if sources else 0.0), default=0.0)
-                or self._safe_float((sources[0].get("score") if sources else 0.0), default=0.0)
-            ),
-        }
-
-        self.session.execute(
-            text(
-                """
-                INSERT INTO agent_runs (id, user_id, project_id, repo_id, query, intent, status, diagnostics, started_at, finished_at)
-                VALUES (:id, :user_id, :project_id, :repo_id, :query, :intent, 'completed', CAST(:diagnostics AS jsonb), NOW(), NOW())
-                """
-            ),
-            {
-                "id": run_id,
-                "user_id": user_id,
-                "project_id": project_id,
-                "repo_id": repo_id,
-                "query": query,
-                "intent": intent,
-                "diagnostics": json.dumps(diagnostics),
-            },
-        )
-        self.session.commit()
-        logger.debug("query_record_agent_run - persisted run_id=%s repository_id=%s", run_id, repository_id)
-
-    def _safe_float(self, value: object, *, default: float) -> float:
         try:
-            return float(value)
-        except Exception:
-            return default
-
-    def _invoke_graph_with_trace(self, state: dict) -> dict:
-        run_trace: list[dict] = []
-
-        stream = getattr(compiled_graph, "stream", None)
-        if callable(stream):
-            merged = dict(state)
-            try:
-                for event in stream(state, stream_mode="updates"):
-                    if not isinstance(event, dict):
-                        continue
-                    for node_name, node_output in event.items():
-                        if isinstance(node_output, dict):
-                            merged.update(node_output)
-                            run_trace.append(
-                                {
-                                    "node": str(node_name),
-                                    "output_keys": sorted(node_output.keys()),
-                                }
-                            )
-                            logger.debug("Graph step node=%s keys=%s", node_name, sorted(node_output.keys()))
-                if run_trace:
-                    merged["run_trace"] = run_trace
-                logger.debug("graph_invoke - stream completed nodes=%s", len(run_trace))
-                return merged
-            except Exception:
-                logger.exception("graph_invoke - stream failed; falling back to invoke")
-                # Fall back to non-stream invocation below.
-                pass
-
-        try:
-            result = compiled_graph.invoke(state)
+            rows = self.session.execute(
+                text(
+                    """
+                    SELECT role, content, created_at
+                    FROM messages
+                    WHERE chat_session_id = :session_id
+                    ORDER BY created_at ASC
+                    LIMIT 20
+                    """
+                ),
+                {"session_id": session_id},
+            ).mappings().all()
+            history: list[dict] = []
+            for row in rows:
+                role = str(row.get("role") or "").lower()
+                created_at = row.get("created_at")
+                if role == "user":
+                    history.append({"query": row.get("content"), "created_at": created_at})
+                elif role == "assistant":
+                    history.append({"answer": row.get("content"), "created_at": created_at})
+                else:
+                    history.append({"answer": row.get("content"), "created_at": created_at})
+            return history
         except Exception as exc:
-            raise WorkflowExecutionError(f"Agent workflow execution failed: {exc}") from exc
+            raise DatabaseException("Failed to load session history") from exc
 
-        if isinstance(result, dict):
-            result.setdefault("run_trace", run_trace)
-            return result
-        raise RuntimeError("Agent workflow returned an invalid response")
+    def _history_hash(self, history: list[dict]) -> str:
+        """Compute a lightweight hash for history-aware cache keys.
+
+        PHASE 1 FIX: Handle both datetime objects and string timestamps.
+        Previously crashed with ``AttributeError: 'str' has no attribute 'timestamp'``
+        when ``created_at`` was serialized as a string (e.g., from cache or DB mapping).
+        """
+        if not history:
+            return "no-history"
+        last_entry = history[-1]
+        created_at = last_entry.get("created_at")
+        if created_at is None:
+            return "no-timestamp"
+        if hasattr(created_at, "timestamp"):
+            return str(created_at.timestamp())
+        # Fallback for string timestamps
+        return hashlib.sha256(str(created_at).encode("utf-8")).hexdigest()[:16]
+
+    async def _record_agent_run(self, **kwargs) -> None:
+        session_id = kwargs.get("session_id")
+        if not session_id:
+            return
+        try:
+            metadata = {
+                "intent": kwargs.get("intent"),
+                "repository_id": kwargs.get("repository_id"),
+                "repo_id": kwargs.get("repo_id"),
+                "source_index": kwargs.get("source_index", []),
+                "stats": kwargs.get("stats", {}),
+                "patch_proposal": kwargs.get("patch_proposal"),
+            }
+            query_text = str(kwargs.get("query") or "").strip()
+            answer_text = str(kwargs.get("answer") or "").strip()
+
+            if query_text:
+                self.session.execute(
+                    text(
+                        """
+                        INSERT INTO messages (id, chat_session_id, role, content, metadata)
+                        VALUES (:id, :chat_session_id, :role, :content, :metadata)
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "chat_session_id": session_id,
+                        "role": "user",
+                        "content": query_text,
+                        "metadata": json.dumps(metadata),
+                    },
+                )
+
+            if answer_text:
+                self.session.execute(
+                    text(
+                        """
+                        INSERT INTO messages (id, chat_session_id, role, content, metadata)
+                        VALUES (:id, :chat_session_id, :role, :content, :metadata)
+                        """
+                    ),
+                    {
+                        "id": str(uuid.uuid4()),
+                        "chat_session_id": session_id,
+                        "role": "assistant",
+                        "content": answer_text,
+                        "metadata": json.dumps(metadata),
+                    },
+                )
+            self.session.commit()
+        except Exception as exc:
+            self.session.rollback()
+            raise DatabaseException("Failed to record agent run") from exc
+
+    async def _invoke_graph_with_trace(self, state: dict) -> dict:
+        try:
+            return await compiled_graph.ainvoke(state)
+        except Exception as exc:
+            logger.exception("LangGraph invocation failed")
+            raise WorkflowError("Workflow execution failed") from exc

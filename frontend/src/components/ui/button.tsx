@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
   [
-    "inline-flex items-center justify-center whitespace-nowrap rounded-lg",
+    "inline-flex items-center justify-center whitespace-nowrap rounded-xl",
     "text-sm font-semibold transition-all duration-200",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
     "active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
@@ -18,7 +18,7 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
         outline:
-          "border border-border bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
+          "border border-border bg-background/70 shadow-sm hover:bg-accent hover:text-accent-foreground",
         secondary:
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
         ghost:
@@ -26,13 +26,13 @@ const buttonVariants = cva(
         link:
           "text-primary underline-offset-4 hover:underline",
         premium:
-          "bg-gradient-to-b from-primary/10 to-primary/20 border border-primary/20 text-primary hover:bg-primary/20 shadow-sm",
+          "bg-gradient-to-r from-primary/15 via-[hsl(var(--glow)/0.18)] to-primary/10 border border-primary/20 text-primary hover:shadow-md",
         ai:
-          "bg-gradient-to-r from-primary via-blue-500 to-indigo-500 text-white shadow-ai hover:shadow-glow-sm hover:opacity-90",
+          "bg-[linear-gradient(120deg,hsl(var(--primary)),hsl(var(--glow)),hsl(var(--ai)))] text-primary-foreground shadow-ai hover:shadow-glow-sm hover:opacity-90",
         success:
           "bg-success text-success-foreground shadow-sm hover:bg-success/90",
         glass:
-          "bg-white/8 backdrop-blur-md border border-white/10 text-foreground hover:bg-white/12",
+          "bg-background/60 backdrop-blur-md border border-border/60 text-foreground hover:bg-background/80",
       },
       size: {
         default: "h-10 px-5 py-2",
@@ -55,16 +55,42 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  isLoading?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild: _asChild, ...props }, ref) => {
+  ({ className, variant, size, asChild: _asChild, isLoading, children, disabled, ...props }, ref) => {
     return (
       <button
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        disabled={disabled || isLoading}
         {...props}
-      />
+      >
+        {isLoading && (
+          <svg
+            className="mr-2 h-4 w-4 animate-spin"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            ></circle>
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+        )}
+        {children}
+      </button>
     );
   }
 );

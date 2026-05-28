@@ -23,14 +23,14 @@ export function AuthenticationLoginForm() {
       {/* Heading */}
       <div className="space-y-2">
         <div className="flex items-center gap-2 mb-1">
-          <Sparkles className="h-3.5 w-3.5 text-violet-400" />
-          <span className="text-[9px] font-bold uppercase tracking-[0.3em] text-violet-400/70">
-            Developer Access
+          <Sparkles className="h-4 w-4 text-primary" />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.3em] text-primary/70">
+            Developer Sign In
           </span>
         </div>
-        <h1 className="text-2xl font-bold tracking-tight text-white/90">Welcome back</h1>
-        <p className="text-[13px] text-zinc-500">
-          Sign in to your workspace to continue.
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Welcome back</h1>
+        <p className="text-sm text-muted-foreground">
+          Continue your build with a focused workspace.
         </p>
       </div>
 
@@ -40,18 +40,18 @@ export function AuthenticationLoginForm() {
           {/* Email */}
           <div className="space-y-1.5">
             <label
-              className="text-[9px] font-bold uppercase tracking-[0.25em] text-zinc-600"
+              className="text-[10px] font-semibold uppercase tracking-[0.25em] text-muted-foreground"
               htmlFor="login-email"
             >
               Email Address
             </label>
             <div className="relative">
-              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-700" />
+              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 id="login-email"
                 type="email"
                 placeholder="name@example.com"
-                className="pl-11 h-11 border-white/8 bg-white/3 text-zinc-200 placeholder:text-zinc-700 focus:border-violet-500/40 focus:bg-white/5 focus:shadow-[0_0_0_1px_hsl(265,80%,65%,0.15)] transition-all"
+                className="pl-11"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -64,25 +64,25 @@ export function AuthenticationLoginForm() {
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label
-                className="text-[9px] font-bold uppercase tracking-[0.25em] text-zinc-600"
+                className="text-[10px] font-semibold uppercase tracking-[0.25em] text-muted-foreground"
                 htmlFor="login-password"
               >
                 Password
               </label>
               <Link
                 href="#"
-                className="text-[9px] font-bold uppercase tracking-[0.2em] text-violet-500/60 hover:text-violet-400 transition-colors"
+                className="text-[10px] font-semibold uppercase tracking-[0.2em] text-primary/70 hover:text-primary transition-colors"
               >
                 Forgot?
               </Link>
             </div>
             <div className="relative">
-              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-700" />
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 id="login-password"
                 type={showPassword ? 'text' : 'password'}
                 placeholder="••••••••"
-                className="pl-11 pr-11 h-11 border-white/8 bg-white/3 text-zinc-200 placeholder:text-zinc-700 focus:border-violet-500/40 focus:bg-white/5 focus:shadow-[0_0_0_1px_hsl(265,80%,65%,0.15)] transition-all"
+                className="pl-11 pr-11"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -91,7 +91,7 @@ export function AuthenticationLoginForm() {
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-700 hover:text-zinc-400 transition-colors"
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
@@ -103,7 +103,7 @@ export function AuthenticationLoginForm() {
         <Button
           type="submit"
           id="login-submit"
-          className="w-full h-11 font-bold tracking-tight text-sm bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 border-0 shadow-glow-md hover:shadow-[0_0_32px_-4px_hsl(265,80%,65%,0.5)] transition-all hover:scale-[1.01] active:scale-[0.99]"
+          className="w-full h-11 font-semibold tracking-tight text-sm shadow-md transition-all hover:shadow-lg"
           disabled={isLoggingIn}
         >
           {isLoggingIn ? (
@@ -119,19 +119,25 @@ export function AuthenticationLoginForm() {
 
       {/* Divider */}
       <div className="relative flex items-center gap-3">
-        <div className="flex-1 h-px bg-white/6" />
-        <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-700">or</span>
-        <div className="flex-1 h-px bg-white/6" />
+        <div className="flex-1 h-px bg-border/40" />
+        <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">or</span>
+        <div className="flex-1 h-px bg-border/40" />
       </div>
 
       {/* Register link */}
-      <div className="text-center text-[13px] text-zinc-600">
+      <div className="text-center text-[13px] text-muted-foreground">
         New to the platform?{' '}
         <Link
           href="/register"
-          className="font-bold text-violet-400 hover:text-violet-300 transition-colors"
+          className="font-semibold text-primary hover:text-primary/80 transition-colors"
         >
           Create an account
+        </Link>
+      </div>
+      <div className="text-center text-[12px] text-muted-foreground">
+        Admin access?{' '}
+        <Link href="/admin/login" className="font-semibold text-primary hover:text-primary/80 transition-colors">
+          Sign in as admin
         </Link>
       </div>
     </div>

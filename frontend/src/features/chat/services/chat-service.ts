@@ -1,138 +1,150 @@
-import { apiClient, ApiEnvelope, PaginatedData } from '@/lib/api';
-import { AskPayload, ChatResponse } from '../types/chat-types';
+import { apiClient } from "@/core/api/client";
+import { PaginatedData as PaginatedPayload } from "@/core/api/types";
+import { API_BASE_URL } from "@/core/api/client";
+import { getAccessToken } from "@/lib/auth";
+import type {
+  ChatMessage,
+  ChatRequestPayload,
+  ChatResponsePayload,
+  ChatSession,
+  ChatStreamEvent,
+} from "@/features/chat/types/chat-types";
 
-type PaginatedEnvelope<T> = ApiEnvelope<PaginatedData<T>>;
-
-function unwrapPaginated<T>(response: { data: PaginatedEnvelope<T> }): PaginatedData<T> {
-  if (!response.data.success) {
-    throw new Error(response.data.error || 'Request failed');
-  }
-
-  const payload = response.data.data;
-  if (!payload || !Array.isArray(payload.items) || !payload.pagination) {
-    throw new Error('Invalid paginated response payload');
-  }
-
-  return payload;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-async function fetchAllPages<T>(path: string, limit = 100): Promise<T[]> {
-  let offset = 0;
-  const items: T[] = [];
+type StreamEnvelope = {
+  success: boolean;
+  data?: ChatStreamEvent;
+  error?: string | null;
+  message?: string | null;
+};
 
-  while (true) {
-    const response = await apiClient.get<PaginatedEnvelope<T>>(path, {
-      params: { limit, offset },
-    });
-    const page = unwrapPaginated(response);
-    items.push(...page.items);
+function parseEnvelopeFromLine(line: string): StreamEnvelope | null {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isObject(parsed)) return null;
+    if (typeof parsed.success !== "boolean") return null;
 
-    if (!page.pagination.has_more || page.items.length === 0) {
-      break;
-    }
-    offset += limit;
+    const data = parsed.data as ChatStreamEvent | undefined;
+    const error = typeof parsed.error === "string" ? parsed.error : null;
+    const message = typeof parsed.message === "string" ? parsed.message : null;
+
+    return {
+      success: parsed.success,
+      data,
+      error,
+      message,
+    };
+  } catch {
+    return null;
   }
-
-  return items;
 }
 
 export const chatService = {
-  getSessions: async () => {
-    return fetchAllPages<any>('/chat/sessions');
+  listSessions(limit = 20, offset = 0, repositoryId?: string): Promise<PaginatedPayload<ChatSession>> {
+    const params: Record<string, any> = { limit, offset };
+    if (repositoryId) {
+      params.repository_id = repositoryId;
+    }
+    return apiClient<PaginatedPayload<ChatSession>>("/v1/chat/sessions", {
+      params,
+    });
   },
 
-  getSessionMessages: async (sessionId: string) => {
-    return fetchAllPages<any>(`/chat/sessions/${sessionId}/messages`);
+  listMessages(sessionId: string, limit = 100, offset = 0): Promise<PaginatedPayload<ChatMessage>> {
+    const safeLimit = Math.min(limit, 100);
+    return apiClient<PaginatedPayload<ChatMessage>>(`/v1/chat/sessions/${sessionId}/messages`, {
+      params: { limit: safeLimit, offset },
+    });
   },
 
-  deleteSession: async (sessionId: string) => {
-     await apiClient.delete(`/chat/sessions/${sessionId}`);
+  deleteSession(sessionId: string): Promise<{ deleted: boolean }> {
+    return apiClient<{ deleted: boolean }>(`/v1/chat/sessions/${sessionId}`, {
+      method: "DELETE",
+    });
   },
 
-  ask: async (payload: AskPayload) => {
-    const res = await apiClient.post<ApiEnvelope<ChatResponse>>('/chat', payload);
-    return res.data;
+  applyPatch(repositoryId: string, diff: string): Promise<{ applied: boolean; message: string }> {
+    return apiClient<{ applied: boolean; message: string }>("/v1/chat/apply-patch", {
+      body: { repository_id: repositoryId, diff },
+    });
   },
 
-  streamChat: async (payload: AskPayload, onEvent: (event: any) => void) => {
-    const streamPath = '/chat/stream';
-    const configuredBase = String(apiClient.defaults.baseURL || '').replace(/\/$/, '');
-    const streamUrl = /^https?:\/\//i.test(configuredBase)
-      ? `${configuredBase}${streamPath}`
-      : `${streamPath}`;
+  send(payload: ChatRequestPayload): Promise<ChatResponsePayload> {
+    return apiClient<ChatResponsePayload>("/v1/chat", {
+      body: payload,
+    });
+  },
 
-    const response = await fetch(streamUrl, {
-      method: 'POST',
+  async stream(
+    payload: ChatRequestPayload,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const token = getAccessToken();
+    if (!token) throw new Error("Missing access token");
+
+    // API_BASE_URL is "/api/v1", so path is relative to that base (no /v1 prefix needed)
+    const response = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + token,
       },
       body: JSON.stringify(payload),
-      credentials: 'include',
+      signal,
     });
 
     if (!response.ok) {
-      let detail = `Streaming failed (${response.status})`;
+      let message = "Streaming request failed";
       try {
-        const body = (await response.json()) as { detail?: string; error?: string };
-        detail = body.detail || body.error || detail;
+        const body = (await response.json()) as Record<string, unknown>;
+        const detail = body.detail;
+        const fallback = body.message;
+        if (typeof detail === "string" && detail.length > 0) message = detail;
+        else if (typeof fallback === "string" && fallback.length > 0) message = fallback;
       } catch {
-        // ignore parsing errors and return status-based fallback
+        message = "Streaming request failed";
       }
-      throw new Error(detail);
+      throw new Error(message);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Streaming unavailable');
-    }
+    if (!response.body) throw new Error("No response stream received");
 
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buffer = "";
 
-    const parseLine = (line: string) => {
-      const envelope = JSON.parse(line) as {
-        success: boolean;
-        data?: any;
-        error?: string | null;
-      };
+    while (true) {
+      const read = await reader.read();
+      if (read.done) break;
 
-      if (envelope.success && envelope.data) {
-        onEvent(envelope.data);
-        return;
-      }
+      buffer += decoder.decode(read.value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
-      if (!envelope.success) {
-        throw new Error(envelope.error || 'Streaming failed');
-      }
-    };
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
 
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
+        const envelope = parseEnvelopeFromLine(line);
+        if (!envelope) continue;
+        if (!envelope.success) {
+          throw new Error(envelope.message || envelope.error || "Stream failed");
         }
-
-        let newlineIndex = buffer.indexOf('\n');
-        while (newlineIndex >= 0) {
-          const line = buffer.slice(0, newlineIndex).trim();
-          buffer = buffer.slice(newlineIndex + 1);
-          if (line) {
-            parseLine(line);
-          }
-          newlineIndex = buffer.indexOf('\n');
-        }
-
-        if (done) break;
+        if (envelope.data) onEvent(envelope.data);
       }
+    }
 
-      buffer += decoder.decode();
-      const trailing = buffer.trim();
-      if (trailing) {
-        parseLine(trailing);
+    const finalLine = buffer.trim();
+    if (finalLine.length > 0) {
+      const envelope = parseEnvelopeFromLine(finalLine);
+      if (envelope && envelope.success && envelope.data) onEvent(envelope.data);
+      if (envelope && !envelope.success) {
+        throw new Error(envelope.message || envelope.error || "Stream failed");
       }
-    } finally {
-      reader.releaseLock();
     }
   },
 };

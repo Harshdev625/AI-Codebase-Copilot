@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from typing import Iterator
+from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import (
@@ -18,22 +18,17 @@ from app.api.dependencies import (
     get_pagination,
 )
 from app.core.api_response import paginated_success_response, success_response
-from app.core.config import settings
 from app.db.database import get_db_session
+from app.db.models import ChatSession, Message
 from app.models.api_models import (
     ChatRequest,
     ChatResponse,
     ChatSessionResponse,
     ChatMessageResponse,
+    ApplyPatchRequest,
 )
 from app.services.query_service import QueryService
-from app.services.query_service import (
-    EmptyLLMResponseError,
-    LLMUnavailableError,
-    NoIndexedContextError,
-    WorkflowExecutionError,
-)
-from app.services.saas_service import enforce_query_limit
+from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -41,39 +36,27 @@ logger = logging.getLogger(__name__)
 
 @router.get("/sessions")
 def list_sessions(
+    repository_id: str | None = None,
     current_user: dict = Depends(get_current_user),
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
 ) -> dict:
-    """Returns all chat sessions for the current user."""
-    total = int(
-        session.execute(
-            text("SELECT COUNT(*) FROM chat_sessions WHERE user_id = :user_id"),
-            {"user_id": current_user["id"]},
-        ).scalar()
-        or 0
+    """Returns all chat sessions for the current user, optionally filtered by repository."""
+    query = session.query(ChatSession).filter(ChatSession.user_id == str(current_user["id"]))
+    if repository_id:
+        query = query.filter(ChatSession.repository_id == repository_id)
+
+    total = query.count()
+    rows = (
+        query.order_by(ChatSession.updated_at.desc())
+        .limit(pagination.limit)
+        .offset(pagination.offset)
+        .all()
     )
-    rows = session.execute(
-        text(
-            """
-            SELECT *
-            FROM chat_sessions
-            WHERE user_id = :user_id
-            ORDER BY updated_at DESC
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        {
-            "user_id": current_user["id"],
-            "limit": pagination.limit,
-            "offset": pagination.offset,
-        },
-    ).fetchall()
 
     payload = [
         ChatSessionResponse(
             id=str(r.id),
-            project_id=str(r.project_id),
             repository_id=str(r.repository_id) if r.repository_id else None,
             title=str(r.title) if r.title else None,
             summary=str(r.summary) if r.summary else None,
@@ -98,44 +81,30 @@ def get_session_messages(
 ) -> dict:
     """Returns full history for a specific chat thread."""
     # Security check
-    row = session.execute(
-        text("SELECT id FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
-        {"id": session_id, "user_id": current_user["id"]}
-    ).fetchone()
-    if not row:
+    chat_session = (
+        session.query(ChatSession)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .first()
+    )
+    if not chat_session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    total = int(
-        session.execute(
-            text("SELECT COUNT(*) FROM messages WHERE chat_session_id = :sid"),
-            {"sid": session_id},
-        ).scalar()
-        or 0
+    total = session.query(Message).filter(Message.chat_session_id == session_id).count()
+    rows = (
+        session.query(Message)
+        .filter(Message.chat_session_id == session_id)
+        .order_by(Message.created_at.asc())
+        .limit(pagination.limit)
+        .offset(pagination.offset)
+        .all()
     )
-
-    rows = session.execute(
-        text(
-            """
-            SELECT *
-            FROM messages
-            WHERE chat_session_id = :sid
-            ORDER BY created_at ASC
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        {
-            "sid": session_id,
-            "limit": pagination.limit,
-            "offset": pagination.offset,
-        },
-    ).fetchall()
 
     payload = [
         ChatMessageResponse(
             id=str(r.id),
             role=str(r.role),
             content=str(r.content),
-            metadata=dict(r.metadata or {}),
+            metadata=dict(r.msg_metadata or {}),
             created_at=str(r.created_at),
         ) for r in rows
     ]
@@ -154,94 +123,81 @@ def delete_session(
     session: Session = Depends(get_db_session),
 ):
     """Deletes a chat session and all its messages."""
-    session.execute(
-        text("DELETE FROM chat_sessions WHERE id = :id AND user_id = :user_id"),
-        {"id": session_id, "user_id": current_user["id"]}
+    # PHASE 2 FIX: Check existence BEFORE attempting delete to avoid unnecessary rollback
+    exists = (
+        session.query(ChatSession)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .first()
     )
+    if not exists:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session.query(ChatSession).filter(ChatSession.id == session_id).delete(synchronize_session=False)
     session.commit()
     return success_response({"deleted": True})
 
+
+@router.post("/apply-patch")
+def apply_patch(
+    req: ApplyPatchRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Applies a patch proposal diff directly to the local codebase."""
+    assert_scopes(current_user, {"chat:query"})
+    
+    if req.repository_id:
+        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
+    else:
+        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+        
+    local_path = repo_row.get("local_path")
+    if not local_path:
+        raise HTTPException(status_code=400, detail="Cannot apply patches to remote-only repositories.")
+        
+    from app.utils.diff_utils import apply_diff_to_codebase
+    from pathlib import Path
+    
+    repo_path = Path(local_path).resolve()
+    try:
+        apply_diff_to_codebase(repo_path, req.diff)
+        return success_response({"applied": True, "message": "Patch applied successfully."})
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("", response_model=ChatResponse)
 @router.post("/chat", response_model=ChatResponse, include_in_schema=False)
-def chat(
+async def chat(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> ChatResponse:
     assert_scopes(current_user, {"chat:query"})
     logger.info(
-        "chat - request received user_id=%s repository_id=%s project_id=%s",
+        "chat - request received user_id=%s repository_id=%s",
         current_user["id"],
         req.repository_id,
-        req.project_id,
     )
 
     try:
         service = QueryService(session)
-        if req.project_id:
-            membership = session.execute(
-                text(
-                    """
-                    SELECT id
-                    FROM project_memberships
-                    WHERE project_id = :project_id AND user_id = :user_id
-                    LIMIT 1
-                    """
-                ),
-                {"project_id": req.project_id, "user_id": current_user["id"]},
-            ).first()
-            if not membership:
-                raise HTTPException(status_code=403, detail="Not authorized for this project")
-
-            enforce_query_limit(
-                session,
-                user_id=str(current_user["id"]),
-                plan_tier=str(current_user.get("plan_tier") or "free"),
-                project_id=str(req.project_id),
-            )
-
-            result = service.run(
-                repository_id=None,
-                repo_id=None,
-                query=req.query,
-                user_id=str(current_user["id"]),
-                project_id=str(req.project_id),
-                session_id=req.session_id,
-                federated=True,
-            )
+        if req.repository_id:
+            repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
         else:
-            if req.repository_id:
-                repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
-            else:
-                repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
-            project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
-            enforce_query_limit(
-                session,
-                user_id=str(current_user["id"]),
-                plan_tier=str(current_user.get("plan_tier") or "free"),
-                project_id=project_id,
-            )
-            try:
-                result = service.run(
-                    repository_id=repo_row["id"],
-                    repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                    query=req.query,
-                    user_id=str(current_user["id"]),
-                    project_id=project_id,
-                    session_id=req.session_id,
-                )
-            except TypeError:
-                # Backward compatibility for tests and legacy service signatures.
-                result = service.run(
-                    repository_id=repo_row["id"],
-                    repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
-                    query=req.query,
-                )
-    except NoIndexedContextError as exc:
+            repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+        result = await service.run(
+            repository_id=repo_row["id"],
+            repo_id=str(repo_row.get("repo_id") or req.repo_id or repo_row["id"]),
+            query=req.query,
+            user_id=str(current_user["id"]),
+            session_id=req.session_id,
+            federated=False,
+        )
+    except NoContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except HTTPException:
         raise
-    except (LLMUnavailableError, EmptyLLMResponseError) as exc:
+    except (LLMRequestError, ExternalServiceError):
         raise HTTPException(status_code=503, detail="AI service unavailable.")
     except Exception as exc:
         logger.exception("Chat failed")
@@ -267,89 +223,43 @@ def chat(
 
 @router.post("/stream")
 @router.post("/chat/stream", include_in_schema=False)
-def chat_stream(
+async def chat_stream(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ) -> StreamingResponse:
     assert_scopes(current_user, {"chat:query"})
     logger.info(
-        "chat_stream - request user_id=%s repository_id=%s project_id=%s",
+        "chat_stream - request user_id=%s repository_id=%s",
         current_user["id"],
         req.repository_id,
-        req.project_id,
     )
 
     service = QueryService(session)
     active_repository_id: str | None = None
     active_repo_id: str | None = None
-    project_id: str | None = None
-
-    if req.project_id:
-        membership = session.execute(
-            text(
-                """
-                SELECT id
-                FROM project_memberships
-                WHERE project_id = :project_id AND user_id = :user_id
-                LIMIT 1
-                """
-            ),
-            {"project_id": req.project_id, "user_id": current_user["id"]},
-        ).first()
-        if not membership:
-            raise HTTPException(status_code=403, detail="Not authorized for this project")
-        project_id = str(req.project_id)
-        enforce_query_limit(
-            session,
-            user_id=str(current_user["id"]),
-            plan_tier=str(current_user.get("plan_tier") or "free"),
-            project_id=project_id,
-        )
+    if req.repository_id:
+        repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
     else:
-        if req.repository_id:
-            repo_row = ensure_repository_access_by_id(session, req.repository_id, current_user["id"])
-        else:
-            repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
-        active_repository_id = str(repo_row["id"])
-        active_repo_id = str(repo_row.get("repo_id") or req.repo_id or repo_row["id"])
-        project_id = str(repo_row["project_id"]) if repo_row.get("project_id") is not None else None
-        enforce_query_limit(
-            session,
-            user_id=str(current_user["id"]),
-            plan_tier=str(current_user.get("plan_tier") or "free"),
-            project_id=project_id,
-        )
+        repo_row = ensure_repository_access(session, str(req.repo_id), current_user["id"])
+    active_repository_id = str(repo_row["id"])
+    active_repo_id = str(repo_row.get("repo_id") or req.repo_id or repo_row["id"])
 
-    active_session_id = req.session_id
-    ensure_session = getattr(service, "_ensure_session", None)
-    if callable(ensure_session) and project_id is not None:
-        active_session_id = ensure_session(
-            req.session_id,
-            str(current_user["id"]),
-            project_id,
-            active_repository_id,
-        )
+    # FIX: Ensure a session exists and is persisted before streaming
+    active_session_id = await service._ensure_session(
+        req.session_id, str(current_user["id"]), active_repository_id
+    )
 
     try:
-        try:
-            result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                active_repository_id,
-                active_repo_id,
-                req.query,
-                user_id=str(current_user["id"]),
-                project_id=project_id,
-                session_id=active_session_id,
-                federated=bool(req.project_id),
-            )
-        except TypeError:
-            # Test doubles may expose the older prepare_generation signature.
-            result, assembled_context, cache_key, from_cache = service.prepare_generation(
-                active_repository_id,
-                active_repo_id,
-                req.query,
-            )
-    except NoIndexedContextError as exc:
+        result, assembled_context, cache_key, from_cache = await service.prepare_generation(
+            active_repository_id,
+            active_repo_id,
+            req.query,
+            user_id=str(current_user["id"]),
+            session_id=active_session_id,
+            federated=False,
+        )
+    except NoContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
     intent = str(result.get("intent", "unknown"))
@@ -360,99 +270,164 @@ def chat_stream(
         deterministic_answer = build_deterministic(req.query, result)
     if deterministic_answer is not None:
         result["answer"] = deterministic_answer
-        service.finalize_result(
+        await service.finalize_result(
             active_repository_id,
             active_repo_id,
             result,
             cache_key,
             user_id=str(current_user["id"]),
-            project_id=project_id,
             session_id=active_session_id,
         )
 
     def _event_success(payload: dict) -> str:
         return json.dumps({"success": True, "data": payload, "error": None}) + "\n"
 
-    def _iter_stream() -> Iterator[str]:
-        yield _event_success({"type": "start", "intent": intent, "session_id": active_session_id})
+    def _event_error(error_msg: str, error_type: str = "stream_error") -> str:
+        """H6 FIX: Format error event for streaming response."""
+        return json.dumps({
+            "success": False,
+            "data": {"type": error_type, "error": error_msg},
+            "error": error_msg,
+        }) + "\n"
 
-        if from_cache:
-            yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
-            yield _event_success(
-                {
-                    "type": "done",
-                    "intent": intent,
-                    "sources": sources,
-                    "proposal": result.get("patch_proposal"),
-                    "trace": result.get("run_trace", []),
-                }
-            )
-            return
-
-        if deterministic_answer is not None:
-            yield _event_success({"type": "chunk", "delta": deterministic_answer})
-            yield _event_success(
-                {
-                    "type": "done",
-                    "intent": intent,
-                    "sources": sources,
-                    "proposal": result.get("patch_proposal"),
-                    "trace": result.get("run_trace", []),
-                }
-            )
-            return
-
-        if result.get("patch_proposal"):
-            yield _event_success({"type": "chunk", "delta": str(result.get("answer", "Patch proposal ready."))})
-            service.finalize_result(
-                active_repository_id,
-                active_repo_id,
-                result,
-                cache_key,
-                user_id=str(current_user["id"]),
-                project_id=project_id,
-                session_id=active_session_id,
-            )
-            yield _event_success(
-                {
-                    "type": "done",
-                    "intent": intent,
-                    "sources": sources,
-                    "proposal": result.get("patch_proposal"),
-                    "trace": result.get("run_trace", []),
-                }
-            )
-            return
-
-        generated_parts: list[str] = []
+    async def _iter_stream() -> AsyncIterator[str]:
+        """H6 FIX: Improved streaming with error recovery and proper error signaling."""
+        stream_started = False
         try:
-            for delta in service.model_router.stream_chat(prompt=req.query, context=assembled_context):
-                if not delta: continue
-                generated_parts.append(delta)
-                yield _event_success({"type": "chunk", "delta": delta})
-        except Exception:
-            yield json.dumps({"success": False, "error": "Streaming failed"}) + "\n"
-            return
+            yield _event_success({"type": "start", "intent": intent, "session_id": active_session_id})
+            stream_started = True
 
-        result["answer"] = "".join(generated_parts)
-        service.finalize_result(
-            active_repository_id,
-            active_repo_id,
-            result,
-            cache_key,
-            user_id=str(current_user["id"]),
-            project_id=project_id,
-            session_id=active_session_id,
-        )
-        yield _event_success(
-            {
-                "type": "done",
-                "intent": intent,
-                "sources": sources,
-                "proposal": result.get("patch_proposal"),
-                "trace": result.get("run_trace", []),
-            }
-        )
+            if from_cache:
+                try:
+                    yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
+                    yield _event_success(
+                        {
+                            "type": "done",
+                            "intent": intent,
+                            "sources": sources,
+                            "proposal": result.get("patch_proposal"),
+                            "trace": result.get("run_trace", []),
+                        }
+                    )
+                    return
+                except Exception as exc:
+                    logger.exception("chat_stream - error streaming cached result")
+                    yield _event_error("Failed to stream cached response", "cache_error")
+                    return
+
+            if deterministic_answer is not None:
+                try:
+                    yield _event_success({"type": "chunk", "delta": deterministic_answer})
+                    yield _event_success(
+                        {
+                            "type": "done",
+                            "intent": intent,
+                            "sources": sources,
+                            "proposal": result.get("patch_proposal"),
+                            "trace": result.get("run_trace", []),
+                        }
+                    )
+                    return
+                except Exception as exc:
+                    logger.exception("chat_stream - error streaming deterministic answer")
+                    yield _event_error("Failed to stream deterministic answer", "deterministic_error")
+                    return
+
+            if result.get("patch_proposal"):
+                try:
+                    yield _event_success({"type": "chunk", "delta": str(result.get("answer", "Patch proposal ready."))})
+                    await service.finalize_result(
+                        active_repository_id,
+                        active_repo_id,
+                        result,
+                        cache_key,
+                        user_id=str(current_user["id"]),
+                        session_id=active_session_id,
+                    )
+                    yield _event_success(
+                        {
+                            "type": "done",
+                            "intent": intent,
+                            "sources": sources,
+                            "proposal": result.get("patch_proposal"),
+                            "trace": result.get("run_trace", []),
+                        }
+                    )
+                    return
+                except Exception as exc:
+                    logger.exception("chat_stream - error streaming patch proposal")
+                    yield _event_error("Failed to stream patch proposal", "proposal_error")
+                    return
+
+            # H6 FIX: Stream LLM response with per-delta error recovery
+            generated_parts: list[str] = []
+            try:
+                for delta in service.model_router.stream_chat(prompt=req.query, context=assembled_context):
+                    try:
+                        if not delta:
+                            continue
+                        generated_parts.append(delta)
+                        yield _event_success({"type": "chunk", "delta": delta})
+                    except Exception as delta_exc:
+                        logger.exception("chat_stream - error yielding delta")
+                        # Continue collecting deltas; error won't stop streaming
+                        continue
+            except asyncio.CancelledError:
+                logger.info("chat_stream - client disconnected during LLM stream")
+                raise
+            except Exception as stream_exc:
+                logger.exception("chat_stream - error in model_router.stream_chat")
+                if generated_parts:
+                    # Partial response already sent; send error to indicate incomplete
+                    yield _event_error(
+                        "Stream interrupted: response may be incomplete",
+                        "stream_interrupted",
+                    )
+                else:
+                    # No data sent yet; send full error
+                    yield _event_error(str(stream_exc), "llm_stream_error")
+                return
+
+            # H6 FIX: Finalize result with error recovery
+            try:
+                result["answer"] = "".join(generated_parts)
+                await service.finalize_result(
+                    active_repository_id,
+                    active_repo_id,
+                    result,
+                    cache_key,
+                    user_id=str(current_user["id"]),
+                    session_id=active_session_id,
+                )
+            except Exception as finalize_exc:
+                logger.exception("chat_stream - error finalizing result")
+                # Still send completion even if finalization fails
+                pass
+
+            yield _event_success(
+                {
+                    "type": "done",
+                    "intent": intent,
+                    "sources": sources,
+                    "proposal": result.get("patch_proposal"),
+                    "trace": result.get("run_trace", []),
+                }
+            )
+        except asyncio.CancelledError:
+            logger.info("chat_stream - client disconnected, cancelling stream")
+            raise
+        except Exception as exc:
+            # H6 FIX: Outer catch-all for unexpected errors
+            logger.exception("chat_stream - unexpected error in iterator")
+            if stream_started:
+                # Stream has begun; send error event
+                yield _event_error("Unexpected streaming error", "unexpected_error")
+            else:
+                # Stream not started; error before first yield
+                yield _event_error(str(exc), "pre_stream_error")
+        finally:
+            # Session lifecycle is managed by FastAPI DI (get_db_session generator)
+            logger.debug("chat_stream - stream completed")
 
     return StreamingResponse(
         _iter_stream(),

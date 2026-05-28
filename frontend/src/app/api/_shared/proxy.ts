@@ -1,43 +1,43 @@
-import { getBackendUrl } from "@/lib/backend-url";
+const DEFAULT_BACKEND_BASE = "http://localhost:8000/v1";
+
+function getBackendBaseUrl(): string {
+  const configured =
+    process.env.BACKEND_API_BASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+    process.env.NEXT_PUBLIC_API_URL?.trim() ||
+    "";
+
+  return (configured || DEFAULT_BACKEND_BASE).replace(/\/$/, "");
+}
 
 export async function forwardJson(
   request: Request,
-  backendPath: string,
-  options?: {
-    method?: string;
-    headers?: HeadersInit;
-    includeBody?: boolean;
-  }
+  path: string,
+  opts: { method: string; includeBody?: boolean } = { method: "GET" }
 ): Promise<Response> {
-  const target = `${getBackendUrl()}${backendPath.startsWith("/") ? backendPath : `/${backendPath}`}`;
-  const method = options?.method ?? request.method;
-  const includeBody = options?.includeBody ?? (method !== "GET" && method !== "HEAD");
+  const backend = getBackendBaseUrl();
+  const url = `${backend}${path.startsWith("/") ? path : `/${path}`}`;
 
-  const headers = new Headers(options?.headers || {});
-  const auth = request.headers.get("authorization");
-  if (auth && !headers.has("Authorization")) {
-    headers.set("Authorization", auth);
-  }
+  const headers = new Headers();
   const contentType = request.headers.get("content-type");
-  if (contentType && !headers.has("Content-Type")) {
-    headers.set("Content-Type", contentType);
-  }
+  if (contentType) headers.set("content-type", contentType);
 
-  const body = includeBody ? await request.text() : undefined;
+  const body = opts.includeBody ? await request.arrayBuffer() : undefined;
 
-  const upstream = await fetch(target, {
-    method,
+  const upstream = await fetch(url, {
+    method: opts.method,
     headers,
-    ...(includeBody ? { body } : {}),
+    body,
+    cache: "no-store",
   });
 
-  const responseBody = await upstream.text();
   const responseHeaders = new Headers();
-  const upstreamType = upstream.headers.get("content-type") || "application/json";
-  responseHeaders.set("Content-Type", upstreamType);
+  const upstreamContentType = upstream.headers.get("content-type");
+  if (upstreamContentType) responseHeaders.set("content-type", upstreamContentType);
 
-  return new Response(responseBody, {
+  return new Response(await upstream.arrayBuffer(), {
     status: upstream.status,
     headers: responseHeaders,
   });
 }
+

@@ -64,8 +64,9 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["var(--font-manrope)", "Segoe UI", "sans-serif"],
-        mono: ["var(--font-plex-mono)", "Consolas", "monospace"],
+        sans: ["var(--font-space-grotesk)", "sans-serif"],
+        display: ["var(--font-fraunces)", "serif"],
+        mono: ["var(--font-plex-mono)", "monospace"],
       },
       animation: {
         "fade-up":      "fadeUp 260ms ease-out both",

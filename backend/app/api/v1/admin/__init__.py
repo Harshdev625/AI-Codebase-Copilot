@@ -82,7 +82,7 @@ def admin_repositories(
     rows = session.execute(
         text(
             """
-            SELECT id, project_id, repo_id, remote_url, local_path, default_branch, created_at
+            SELECT id, owner_user_id, repo_id, remote_url, local_path, default_branch, created_at
             FROM repositories
             ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
@@ -113,7 +113,7 @@ def admin_indexing_status(
     rows = session.execute(
         text(
             """
-            SELECT id, repository_id, snapshot_id, status, message, started_at, finished_at, created_at
+            SELECT id, repository_id, commit_sha, status, message, started_at, finished_at, created_at
             FROM indexing_jobs
             ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
@@ -221,7 +221,7 @@ def delete_user(
     session: Session = Depends(get_db_session),
 ) -> dict:
     assert_scopes(current_admin, {"admin:write"})
-    """Delete a user account (admin only). Cascades to delete projects."""
+    """Delete a user account (admin only)."""
     logger.info("admin_delete_user - request received target_user_id=%s", user_id)
     # Prevent self-deletion
     if current_admin["id"] == user_id:
@@ -254,7 +254,6 @@ def admin_system_metrics(
             """
             SELECT
               (SELECT COUNT(*) FROM users) AS users_count,
-              (SELECT COUNT(*) FROM projects) AS projects_count,
               (SELECT COUNT(*) FROM repositories) AS repositories_count,
               (SELECT COUNT(*) FROM code_chunks) AS indexed_chunks_count
             """
@@ -418,94 +417,7 @@ def admin_architecture_graph(
     session: Session = Depends(get_db_session),
 ) -> dict:
     assert_scopes(_, {"admin:read"})
-    logger.info("admin_architecture_graph - request received repository_id=%s limit=%s", repository_id, limit)
-    rows = session.execute(
-        text(
-            """
-            SELECT
-              e.source_chunk_id,
-              e.target_chunk_id,
-              e.edge_type,
-              e.weight,
-              COALESCE(e.repository_id, sc.repository_id, tc.repository_id) AS repository_id,
-              sc.path AS source_path,
-              sc.symbol AS source_symbol,
-              sc.language AS source_language,
-              sc.chunk_type AS source_chunk_type,
-              tc.path AS target_path,
-              tc.symbol AS target_symbol,
-              tc.language AS target_language,
-              tc.chunk_type AS target_chunk_type
-            FROM code_graph_edges e
-            JOIN code_chunks sc ON sc.id = e.source_chunk_id
-            JOIN code_chunks tc ON tc.id = e.target_chunk_id
-            WHERE (
-              :repository_id IS NULL
-              OR e.repository_id = :repository_id
-              OR sc.repository_id = :repository_id
-              OR tc.repository_id = :repository_id
-            )
-            ORDER BY e.created_at DESC
-            LIMIT :limit
-            """
-        ),
-        {"repository_id": repository_id, "limit": limit},
-    ).mappings().all()
-
-    nodes_by_id: dict[str, dict[str, Any]] = {}
-    edges: list[dict[str, Any]] = []
-
-    for row in rows:
-        item = dict(row)
-        src_id = str(item.get("source_chunk_id"))
-        tgt_id = str(item.get("target_chunk_id"))
-
-        if src_id and src_id not in nodes_by_id:
-            nodes_by_id[src_id] = {
-                "id": src_id,
-                "path": item.get("source_path"),
-                "symbol": item.get("source_symbol") or "module",
-                "language": item.get("source_language") or "",
-                "chunk_type": item.get("source_chunk_type") or "generic",
-                "repository_id": item.get("repository_id"),
-            }
-
-        if tgt_id and tgt_id not in nodes_by_id:
-            nodes_by_id[tgt_id] = {
-                "id": tgt_id,
-                "path": item.get("target_path"),
-                "symbol": item.get("target_symbol") or "module",
-                "language": item.get("target_language") or "",
-                "chunk_type": item.get("target_chunk_type") or "generic",
-                "repository_id": item.get("repository_id"),
-            }
-
-        edges.append(
-            {
-                "id": f"{src_id}:{tgt_id}:{item.get('edge_type')}",
-                "source": src_id,
-                "target": tgt_id,
-                "edge_type": item.get("edge_type") or "reference",
-                "weight": float(item.get("weight") or 1.0),
-            }
-        )
-
-    payload = {
-        "repository_id": repository_id,
-        "nodes": list(nodes_by_id.values()),
-        "edges": edges,
-        "stats": {
-            "node_count": len(nodes_by_id),
-            "edge_count": len(edges),
-        },
-    }
-    logger.info(
-        "admin_architecture_graph - response sent repository_id=%s nodes=%s edges=%s",
-        repository_id,
-        payload["stats"]["node_count"],
-        payload["stats"]["edge_count"],
-    )
-    return success_response(payload)
+    raise HTTPException(status_code=410, detail="Architecture graph is disabled in the simplified schema.")
 
 
 @router.get("/admin/recent-activity")
@@ -641,39 +553,7 @@ def admin_usage_overview(
     session: Session = Depends(get_db_session),
 ) -> dict:
     assert_scopes(_, {"admin:read"})
-    row = session.execute(
-        text(
-            """
-            SELECT
-              COALESCE(SUM(CASE WHEN metric = 'requests' THEN count END), 0) AS requests,
-              COALESCE(SUM(CASE WHEN metric = 'queries' THEN count END), 0) AS queries,
-              COALESCE(SUM(CASE WHEN metric = 'index_jobs' THEN count END), 0) AS index_jobs,
-              COALESCE(SUM(CASE WHEN metric = 'llm_tokens_in' THEN count END), 0) AS llm_tokens_in,
-              COALESCE(SUM(CASE WHEN metric = 'llm_tokens_out' THEN count END), 0) AS llm_tokens_out,
-              COALESCE(SUM(CASE WHEN metric = 'indexing_volume_chunks' THEN count END), 0) AS indexing_volume_chunks
-            FROM usage_counters
-            WHERE period_start = CURRENT_DATE
-            """
-        )
-    ).mappings().first()
-
-    plans = session.execute(
-        text(
-            """
-            SELECT plan_tier, COUNT(*) AS users
-            FROM users
-            GROUP BY plan_tier
-            ORDER BY plan_tier
-            """
-        )
-    ).mappings().all()
-
-    return success_response(
-        {
-            "today": dict(row or {}),
-            "plan_distribution": [dict(item) for item in plans],
-        }
-    )
+    raise HTTPException(status_code=410, detail="Usage tracking is disabled in the simplified schema.")
 
 
 @router.get("/admin/billing-events")
@@ -683,22 +563,4 @@ def admin_billing_events(
     session: Session = Depends(get_db_session),
 ) -> dict:
     assert_scopes(_, {"admin:read"})
-    pagination = resolve_pagination(pagination)
-    total = int(session.execute(text("SELECT COUNT(*) FROM billing_events")).scalar() or 0)
-    rows = session.execute(
-        text(
-            """
-            SELECT id, event_type, user_id, project_id, payload, delivered, delivery_attempts, last_error, created_at
-            FROM billing_events
-            ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
-            """
-        ),
-        {"limit": pagination.limit, "offset": pagination.offset},
-    ).mappings().all()
-    return paginated_success_response(
-        items=[dict(row) for row in rows],
-        total=total,
-        limit=pagination.limit,
-        offset=pagination.offset,
-    )
+    raise HTTPException(status_code=410, detail="Billing events are disabled in the simplified schema.")

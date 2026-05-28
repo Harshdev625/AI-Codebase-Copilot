@@ -4,7 +4,7 @@ import { AuthenticationLoginForm } from "@/features/auth/components/auth-login-f
 
 export default function LoginPage() {
   return (
-    <div className="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
       <AuthenticationLoginForm />
     </div>
   );

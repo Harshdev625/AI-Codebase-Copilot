@@ -1,11 +1,10 @@
-export type UserRole = "USER" | "ADMIN" | string;
+﻿export type UserRole = "USER" | "ADMIN" | string;
 
 export interface AuthUser {
   id: string;
   email: string;
   full_name?: string | null;
   role: UserRole;
-  plan_tier?: "free" | "pro" | "enterprise";
   token_scopes?: string[];
   is_active: boolean;
 }

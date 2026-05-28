@@ -3,48 +3,65 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import LoginPage from "@/app/login/page";
 import RegisterPage from "@/app/register/page";
 import * as auth from "@/lib/auth";
+import { ToastProvider } from "@/components/shared/toast-provider";
 
 const mockPush = jest.fn();
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({
     push: mockPush,
+    replace: mockPush,
   }),
 }));
 
 jest.mock("@/lib/auth", () => ({
   storeSession: jest.fn(),
+  getAccessToken: jest.fn(() => "mock-token"),
+  setAuthSession: jest.fn(),
+  clearAuthSession: jest.fn(),
+  getStoredUser: jest.fn(() => null),
 }));
 
-const mockedStoreSession = auth.storeSession as jest.MockedFunction<typeof auth.storeSession>;
+import { renderWithProviders } from "../test-utils";
 
 describe("LoginPage", () => {
   beforeEach(() => {
-    jest.restoreAllMocks();
-    mockedStoreSession.mockReset();
+    jest.clearAllMocks();
     mockPush.mockReset();
   });
 
   it("logs in successfully and redirects", async () => {
-    mockedStoreSession.mockResolvedValue({
-      id: "u1",
-      email: "admin@aicc.dev",
-      role: "ADMIN",
-      is_active: true,
-    });
+    const fetchSpy = jest.spyOn(global, "fetch");
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "token-123" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "u1",
+            email: "admin@aicc.dev",
+            role: "ADMIN",
+            is_active: true,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      );
 
-    jest.spyOn(global, "fetch").mockResolvedValueOnce(
-      new Response(JSON.stringify({ access_token: "token-123" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-
-    render(<LoginPage />);
-    fireEvent.submit(screen.getByRole("button", { name: /sign in/i }).closest("form")!);
+    renderWithProviders(<LoginPage />);
+    const form = screen.getByRole("button", { name: /sign in/i }).closest("form")!;
+    form.addEventListener("submit", (e) => console.log("Form submitted!"));
+    fireEvent.submit(form);
 
     await waitFor(() => {
-      expect(auth.storeSession).toHaveBeenCalledWith("token-123");
+      console.log("Mock calls:", mockPush.mock.calls);
+      expect(mockPush).toHaveBeenCalledWith("/admin/dashboard");
     });
   });
 
@@ -56,14 +73,14 @@ describe("LoginPage", () => {
       })
     );
 
-    render(<LoginPage />);
+    renderWithProviders(<LoginPage />);
     fireEvent.submit(screen.getByRole("button", { name: /sign in/i }).closest("form")!);
 
     expect(await screen.findByText("Invalid credentials")).toBeInTheDocument();
   });
 
   it("renders sign-in controls", () => {
-    render(<LoginPage />);
+    renderWithProviders(<LoginPage />);
 
     expect(screen.getByText("Welcome back")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
@@ -72,44 +89,30 @@ describe("LoginPage", () => {
 
 describe("RegisterPage", () => {
   beforeEach(() => {
-    jest.restoreAllMocks();
-    mockedStoreSession.mockReset();
+    jest.clearAllMocks();
     mockPush.mockReset();
   });
 
-  it("registers, logs in, stores session and redirects", async () => {
-    mockedStoreSession.mockResolvedValue({
-      id: "u2",
-      email: "user@example.com",
-      role: "USER",
-      is_active: true,
-    });
-
+  it("registers successfully and redirects to login", async () => {
     const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "u2" }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ access_token: "token-xyz" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      );
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "u2" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
 
-    render(<RegisterPage />);
+    renderWithProviders(<RegisterPage />);
 
-    fireEvent.change(screen.getByPlaceholderText("Your name"), { target: { value: "User Name" } });
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), { target: { value: "user@example.com" } });
-    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), { target: { value: "password123" } });
+    fireEvent.change(screen.getByPlaceholderText("John Doe"), { target: { value: "User Name" } });
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), { target: { value: "user@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password123" } });
+    fireEvent.change(screen.getByPlaceholderText("Repeat password"), { target: { value: "password123" } });
 
-    fireEvent.submit(screen.getByRole("button", { name: /create account/i }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: /create workspace account/i }).closest("form")!);
 
     await waitFor(() => {
-      expect(auth.storeSession).toHaveBeenCalledWith("token-xyz");
+      expect(mockPush).toHaveBeenCalledWith("/login");
     });
   });
 
@@ -121,37 +124,13 @@ describe("RegisterPage", () => {
       })
     );
 
-    render(<RegisterPage />);
+    renderWithProviders(<RegisterPage />);
 
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), { target: { value: "dup@example.com" } });
-    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), { target: { value: "password123" } });
-    fireEvent.submit(screen.getByRole("button", { name: /create account/i }).closest("form")!);
+    fireEvent.change(screen.getByPlaceholderText("name@example.com"), { target: { value: "dup@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password123" } });
+    fireEvent.change(screen.getByPlaceholderText("Repeat password"), { target: { value: "password123" } });
+    fireEvent.submit(screen.getByRole("button", { name: /create workspace account/i }).closest("form")!);
 
     expect(await screen.findByText("Email already exists")).toBeInTheDocument();
-  });
-
-  it("shows login failure after successful registration", async () => {
-    const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: "u2" }), {
-          status: 201,
-          headers: { "Content-Type": "application/json" },
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ detail: "Login failed" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        })
-      );
-
-    render(<RegisterPage />);
-
-    fireEvent.change(screen.getByPlaceholderText("you@example.com"), { target: { value: "user@example.com" } });
-    fireEvent.change(screen.getByPlaceholderText("At least 8 characters"), { target: { value: "password123" } });
-    fireEvent.submit(screen.getByRole("button", { name: /create account/i }).closest("form")!);
-
-    expect(await screen.findByText("Login failed")).toBeInTheDocument();
   });
 });

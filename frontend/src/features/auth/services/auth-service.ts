@@ -1,32 +1,33 @@
-import { apiClient } from '@/lib/api';
-import { AuthTokenResponse, LoginPayload, RegisterPayload, User } from '../types/auth-types';
-
-interface ApiEnvelope<T> {
-  success: boolean;
-  data: T;
-  error: string | null;
-}
-
-const unwrap = <T>(response: { data: ApiEnvelope<T> }): T => {
-  if (!response.data.success) {
-    throw new Error(response.data.error || 'Request failed');
-  }
-  return response.data.data;
-};
+import { apiClient } from "@/core/api/client";
+import type {
+  AuthTokenResponse,
+  LoginPayload,
+  RegisterPayload,
+  UserProfile,
+  AdminRegisterPayload,
+} from "@/features/auth/types/auth-types";
 
 export const authService = {
-  login: async (payload: LoginPayload, endpoint = '/auth/login'): Promise<AuthTokenResponse> => {
-    const response = await apiClient.post<ApiEnvelope<AuthTokenResponse>>(endpoint, payload);
-    return unwrap(response);
+  register(payload: RegisterPayload): Promise<UserProfile> {
+    return apiClient<UserProfile>("/v1/auth/register", { method: "POST", body: payload });
   },
 
-  register: async (payload: RegisterPayload, endpoint = '/auth/register'): Promise<User> => {
-    const response = await apiClient.post<ApiEnvelope<User>>(endpoint, payload);
-    return unwrap(response);
+  adminRegister(payload: AdminRegisterPayload): Promise<UserProfile> {
+    return apiClient<UserProfile>("/v1/auth/admin/register", { method: "POST", body: payload });
   },
 
-  me: async (): Promise<User> => {
-    const response = await apiClient.get<ApiEnvelope<User>>('/auth/me');
-    return unwrap(response);
+  login(payload: LoginPayload): Promise<AuthTokenResponse> {
+    return apiClient<AuthTokenResponse>("/v1/auth/login", { method: "POST", body: payload });
+  },
+
+  adminLogin(payload: LoginPayload): Promise<AuthTokenResponse> {
+    return apiClient<AuthTokenResponse>("/v1/auth/admin/login", { method: "POST", body: payload });
+  },
+
+  me(token?: string): Promise<UserProfile> {
+    return apiClient<UserProfile>("/v1/auth/me", {
+      method: "GET",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
   },
 };

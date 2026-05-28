@@ -27,13 +27,38 @@ class RateLimiter:
         self._redis = self._build_redis_client()
 
     def is_limited(self, request: Request) -> tuple[bool, int, str]:
+        """Check rate limit for request.
+        
+        H5 FIX: Validate JWT BEFORE applying rate limits. If JWT is provided but invalid,
+        raise exception to trigger 401 response in middleware BEFORE rate limiting.
+        """
         path = request.url.path
         if not path.startswith("/v1"):
             return False, 0, "none"
         if any(path.startswith(exempt) for exempt in settings.rate_limit_exempt_paths_list):
             return False, 0, "none"
 
-        identity = self._identity_for_request(request)
+        # H5: Extract and validate JWT early - fail fast on invalid tokens
+        auth = request.headers.get("authorization") or ""
+        jwt_identity = None
+        if auth.lower().startswith("bearer "):
+            token = auth.split(" ", 1)[1].strip()
+            if token:
+                try:
+                    payload = decode_access_token(token)
+                    subject = str(payload.get("sub") or "").strip()
+                    if subject:
+                        jwt_identity = f"user:{subject}"
+                except Exception as exc:
+                    # H5: Invalid JWT - raise to fail BEFORE rate limiting
+                    logger.warning(
+                        "rate_limiter - invalid jwt token path=%s error=%s",
+                        path,
+                        str(exc)[:100],
+                    )
+                    raise ValueError(f"Invalid authentication token") from exc
+
+        identity = jwt_identity or self._identity_for_ip(request)
         now = time.time()
         window_seconds = int(settings.rate_limit_window_seconds)
         limit = int(settings.rate_limit_requests_per_window)
@@ -91,19 +116,8 @@ class RateLimiter:
             queue.append(now)
         return True, 0
 
-    def _identity_for_request(self, request: Request) -> str:
-        auth = request.headers.get("authorization") or ""
-        if auth.lower().startswith("bearer "):
-            token = auth.split(" ", 1)[1].strip()
-            if token:
-                try:
-                    payload = decode_access_token(token)
-                    subject = str(payload.get("sub") or "").strip()
-                    if subject:
-                        return f"user:{subject}"
-                except Exception:
-                    pass
-
+    def _identity_for_ip(self, request: Request) -> str:
+        """Get IP-based identity for unauthenticated requests."""
         forwarded_for = request.headers.get("x-forwarded-for")
         if forwarded_for:
             ip = forwarded_for.split(",")[0].strip()

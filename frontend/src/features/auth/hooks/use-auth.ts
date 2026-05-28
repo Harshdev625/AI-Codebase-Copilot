@@ -1,95 +1,108 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAuthStore } from '@/store/auth-store';
-import { authService } from '../services/auth-service';
-import { LoginPayload, RegisterPayload } from '../types/auth-types';
-import { useRouter } from 'next/navigation';
-import { useToast } from '@/components/shared/toast-provider';
-import { toApiError } from '@/lib/api';
-import { setAccessToken } from '@/lib/auth';
-import { consumePendingOnboardingEmail, markBrandNewUser, markPendingOnboardingEmail } from '@/store/onboarding-store';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+
+import { authService } from "@/features/auth/services/auth-service";
+import { useAuthStore } from "@/store/auth-store";
+import { useToast } from "@/components/shared/toast-provider";
+import { toApiError } from "@/core/api/errors";
+import type { LoginPayload, RegisterPayload } from "@/features/auth/types/auth-types";
+
+export const authKeys = {
+  me: ["auth", "me"] as const,
+};
 
 export function useAuth() {
-  const queryClient = useQueryClient();
   const router = useRouter();
-  const toast = useToast();
-  const { setAuth, logout, user, isAuthenticated } = useAuthStore();
+  const user = useAuthStore((s) => s.user);
+  const token = useAuthStore((s) => s.token);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const hydrated = useAuthStore((s) => s.hydrated);
+  const hydrateFromStorage = useAuthStore((s) => s.hydrateFromStorage);
+  const logout = useAuthStore((s) => s.logout);
+  const loginMutation = useLoginMutation();
+  const registerMutation = useRegisterMutation();
 
-  const loginMutation = useMutation({
-    mutationFn: (payload: LoginPayload) => authService.login(payload),
-    onSuccess: async (data) => {
-      try {
-        // Essential: Set token in store so 'me' request has it
-        setAccessToken(data.access_token);
-        useAuthStore.setState({ token: data.access_token });
-        
-        const profile = await authService.me();
-        const shouldTriggerOnboarding =
-          String(profile.role).toUpperCase() === 'USER' && consumePendingOnboardingEmail(profile.email);
-        if (shouldTriggerOnboarding) {
-          markBrandNewUser(profile.id);
-        }
+  const login = (payload: LoginPayload) => {
+    loginMutation.mutate(payload, {
+      onSuccess: () => {
+        const role = useAuthStore.getState().user?.role;
+        router.replace(role === "ADMIN" ? "/admin/dashboard" : "/dashboard");
+      },
+    });
+  };
 
-        setAuth(profile, data.access_token);
-        
-        toast.success('Welcome back!', `Logged in as ${profile.email}`);
-        
-        // Use a slight delay or reliable push
-        setTimeout(() => {
-          router.push('/dashboard');
-          // Fallback if router fails in some race conditions
-          setTimeout(() => {
-            if (window.location.pathname !== '/dashboard') {
-              window.location.href = '/dashboard';
-            }
-          }, 500);
-        }, 100);
-      } catch (error) {
-        toast.error('Login Error', 'Failed to retrieve user profile');
-      }
-    },
-    onError: (error) => {
-      toast.error('Login Failed', toApiError(error));
-    },
-  });
-
-  const registerMutation = useMutation({
-    mutationFn: (payload: RegisterPayload) => authService.register(payload),
-    onSuccess: (_data, variables) => {
-      if (variables?.email) {
-        markPendingOnboardingEmail(variables.email);
-      }
-      toast.success('Account Created', 'Please log in with your credentials.');
-      setTimeout(() => {
-        router.push('/login');
-      }, 500);
-    },
-    onError: (error) => {
-      toast.error('Registration Failed', toApiError(error));
-    },
-  });
-
-  const meQuery = useQuery({
-    queryKey: ['auth', 'me'],
-    queryFn: authService.me,
-    enabled: !!useAuthStore.getState().token && !user,
-    staleTime: Infinity,
-  });
-
-  const handleLogout = () => {
-    logout();
-    queryClient.clear();
-    router.push('/login');
-    toast.info('Logged Out', 'You have been successfully logged out.');
+  const register = (payload: RegisterPayload) => {
+    registerMutation.mutate(payload, {
+      onSuccess: () => {
+        router.replace("/login");
+      },
+    });
   };
 
   return {
     user,
+    token,
     isAuthenticated,
-    login: loginMutation.mutate,
+    hydrated,
+    hydrateFromStorage,
+    logout,
+    login,
+    register,
     isLoggingIn: loginMutation.isPending,
-    register: registerMutation.mutate,
     isRegistering: registerMutation.isPending,
-    logout: handleLogout,
-    isLoadingProfile: meQuery.isLoading,
+  };
+}
+
+export function useLoginMutation() {
+  const setAuth = useAuthStore((state) => state.setAuth);
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (payload: LoginPayload) => authService.login(payload),
+    onSuccess: async (tokenPayload) => {
+      const me = await authService.me(tokenPayload.access_token);
+      const normalizedRole = String(me.role).toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
+      setAuth({ ...me, role: normalizedRole }, tokenPayload.access_token);
+      void queryClient.invalidateQueries({ queryKey: authKeys.me });
+    },
+    onError: (error) => {
+      console.error("Login mutation error:", error);
+      toast.error("Login Failed", toApiError(error));
+    }
+  });
+}
+
+export function useRegisterMutation() {
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (payload: RegisterPayload) => authService.register(payload),
+    onError: (error) => {
+      toast.error("Registration Failed", toApiError(error));
+    }
+  });
+}
+
+export function useMeQuery() {
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const token = useAuthStore((state) => state.token);
+
+  return useQuery({
+    queryKey: authKeys.me,
+    queryFn: () => authService.me(),
+    enabled: hydrated && Boolean(token),
+    staleTime: 60_000,
+    retry: false,
+  });
+}
+
+export function useLogoutAction() {
+  const logout = useAuthStore((state) => state.logout);
+  const queryClient = useQueryClient();
+
+  return () => {
+    logout();
+    void queryClient.clear();
   };
 }

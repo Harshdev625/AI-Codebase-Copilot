@@ -13,6 +13,9 @@ BASE_SYSTEM_PROMPT = (
     "- If context is insufficient, explicitly say what is missing.\n"
     "- For major claims, cite at least one source id using [Sx].\n"
     "- Prefer precise, actionable explanations over broad generic advice.\n"
+    "- NEVER reveal or reference absolute local file paths (e.g. C:/... or E:/...). Always use relative paths from the project root.\n"
+    "- Keep your responses professional and avoid dumping raw paths or confidential metadata.\n"
+    "- DO NOT recite or dump raw code snippets from the context verbatim unless explicitly asked. Provide high-level summaries instead.\n"
 )
 
 
@@ -43,7 +46,16 @@ def build_context_packet(
     for idx, snippet in enumerate(snippets, start=1):
         source_id = f"S{idx}"
         repository_name = snippet.get("repository_name") or snippet.get("repo_id") or snippet.get("repository_id") or "unknown-repo"
-        path = snippet.get("path") or "unknown"
+        raw_path = str(snippet.get("path") or "unknown")
+        clean_path = raw_path.replace("\\", "/")
+        repo_slug = repository_name.replace("/", "_")
+        if f".repo_cache/{repo_slug}/" in clean_path:
+            clean_path = clean_path.split(f".repo_cache/{repo_slug}/", 1)[-1]
+        elif "/.repo_cache/" in clean_path:
+            parts = clean_path.split("/.repo_cache/", 1)[-1].split("/", 1)
+            if len(parts) > 1:
+                clean_path = parts[1]
+
         symbol = snippet.get("symbol") or "module"
         start_line = snippet.get("start_line")
         end_line = snippet.get("end_line")
@@ -51,14 +63,10 @@ def build_context_packet(
         content = str(snippet.get("content") or "")
 
         header = [
-            f"Source {source_id}",
-            f"Repository: {repository_name}",
-            f"File: {path} | Symbol: {symbol}",
-            f"Path: {path}",
-            f"Symbol: {symbol}",
+            f"Source [{source_id}] File: {clean_path} (Symbol: {symbol})",
         ]
         if start_line is not None and end_line is not None:
-            header.append(f"Span: {start_line}-{end_line}")
+            header.append(f"Lines: {start_line}-{end_line}")
         if score is not None:
             try:
                 header.append(f"Score: {float(score):.4f}")
@@ -75,7 +83,7 @@ def build_context_packet(
             {
                 "source_id": source_id,
                 "repository_name": repository_name,
-                "path": path,
+                "path": clean_path,
                 "symbol": symbol,
                 "start_line": start_line,
                 "end_line": end_line,

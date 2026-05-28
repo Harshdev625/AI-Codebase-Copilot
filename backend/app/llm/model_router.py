@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -18,7 +19,7 @@ class OllamaModelRouter:
     def __init__(self) -> None:
         self.base_url = settings.ollama_base_url.rstrip("/")
         self.chat_model = settings.ollama_chat_model
-        self.timeout = settings.ollama_timeout_seconds
+        self.timeout = settings.ollama_chat_timeout_seconds
         self.embedder = get_embedding_provider()
 
     def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> str:
@@ -57,32 +58,52 @@ class OllamaModelRouter:
                 response = get_http_client().post(
                     f"{self.base_url}/api/chat",
                     json=payload,
-                    # First-token/model-load can be slow on CPU.
-                    timeout=max(self.timeout, 600.0),
+                    timeout=httpx.Timeout(
+                        connect=max(self.timeout, 30.0),
+                        read=self.timeout,
+                        write=max(self.timeout, 30.0),
+                        pool=max(self.timeout, 30.0),
+                    ),
                 )
                 response.raise_for_status()
-                body = response.json()
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    body_excerpt = response.text[:200] if response.text else ""
+                    last_error = RuntimeError(
+                        f"Ollama chat response was not valid JSON. Response: {body_excerpt}"
+                    )
+                    logger.warning("ollama_chat - invalid json status=%s", response.status_code)
+                    raise last_error from exc
                 message = body.get("message", {})
                 text = str(message.get("content", "")).strip()
                 logger.info("ollama_chat - response received chars=%s", len(text))
                 return text
             except httpx.HTTPStatusError as exc:
-                body_excerpt = exc.response.text[:200] if exc.response is not None else ""
+                body_excerpt = exc.response.text[:200] if exc.response is not None else "<no body>"
                 last_error = RuntimeError(
-                    f"Ollama chat request failed: {exc}. Response: {body_excerpt}"
+                    f"Ollama chat request failed (status {exc.response.status_code if exc.response else '?'}): {body_excerpt}"
                 )
-                logger.warning("ollama_chat - http status failure error=%s", exc)
+                logger.warning(
+                    "ollama_chat - http status failure status=%s candidate=%s",
+                    exc.response.status_code if exc.response else "unknown",
+                    "full" if not candidate_context or candidate_context == full_context else "short",
+                )
             except httpx.HTTPError as exc:
-                last_error = RuntimeError(f"Ollama chat request failed: {exc}")
-                logger.warning("ollama_chat - transport failure error=%s", exc)
+                last_error = RuntimeError(f"Ollama chat request failed: {str(exc)[:200]}")
+                logger.warning(
+                    "ollama_chat - transport failure candidate=%s error=%s",
+                    "full" if not candidate_context or candidate_context == full_context else "short",
+                    str(exc)[:100],
+                )
 
             if not candidate_context or candidate_context == short_context:
                 break
 
         if last_error is not None:
-            logger.exception("ollama_chat - failed after retries")
+            logger.error("ollama_chat - failed after retries error=%s", str(last_error)[:200])
             raise last_error
-        raise RuntimeError("Ollama chat request failed")
+        raise RuntimeError("Ollama chat failed: no response generated")
 
     def stream_chat(self, prompt: str, context: str = ""):
         logger.debug("ollama_stream - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
@@ -151,10 +172,6 @@ class OllamaModelRouter:
 def get_model_router() -> OllamaModelRouter:
     # Safe to reuse across requests: http client is pooled and embedder is stateless.
     return _get_model_router_singleton()
-
-
-from functools import lru_cache
-
 
 @lru_cache
 def _get_model_router_singleton() -> OllamaModelRouter:

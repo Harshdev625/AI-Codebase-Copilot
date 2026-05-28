@@ -51,7 +51,7 @@ export function Progress({
             variant === 'success' && 'bg-success',
             variant === 'warning' && 'bg-warning',
             variant === 'error'   && 'bg-error',
-            variant === 'ai'      && 'bg-gradient-to-r from-primary via-blue-400 to-indigo-500',
+            variant === 'ai'      && 'bg-gradient-to-r from-primary via-[hsl(var(--glow))] to-[hsl(var(--ai))]',
             animated && clampedValue < 100 && 'after:absolute after:inset-0 after:bg-gradient-to-r after:from-transparent after:via-white/20 after:to-transparent after:animate-shimmer',
           )}
           style={{ width: `${clampedValue}%` }}

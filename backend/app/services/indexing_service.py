@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ from contextlib import nullcontext
 import stat
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from typing import Callable
 
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
@@ -24,170 +26,119 @@ from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
 from app.rag.embeddings.provider import embed_text_cached, get_embedding_provider, validate_embedding_dimension
-from app.rag.retrieval.code_graph import rebuild_code_graph
 from app.services.qdrant_service import QdrantService
+from app.core.exceptions import DatabaseException, ExternalServiceError, ValidationException
+from app.core.resilience import retry
 
 
 logger = logging.getLogger(__name__)
 
 
 class IndexingService:
+    """
+    Service for handling the repository indexing process.
+    Orchestrates cloning, file discovery, chunking, embedding, and storage.
+    """
     SUPPORTED_SUFFIXES = {
-        ".py",
-        ".js",
-        ".jsx",
-        ".ts",
-        ".tsx",
-        ".mjs",
-        ".cjs",
-        ".mts",
-        ".cts",
-        ".java",
-        ".kt",
-        ".kts",
-        ".md",
-        ".mdx",
-        ".txt",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".xml",
-        ".go",
-        ".rs",
-        ".swift",
-        ".php",
-        ".rb",
-        ".cpp",
-        ".c",
-        ".h",
-        ".hpp",
-        ".cs",
-        ".sh",
-        ".ps1",
-        ".sql",
-        ".html",
-        ".css",
-        ".scss",
-        ".less",
+        ".py", ".ts", ".js", ".tsx", ".jsx", ".md", ".json", 
+        ".html", ".css", ".go", ".java", ".cpp", ".c", ".h", 
+        ".hpp", ".rs", ".rb", ".php", ".txt", ".sh", ".yaml", ".yml",
+        ".toml", ".ini", ".sql"
     }
 
-    NOISY_FILENAMES = {
-        "package-lock.json",
-        "yarn.lock",
-        "pnpm-lock.yaml",
-        "poetry.lock",
-        "pipfile.lock",
-    }
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.qdrant = QdrantService()
+        self.embedder = get_embedding_provider()
+        self._prefer_cached_embeddings: bool = True
+        self._active_indexing_job_id: str | None = None
+        self._active_total_files: int | None = None
+        self._active_started_at_perf: float | None = None
+        self._active_repository_id: str | None = None
 
-    NOISY_PATH_SEGMENTS = {
-        "node_modules",
-        "dist",
-        "build",
-        ".next",
-        "coverage",
-    }
-
-    def _is_low_signal_file(self, file_path: Path, repo_root: Path) -> bool:
-        if file_path.name.lower() in self.NOISY_FILENAMES:
+    def _is_low_signal_file(self, file_path: Path
+                            , repo_root: Path) -> bool:
+        parts = file_path.relative_to(repo_root).parts
+        low_signal_dirs = {"node_modules", "dist", "build", ".venv", "venv", ".git", "vendor", "__pycache__", "assets", "lottie"}
+        if any(part.lower() in low_signal_dirs for part in parts):
             return True
-
-        rel_parts = {part.lower() for part in file_path.relative_to(repo_root).parts}
-        if rel_parts.intersection(self.NOISY_PATH_SEGMENTS):
+            
+        # Large JSON files and minified JS files provide very low semantic signal
+        # and tend to break the LLM context window.
+        suffix = file_path.suffix.lower()
+        if suffix in {".map"}:
             return True
-
-        lower_name = file_path.name.lower()
-        if lower_name.endswith(".min.js") or lower_name.endswith(".min.css"):
+        if file_path.name.endswith(".min.js") or file_path.name.endswith(".min.css"):
             return True
-
+            
+        if suffix in {".json", ".js"}:
+            try:
+                # Skip JSON/JS files larger than 100KB as they are typically data/minified
+                if file_path.stat().st_size > 100_000:
+                    return True
+            except OSError:
+                pass
+                
         return False
 
     def _slugify_repo_id(self, repo_id: str) -> str:
-        slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", repo_id).strip(".-")
-        return slug or "repo"
+        return re.sub(r'[^a-zA-Z0-9_-]', '_', repo_id)
 
     def _kill_git_processes(self, target: Path) -> None:
-        """Kill any git processes that might be holding locks on the target directory."""
-        if not target.exists():
-            return
-        
-        target_str = str(target.resolve())
-        logger.info("index_cleanup_git - killing processes for %s", target_str)
-        
-        try:
-            # On Windows, use wmic or taskkill to find git processes with target path in command line
-            if os.name == "nt":
-                # Find git processes. This is a bit aggressive but ensures we can delete the dir.
-                cmd = 'wmic process where "name=\'git.exe\'" get processid,commandline /format:list'
-                proc = subprocess.run(cmd, capture_output=True, text=True, shell=True)
-                if proc.returncode == 0:
-                    for line in proc.stdout.splitlines():
-                        if "CommandLine=" in line and target_str in line:
-                            # Found a git process for this target
-                            pass # We'll just kill all git.exe for simplicity if needed, or parse PID
-                
-                # Simple approach: kill all git.exe instances if blocking. 
-                # Better: kill specifically for this dir if possible.
-                # For now, let's try taskkill /F /IM git.exe if we suspect it's blocking.
-                # Actually, a more focused approach is better.
-                pass 
-        except Exception as e:
-            logger.debug("index_cleanup_git - failed to kill processes: %s", e)
+        pass  # Implementation for Windows git process killing if necessary
 
     def _force_delete_directory(self, target: Path) -> None:
+        if target.exists():
+            shutil.rmtree(target, onerror=self._on_rm_error)
+
+    def _cache_root(self) -> Path:
+        return Path(settings.repo_cache_path).resolve()
+
+    async def _delete_dir_with_retry(self, target: Path, max_retries: int = 5, delay: float = 1.0) -> None:
         """Force delete a directory with retries and permission handling."""
         if not target.exists():
-            return
-            
-        logger.info("index_cleanup_dir - force deleting %s", target)
-        
-        def _on_rm_error(func, path, exc_info):
-            # Change permissions to read-write and try again
-            try:
-                os.chmod(path, stat.S_IWRITE)
-                func(path)
-            except Exception:
-                pass
+            raise RuntimeError(f"Failed to delete directory after multiple attempts: {target}")
 
-        for attempt in range(3):
+        for attempt in range(max_retries):
             try:
                 if target.is_dir():
-                    shutil.rmtree(target, onerror=_on_rm_error)
+                    shutil.rmtree(target, onerror=self._on_rm_error)
                 else:
                     target.unlink()
-                
                 if not target.exists():
                     logger.info("index_cleanup_dir - successfully deleted %s on attempt %s", target, attempt + 1)
                     return
             except Exception as e:
                 logger.warning("index_cleanup_dir - delete attempt %s failed for %s: %s", attempt + 1, target, e)
-                time.sleep(1) # Wait a bit before retry
-        
-        # Final attempt with shell command if shutil fails
+                await asyncio.sleep(delay)
+
+    def _on_rm_error(self, func, path, exc_info):
+        # Change permissions to read-write and try again
         try:
-            if os.name == "nt":
-                subprocess.run(["rd", "/s", "/q", str(target)], shell=True, check=False)
-            else:
-                subprocess.run(["rm", "-rf", str(target)], check=False)
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
         except Exception:
             pass
-            
-        if target.exists():
-            raise RuntimeError(f"Failed to delete directory after multiple attempts: {target}")
 
-    def _run_git(self, args: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
-        """Run git command with timeout (default 5 minutes)."""
+    @retry(attempts=3, delay_seconds=2, backoff_factor=2, retryable_exceptions=(RuntimeError,))
+    async def _run_git(self, args: list[str], cwd: Path | None = None, timeout: int = 300) -> subprocess.CompletedProcess:
+        """Run git command with timeout and retry."""
         command_text = "git " + " ".join(args)
         logger.debug("index_git - running command=%s cwd=%s timeout=%s", command_text, cwd, timeout)
         try:
-            result = subprocess.run(
-                ["git", *args],
-                cwd=str(cwd) if cwd else None,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
+            # Using asyncio.to_thread to run the blocking subprocess call
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    ["git", *args],
+                    cwd=str(cwd) if cwd else None,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                )
             )
             logger.debug(
                 "index_git - completed command=%s returncode=%s stdout=%s stderr=%s",
@@ -208,7 +159,7 @@ class IndexingService:
                 (exc.stdout or "").strip()[:300],
                 (exc.stderr or "").strip()[:300],
             )
-            raise
+            raise RuntimeError(f"Git command failed: {self._format_process_error(exc, '')}") from exc
 
     def _format_process_error(self, exc: Exception, default_message: str) -> str:
         if isinstance(exc, subprocess.CalledProcessError):
@@ -225,29 +176,7 @@ class IndexingService:
             return message
         return default_message
 
-    def _cache_root(self) -> Path:
-        cache_root = Path(settings.repo_cache_dir)
-        if not cache_root.is_absolute():
-            cache_root = (Path.cwd() / cache_root).resolve()
-        return cache_root
-
-    def _should_cleanup_cached_repo(self, root: Path, repo_url: str | None, repo_path: str | None) -> bool:
-        if settings.repo_cache_persist:
-            return False
-        if repo_path:
-            return False
-        if not repo_url:
-            return False
-        if Path(repo_url).exists():
-            return False
-        cache_root = self._cache_root()
-        try:
-            root.resolve().relative_to(cache_root.resolve())
-            return True
-        except ValueError:
-            return False
-
-    def _resolve_repo_root(
+    async def _resolve_repo_root(
         self,
         repo_id: str,
         repo_path: str | None,
@@ -264,12 +193,12 @@ class IndexingService:
         if repo_path:
             root = Path(repo_path)
             if not root.exists():
-                raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
+                raise ValidationException(f"Repository path does not exist: {repo_path}")
             logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
             return root
 
         if not repo_url:
-            raise ValueError("Provide either repo_path or repo_url")
+            raise ValidationException("Provide either repo_path or repo_url")
 
         local_path_candidate = Path(repo_url)
         if local_path_candidate.exists():
@@ -293,24 +222,25 @@ class IndexingService:
             
             clone_args.extend([repo_url, str(target)])
             
-            self._run_git(clone_args, timeout=600)
+            await self._run_git(clone_args, timeout=600)
             logger.info("index_clone - success repo_id=%s target=%s", repo_id, target)
         except Exception as exc:
             detail = self._format_process_error(exc, "Repository preparation failed")
             logger.error("index_clone - failure repo_id=%s detail=%s", repo_id, detail)
-            raise RuntimeError(
-                f"Failed to prepare repository: {detail}"
+            raise ExternalServiceError(
+                service_name="Git",
+                underlying_error=f"Failed to prepare repository: {detail}"
             ) from exc
 
         logger.info("index_resolve_repo - ready repo_id=%s root=%s", repo_id, target)
         return target
 
-    def _iter_git_listed_files(self, repo_root: Path):
+    async def _iter_git_listed_files(self, repo_root: Path):
         try:
-            result = self._run_git(
+            result = await self._run_git(
                 ["-C", str(repo_root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"]
             )
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, RuntimeError):
             return
 
         for rel_path in result.stdout.split("\x00"):
@@ -346,9 +276,9 @@ class IndexingService:
             rel_path = f"{rel_path}/"
         return spec.match_file(rel_path)
 
-    def _iter_indexable_files(self, repo_root: Path, spec: PathSpec):
+    async def _iter_indexable_files(self, repo_root: Path, spec: PathSpec):
         used_git_listing = False
-        for file_path in self._iter_git_listed_files(repo_root):
+        async for file_path in self._iter_git_listed_files(repo_root):
             used_git_listing = True
             yield file_path
 
@@ -374,57 +304,41 @@ class IndexingService:
                         continue
                     yield file_path
 
-    def _get_previous_completed_commit(self, repository_id: str, snapshot_id: str | None) -> str | None:
-        row = self.session.execute(
-            text(
-                """
-                SELECT commit_sha
-                FROM repository_snapshots
-                WHERE repository_id = :repository_id
-                  AND index_status = 'completed'
-                  AND (:snapshot_id IS NULL OR id <> :snapshot_id)
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            ),
-            {"repository_id": repository_id, "snapshot_id": snapshot_id},
-        ).mappings().first()
-        if not row:
-            return None
-        value = str(row.get("commit_sha") or "").strip()
-        return value or None
+    def _get_previous_completed_commit(self, repository_id: str) -> str | None:
+        # Simplified schema: we no longer persist snapshot history.
+        return None
 
-    def _git_commit_exists(self, repo_root: Path, commit_sha: str) -> bool:
+    async def _git_commit_exists(self, repo_root: Path, commit_sha: str) -> bool:
         if not commit_sha:
             return False
         if not (repo_root / ".git").exists():
             return False
         try:
-            self._run_git(["-C", str(repo_root), "cat-file", "-e", f"{commit_sha}^{{commit}}"], timeout=60)
+            await self._run_git(["-C", str(repo_root), "cat-file", "-e", f"{commit_sha}^{{commit}}"], timeout=60)
             return True
         except Exception:
             return False
 
-    def _collect_git_diff_paths(
+    async def _collect_git_diff_paths(
         self,
         repo_root: Path,
         base_commit: str,
         target_commit: str,
     ) -> tuple[set[str], set[str]]:
         if not (repo_root / ".git").exists():
-            raise RuntimeError("Repository is not a git checkout; cannot run incremental diff")
-        if not self._git_commit_exists(repo_root, base_commit):
-            raise RuntimeError(f"Base commit not available locally: {base_commit}")
-        if not self._git_commit_exists(repo_root, target_commit):
-            raise RuntimeError(f"Target commit not available locally: {target_commit}")
+            raise ValidationException("Repository is not a git checkout; cannot run incremental diff")
+        if not await self._git_commit_exists(repo_root, base_commit):
+            raise ValidationException(f"Base commit not available locally: {base_commit}")
+        if not await self._git_commit_exists(repo_root, target_commit):
+            raise ValidationException(f"Target commit not available locally: {target_commit}")
 
-        result = self._run_git(
+        result = await self._run_git(
             [
                 "-C",
                 str(repo_root),
                 "diff",
                 "--name-status",
-                "--find-renames",
+                "-z",
                 f"{base_commit}..{target_commit}",
             ],
             timeout=180,
@@ -432,6 +346,7 @@ class IndexingService:
 
         changed_paths: set[str] = set()
         deleted_paths: set[str] = set()
+        
         for line in (result.stdout or "").splitlines():
             if not line.strip():
                 continue
@@ -480,29 +395,102 @@ class IndexingService:
             files.append(file_path)
         return files
 
-    def _delete_all_repository_chunks(self, repository_id: str) -> None:
+    async def _delete_qdrant_with_retry(
+        self,
+        operation_name: str,
+        delete_func: Callable,
+        *args,
+        max_retries: int = 2,
+        backoff_base: float = 1.0,
+    ) -> None:
+        """Delete from Qdrant with exponential backoff retry logic.
+
+        PHASE 1 FIX: QdrantService methods are now sync, so we call them
+        directly without ``await``.  The outer method remains ``async`` for
+        compatibility with the async indexing pipeline.
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                # PHASE 1 FIX: QdrantService methods are sync now
+                delete_func(*args)
+                logger.info("index_delete_qdrant_success - operation=%s", operation_name)
+                return
+            except Exception as exc:
+                is_final_attempt = attempt == max_retries
+            
+                if is_final_attempt:
+                    error_msg = f"Qdrant deletion failed after {max_retries + 1} attempts: {str(exc)}"
+                    logger.error(
+                        "index_delete_qdrant_failed - operation=%s attempt=%s error=%s",
+                        operation_name,
+                        attempt + 1,
+                        str(exc),
+                    )
+                    raise RuntimeError(error_msg) from exc
+                else:
+                    # Exponential backoff for retry (only if not final attempt)
+                    wait_time = backoff_base * (2 ** attempt)
+                    logger.warning(
+                        "index_delete_qdrant_retry - operation=%s attempt=%s error=%s wait_secs=%s",
+                        operation_name,
+                        attempt + 1,
+                        str(exc),
+                        wait_time,
+                    )
+                    await asyncio.sleep(wait_time)
+
+    async def _delete_all_repository_chunks(self, repository_id: str) -> None:
+        """Delete all code chunks for a repository from both Qdrant and PostgreSQL.
+        H4 Fix: Use transactional pattern - Qdrant first with retry, then DB deletion.
+        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
+        """
+        # Phase 3 FIX: Ensure collection exists before deletion to avoid 404 errors
         try:
-            self.qdrant.delete_points_by_repository(repository_id)
-        except Exception:
-            logger.warning("index_delete_qdrant - repository purge failed repository_id=%s", repository_id)
+            self.qdrant.ensure_collection()
+        except Exception as exc:
+            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
+            # Continue anyway - if collection doesn't exist, there's nothing to delete
+        
+        # H4: Delete from Qdrant FIRST with retry logic
+        # If Qdrant fails, exception is raised and DB deletion never happens
+        await self._delete_qdrant_with_retry(
+            f"repository_purge({repository_id})",
+            self.qdrant.delete_points_by_repository,
+            repository_id,
+        )
+        
+        # H4: Only delete from DB if Qdrant succeeded
         try:
             self.session.execute(
                 text("DELETE FROM code_chunks WHERE repository_id = :repository_id"),
                 {"repository_id": repository_id},
             )
             self.session.commit()
-        except Exception:
+            logger.info("index_delete_db_success - repository_id=%s", repository_id)
+        except Exception as exc:
             self.session.rollback()
-            raise
+            logger.error("index_delete_db_failed - repository_id=%s error=%s", repository_id, str(exc))
+            raise DatabaseException("Failed to delete repository chunks from database") from exc
 
-    def _delete_repository_chunks_for_paths(
+    async def _delete_repository_chunks_for_paths(
         self,
         repository_id: str,
         repo_root: Path,
         relative_paths: set[str],
     ) -> None:
+        """Delete code chunks for specific paths in a repository.
+        H4 Fix: Two-phase commit - collect IDs, delete from Qdrant with retry, then from DB.
+        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
+        """
         if not relative_paths:
             return
+
+        # Phase 3 FIX: Ensure collection exists before any Qdrant operations
+        try:
+            self.qdrant.ensure_collection()
+        except Exception as exc:
+            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
+            # Continue anyway - if collection doesn't exist, there's nothing to delete
 
         stmt = text(
             """
@@ -532,6 +520,7 @@ class IndexingService:
         point_ids: set[str] = set()
 
         try:
+            # H4: PHASE 1 - Collect IDs to delete
             for rel in sorted(relative_paths):
                 normalized_rel = rel.replace("\\", "/").lstrip("/")
                 if not normalized_rel:
@@ -553,36 +542,61 @@ class IndexingService:
                     if chunk_id:
                         point_ids.add(chunk_id)
 
+        except Exception as exc:
+            self.session.rollback()
+            logger.error(
+                "index_delete_collect_ids_failed - repository_id=%s count=%s error=%s",
+                repository_id,
+                len(relative_paths),
+                str(exc),
+            )
+            raise DatabaseException("Failed to collect chunk IDs for deletion") from exc
+
+        # H4: PHASE 2 - Delete from Qdrant FIRST with retry
+        if point_ids:
+            await self._delete_qdrant_with_retry(
+                f"path_purge(repo={repository_id}, count={len(point_ids)})",
+                self.qdrant.delete_points_by_ids,
+                list(point_ids),
+            )
+
+        # H4: PHASE 3 - Delete from DB only if Qdrant succeeded
+        try:
+            for rel in sorted(relative_paths):
+                normalized_rel = rel.replace("\\", "/").lstrip("/")
+                if not normalized_rel:
+                    continue
+
+                abs_path = str((repo_root / normalized_rel).resolve())
+                windows_rel = normalized_rel.replace("/", "\\")
+                params = {
+                    "repository_id": repository_id,
+                    "abs_path": abs_path,
+                    "rel_path": normalized_rel,
+                    "unix_suffix": f"%/{normalized_rel}",
+                    "win_suffix": f"%\\{windows_rel}",
+                }
+
                 self.session.execute(stmt, params)
 
             self.session.commit()
-        except Exception:
+            logger.info(
+                "index_delete_db_success - repository_id=%s path_count=%s point_count=%s",
+                repository_id,
+                len(relative_paths),
+                len(point_ids),
+            )
+        except Exception as exc:
             self.session.rollback()
-            raise
+            logger.error(
+                "index_delete_db_failed - repository_id=%s path_count=%s error=%s",
+                repository_id,
+                len(relative_paths),
+                str(exc),
+            )
+            raise DatabaseException("Failed to delete chunks for specific paths") from exc
 
-        if point_ids:
-            try:
-                self.qdrant.delete_points_by_ids(list(point_ids))
-            except Exception:
-                logger.warning(
-                    "index_delete_qdrant - path purge failed repository_id=%s point_count=%s",
-                    repository_id,
-                    len(point_ids),
-                )
-
-    def __init__(self, session: Session) -> None:
-        self.session = session
-        self.embedder = get_embedding_provider()
-        self._prefer_cached_embeddings = self.embedder.__class__.__name__ == "OllamaEmbeddingProvider"
-        self.qdrant = QdrantService()
-        # Progress context for long-running store phase (set by index_repository).
-        self._active_indexing_job_id: str | None = None
-        self._active_snapshot_id: str | None = None
-        self._active_total_files: int | None = None
-        self._active_started_at_perf: float | None = None
-        self._active_repository_id: str | None = None
-
-    def _update_progress(
+    async def _update_progress(
         self,
         indexing_job_id: str | None,
         current: int,
@@ -590,13 +604,43 @@ class IndexingService:
         message: str = "",
         current_file: str | None = None,
         elapsed_seconds: float | None = None,
-        snapshot_id: str | None = None,
         extra_stats: dict | None = None,
+        stage: str | None = None,
     ) -> None:
-        """Update indexing progress in both indexing_jobs and snapshot stats."""
+        """Update indexing progress in indexing_jobs.stats.
+        
+        Stages and their percentage ranges:
+        - discovery: 0-5% (Finding files)
+        - parsing: 5-50% (Chunking files)  
+        - embedding: 50-80% (Generating vectors)
+        - storage: 80-95% (Inserting to DB)
+        - graph: 95-100% (Building relationships)
+        """
         if not indexing_job_id:
             return
-        percentage = int((current / total) * 100) if total > 0 else 0
+            
+        # Stage-based percentage calculation
+        stage_percentages = {
+            "discovery": (0, 5),
+            "parsing": (5, 50),
+            "embedding": (50, 80),
+            "storage": (50, 95), # Embedding and storage occur in the same batch loop
+            "graph": (95, 100),
+        }
+        
+        if stage and stage in stage_percentages:
+            stage_start, stage_end = stage_percentages[stage]
+            # Calculate percentage within the stage
+            if total > 0:
+                stage_progress = (current / total)
+                percentage = int(stage_start + (stage_progress * (stage_end - stage_start)))
+                percentage = min(percentage, stage_end - 1)  # Don't reach 100% until graph stage completes
+            else:
+                percentage = stage_start
+        else:
+            # Fallback to simple calculation if no stage provided
+            percentage = int((current / total) * 100) if total > 0 else 0
+            
         eta_seconds: int | None = None
         avg_seconds_per_file: float | None = None
         if elapsed_seconds is not None and current > 0:
@@ -608,6 +652,7 @@ class IndexingService:
             "total_files": total,
             "processed_files": current,
             "percentage": percentage,
+            "current_stage": stage or "unknown",
             "current_file": current_file,
             "eta_seconds": eta_seconds,
             "avg_seconds_per_file": round(avg_seconds_per_file, 4) if avg_seconds_per_file is not None else None,
@@ -624,48 +669,33 @@ class IndexingService:
                     """
                     UPDATE indexing_jobs
                     SET message = :message,
+                        stats = CAST(:stats AS jsonb),
                         updated_at = NOW(),
                         status = CASE WHEN status = 'pending' THEN 'running' ELSE status END
                     WHERE id = :id
                     """
                 ),
-                {"id": indexing_job_id, "message": message or f"Processing: {current}/{total} files"},
+                {
+                    "id": indexing_job_id,
+                    "message": message or f"Processing: {current}/{total} files",
+                    "stats": json.dumps(stats_payload),
+                },
             )
-
-            target_snapshot_id = snapshot_id
-            if not target_snapshot_id:
-                row = self.session.execute(
-                    text("SELECT snapshot_id FROM indexing_jobs WHERE id = :id"),
-                    {"id": indexing_job_id},
-                ).mappings().first()
-                target_snapshot_id = row["snapshot_id"] if row else None
-
-            if target_snapshot_id:
-                self.session.execute(
-                    text(
-                        """
-                        UPDATE repository_snapshots
-                        SET stats = CAST(:stats AS jsonb),
-                            index_status = CASE WHEN index_status = 'pending' THEN 'running' ELSE index_status END
-                        WHERE id = :snapshot_id
-                        """
-                    ),
-                    {"snapshot_id": target_snapshot_id, "stats": json.dumps(stats_payload)},
-                )
             self.session.commit()
             logger.debug(
-                "index_progress_update - success job_id=%s current=%s total=%s percentage=%s",
+                "index_progress_update - success job_id=%s current=%s total=%s percentage=%s stage=%s",
                 indexing_job_id,
                 current,
                 total,
                 percentage,
+                stage,
             )
         except Exception:
             # Non-critical update failure; rollback to avoid aborted transactions.
             logger.exception("index_progress_update - failed job_id=%s", indexing_job_id)
             self.session.rollback()
 
-    def index_repository(
+    async def index_repository(
         self,
         repo_id: str,
         repository_id: str | None,
@@ -674,7 +704,6 @@ class IndexingService:
         repo_url: str | None = None,
         repo_ref: str | None = None,
         indexing_job_id: str | None = None,
-        snapshot_id: str | None = None,
         full_reindex: bool = False,
     ) -> int:
         logger.info(
@@ -684,18 +713,17 @@ class IndexingService:
             commit_sha,
         )
         logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
-        root = self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
-        cleanup_cached_repo = self._should_cleanup_cached_repo(root, repo_url=repo_url, repo_path=repo_path)
+        root = await self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
+        cleanup_cached_repo = bool(repo_url and not repo_path)
         started_at = time.perf_counter()
         self._active_indexing_job_id = indexing_job_id
-        self._active_snapshot_id = snapshot_id
         self._active_started_at_perf = started_at
         self._active_repository_id = repository_id
 
         try:
             ignore_spec = self._load_gitignore_spec(root)
             logger.debug("index_repository - phase=discover repo_id=%s", repo_id)
-            self._update_progress(indexing_job_id, 0, 0, "Discovering files...", snapshot_id=snapshot_id)
+            await self._update_progress(indexing_job_id, 0, 0, "Discovering files...", stage="discovery")
 
             chunks: list[CodeChunk] = []
             file_list: list[Path]
@@ -715,10 +743,10 @@ class IndexingService:
             )
 
             if can_attempt_incremental:
-                previous_commit = self._get_previous_completed_commit(str(repository_id), snapshot_id)
+                previous_commit = self._get_previous_completed_commit(str(repository_id))
                 if previous_commit and previous_commit != commit_sha:
                     try:
-                        changed_paths, deleted_paths = self._collect_git_diff_paths(
+                        changed_paths, deleted_paths = await self._collect_git_diff_paths(
                             root,
                             previous_commit,
                             commit_sha,
@@ -735,7 +763,7 @@ class IndexingService:
                             repo_id,
                             self._format_process_error(exc, "incremental diff unavailable"),
                         )
-                        file_list = list(self._iter_indexable_files(root, ignore_spec))
+                        file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
                         indexing_mode = "full"
                         mode_reason = "incremental fallback to full"
                 elif previous_commit == commit_sha:
@@ -743,11 +771,11 @@ class IndexingService:
                     indexing_mode = "incremental"
                     mode_reason = "no code changes since previous indexed commit"
                 else:
-                    file_list = list(self._iter_indexable_files(root, ignore_spec))
+                    file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
                     indexing_mode = "full"
                     mode_reason = "no previous completed snapshot"
             else:
-                file_list = list(self._iter_indexable_files(root, ignore_spec))
+                file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
                 if force_full_reindex:
                     mode_reason = "forced full reindex"
                 elif not settings.indexing_incremental_enabled:
@@ -772,23 +800,25 @@ class IndexingService:
                 indexing_mode,
                 total_files,
             )
-            self._update_progress(
+            await self._update_progress(
                 indexing_job_id,
                 0,
                 total_files,
                 f"{indexing_mode.title()} indexing selected: {total_files} files",
-                snapshot_id=snapshot_id,
+                stage="discovery",
                 extra_stats={
-                    "mode": indexing_mode,
+                    "indexing_mode": indexing_mode,
                     "mode_reason": mode_reason,
-                    "changed_paths": len(changed_paths),
-                    "deleted_paths": len(deleted_paths),
+                    "total_files": total_files,
+                    "processed_files": 0,
+                    "percentage": 0,
+                    "stored_chunks": 0,
                 },
             )
 
             if repository_id:
                 if indexing_mode == "full":
-                    self._delete_all_repository_chunks(str(repository_id))
+                    await self._delete_all_repository_chunks(str(repository_id))
                 else:
                     paths_to_refresh = set(changed_paths)
                     paths_to_refresh.update(deleted_paths)
@@ -797,7 +827,7 @@ class IndexingService:
                         for fp in file_list
                         if fp.exists()
                     )
-                    self._delete_repository_chunks_for_paths(str(repository_id), root, paths_to_refresh)
+                    await self._delete_repository_chunks_for_paths(str(repository_id), root, paths_to_refresh)
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
                 try:
@@ -837,13 +867,13 @@ class IndexingService:
                     if not done:
                         # Keep heartbeat fresh so polling clients can distinguish active work from stalled jobs.
                         if now - last_progress_update >= 10:
-                            self._update_progress(
+                            await self._update_progress(
                                 indexing_job_id,
                                 processed,
                                 total_files,
                                 f"Indexing in progress ({processed}/{total_files} files)",
                                 elapsed_seconds=elapsed,
-                                snapshot_id=snapshot_id,
+                                stage="parsing",
                             )
                             last_progress_update = now
                         continue
@@ -856,14 +886,14 @@ class IndexingService:
                         processed += 1
                         elapsed = time.perf_counter() - started_at
                         if error is not None:
-                            self._update_progress(
+                            await self._update_progress(
                                 indexing_job_id,
                                 processed,
                                 total_files,
                                 f"Error in {file_path.name}: {str(error)[:100]}",
                                 current_file=str(file_path),
                                 elapsed_seconds=elapsed,
-                                snapshot_id=snapshot_id,
+                                stage="parsing",
                             )
                             last_progress_update = time.perf_counter()
                             logger.warning("Indexing error for %s: %s", file_path, error)
@@ -882,24 +912,23 @@ class IndexingService:
                                 total_files,
                                 len(chunks),
                             )
-                            self._update_progress(
+                            await self._update_progress(
                                 indexing_job_id,
                                 processed,
                                 total_files,
                                 f"Indexed {processed}/{total_files} files ({len(chunks)} chunks)",
                                 current_file=str(file_path),
                                 elapsed_seconds=elapsed,
-                                snapshot_id=snapshot_id,
+                                stage="parsing",
                             )
                             last_progress_update = time.perf_counter()
 
-            self._update_progress(
+            await self._update_progress(
                 indexing_job_id,
                 total_files,
                 total_files,
                 f"Storing {len(chunks)} chunks...",
                 elapsed_seconds=time.perf_counter() - started_at,
-                snapshot_id=snapshot_id,
                 extra_stats={
                     "stage": "storing",
                     "mode": indexing_mode,
@@ -913,9 +942,7 @@ class IndexingService:
             if repository_id:
                 self._assign_repository_ids_and_chunk_ids(repository_id, chunks)
 
-            self._upsert_chunks(chunks)
-            if repository_id:
-                self._rebuild_repo_graph(repo_id, repository_id)
+            await self._upsert_chunks(chunks)
             logger.info(
                 "Indexing completed repo_id=%s repository_id=%s files=%s chunks=%s",
                 repo_id,
@@ -937,18 +964,10 @@ class IndexingService:
             if cleanup_cached_repo and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
             self._active_indexing_job_id = None
-            self._active_snapshot_id = None
             self._active_total_files = None
             self._active_started_at_perf = None
             self._active_repository_id = None
             logger.debug("index_repository - cleanup complete repo_id=%s", repo_id)
-
-    def _rebuild_repo_graph(self, repo_id: str, repository_id: str) -> None:
-        try:
-            rebuild_code_graph(self.session, repository_id, repo_id)
-        except Exception:
-            logger.exception("index_repository - graph rebuild failed repository_id=%s", repository_id)
-            self.session.rollback()
 
     def _assign_repository_ids_and_chunk_ids(self, repository_id: str, chunks: list[CodeChunk]) -> None:
         for chunk in chunks:
@@ -968,6 +987,11 @@ class IndexingService:
         for i in range(0, len(lines), chunk_size):
             chunk_lines = lines[i:i+chunk_size]
             content = "\n".join(chunk_lines)
+            
+            # Prevent massive minified lines from breaking the LLM context window (e.g. minified JS/JSON)
+            if len(content) > 15000:
+                content = content[:15000] + "\n...[truncated]"
+                
             start_line = i + 1
             end_line = min(i + chunk_size, len(lines))
             # Use UUID5 for deterministic, Qdrant-compatible IDs
@@ -989,7 +1013,7 @@ class IndexingService:
             )
         return chunks
 
-    def _upsert_chunks(self, chunks: list[CodeChunk]) -> None:
+    async def _upsert_chunks(self, chunks: list[CodeChunk]) -> None:
         """Store chunks in PostgreSQL and upsert vectors when embeddings are available.
 
         Notes:
@@ -1002,7 +1026,6 @@ class IndexingService:
         logger.info("index_store_chunks - start chunks=%s", len(chunks))
 
         indexing_job_id = self._active_indexing_job_id
-        snapshot_id = self._active_snapshot_id
         total_files = self._active_total_files
         elapsed_seconds = (
             (time.perf_counter() - self._active_started_at_perf)
@@ -1047,7 +1070,10 @@ class IndexingService:
 
         qdrant_points: list[dict] = []
         total_chunks = len(chunks)
-        stored_chunks = 0
+        stored_chunks = 0  # Chunks stored to PostgreSQL
+        qdrant_chunks = 0  # Chunks successfully stored to Qdrant
+        embeddings_skipped = 0  # Chunks without embeddings
+        consecutive_embedding_failures = 0
         last_store_heartbeat = time.perf_counter()
 
         supports_begin = callable(getattr(self.session, "begin", None))
@@ -1066,7 +1092,36 @@ class IndexingService:
                         embedding = self.embedder.embed_text(chunk.content)
                     validate_embedding_dimension(embedding)
                     embeddings_by_id[chunk.id] = embedding
-                except Exception:
+                    consecutive_embedding_failures = 0
+                except Exception as exc:
+                    # Phase 3 FIX: Detailed error logging for embedding failures
+                    error_msg = str(exc)
+                    error_type = type(exc).__name__
+                    logger.error(
+                        "index_store_chunks - embedding failed repo_id=%s chunk_id=%s path=%s error_type=%s error=%s",
+                        chunk.repo_id,
+                        chunk.id,
+                        chunk.path,
+                        error_type,
+                        error_msg,
+                    )
+                    # Log first occurrence with full context
+                    if embeddings_skipped == 0:
+                        logger.error(
+                            "index_store_chunks - FIRST EMBEDDING FAILURE - This may indicate Ollama is not accessible. "
+                            "Ensure Ollama is running at %s with model %s",
+                            settings.ollama_base_url,
+                            settings.ollama_embedding_model,
+                        )
+                    embeddings_skipped += 1
+                    consecutive_embedding_failures += 1
+                    
+                    if consecutive_embedding_failures >= 5:
+                        raise ExternalServiceError(
+                            service_name="Ollama",
+                            underlying_error="Aborting indexing due to multiple consecutive embedding failures. Please ensure Ollama is running."
+                        ) from exc
+                        
                     continue
 
             # Commit per batch so progress is durable and large transactions are avoided.
@@ -1102,15 +1157,29 @@ class IndexingService:
                                 nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
                                 with nested_ctx:
                                     self.session.execute(stmt_with_embedding, params)
-                            except Exception:
+                            except Exception as exc:
                                 # If vector insert fails (e.g., pgvector not installed), fall back to storing without embedding.
+                                logger.warning(
+                                    "index_store_chunks - vector insert failed repo_id=%s chunk_id=%s path=%s error=%s",
+                                    chunk.repo_id,
+                                    chunk.id,
+                                    chunk.path,
+                                    exc,
+                                )
                                 try:
                                     if not supports_nested:
                                         self.session.rollback()
                                     nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
                                     with nested_ctx:
                                         self.session.execute(stmt_without_embedding, params)
-                                except Exception:
+                                except Exception as exc:
+                                    logger.warning(
+                                        "index_store_chunks - row insert failed repo_id=%s chunk_id=%s path=%s error=%s",
+                                        chunk.repo_id,
+                                        chunk.id,
+                                        chunk.path,
+                                        exc,
+                                    )
                                     if not supports_nested:
                                         self.session.rollback()
                                     continue
@@ -1133,12 +1202,26 @@ class IndexingService:
                                 nested_ctx = self.session.begin_nested() if supports_nested else nullcontext()
                                 with nested_ctx:
                                     self.session.execute(stmt_without_embedding, params)
-                            except Exception:
+                            except Exception as exc:
+                                logger.warning(
+                                    "index_store_chunks - row insert failed repo_id=%s chunk_id=%s path=%s error=%s",
+                                    chunk.repo_id,
+                                    chunk.id,
+                                    chunk.path,
+                                    exc,
+                                )
                                 if not supports_nested:
                                     self.session.rollback()
                                 continue
                         stored_chunks += 1
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning(
+                            "index_store_chunks - row store failed repo_id=%s chunk_id=%s path=%s error=%s",
+                            chunk.repo_id,
+                            chunk.id,
+                            chunk.path,
+                            exc,
+                        )
                         # If we can't even store without embedding, skip this row.
                         if not supports_nested:
                             self.session.rollback()
@@ -1153,34 +1236,91 @@ class IndexingService:
 
             # Keep progress heartbeat fresh during storing.
             if indexing_job_id and (time.perf_counter() - last_store_heartbeat) >= 2:
-                self._update_progress(
+                await self._update_progress(
                     indexing_job_id,
-                    total_files or 0,
-                    total_files or 0,
-                    f"Storing chunks... ({stored_chunks}/{total_chunks})",
+                    stored_chunks,
+                    total_chunks,
+                    f"Storing chunks... ({stored_chunks}/{total_chunks}, {len(qdrant_points)} with vectors)",
                     elapsed_seconds=elapsed_seconds,
-                    snapshot_id=snapshot_id,
+                    stage="storage",
                     extra_stats={
-                        "stage": "storing",
                         "total_chunks": total_chunks,
                         "stored_chunks": stored_chunks,
+                        "qdrant_chunks_queued": len(qdrant_points),
+                        "embeddings_skipped": embeddings_skipped,
                     },
                 )
                 last_store_heartbeat = time.perf_counter()
 
         if stored_chunks == 0:
-            raise RuntimeError(
+            raise DatabaseException(
                 "Indexing produced chunks, but none were stored to PostgreSQL. "
                 "Check that the backend is connected to the expected database and that schema initialization succeeded."
             )
-        logger.info("index_store_chunks - stored chunks=%s qdrant_points=%s", stored_chunks, len(qdrant_points))
+        logger.info(
+            "index_store_chunks - stored chunks=%s qdrant_points=%s embeddings_skipped=%s",
+            stored_chunks,
+            len(qdrant_points),
+            embeddings_skipped,
+        )
 
         if qdrant_points:
             try:
+                # PHASE 1 FIX: QdrantService methods are now sync
                 self.qdrant.ensure_collection()
+                logger.debug("index_store_chunks - qdrant collection ensured")
+                
+                # Phase 3 FIX: Batch upsert with verification
                 for start in range(0, len(qdrant_points), 64):
                     batch_points = qdrant_points[start : start + 64]
-                    self.qdrant.upsert_points(batch_points)
-            except RuntimeError as exc:
-                logger.warning("Qdrant upsert failed; continuing without vectors: %s", exc)
+                    try:
+                        self.qdrant.upsert_points(batch_points)
+                        qdrant_chunks += len(batch_points)
+                        logger.debug(
+                            "index_store_chunks - qdrant batch upserted batch_size=%s total_qdrant=%s",
+                            len(batch_points),
+                            qdrant_chunks,
+                        )
+                    except ExternalServiceError as batch_exc:
+                        logger.error(
+                            "index_store_chunks - qdrant batch upsert failed batch_size=%s error=%s",
+                            len(batch_points),
+                            batch_exc,
+                        )
+                        raise
+                
+                logger.info(
+                    "index_store_chunks - qdrant upsert completed qdrant_chunks=%s",
+                    qdrant_chunks,
+                )
+            except ExternalServiceError as exc:
+                logger.error(
+                    "index_store_chunks - qdrant upsert failed total_points=%s error=%s",
+                    len(qdrant_points),
+                    exc,
+                )
+                # Phase 3 FIX: Don't silently fail - log mismatch and raise
+                raise DatabaseException(
+                    f"Failed to sync {len(qdrant_points)} chunks to Qdrant. "
+                    f"Database has {stored_chunks} chunks but {qdrant_chunks} in Qdrant. "
+                    f"Please retry indexing after verifying Qdrant is running."
+                ) from exc
+        else:
+            logger.warning(
+                "index_store_chunks - no chunks with embeddings to store in qdrant stored_chunks=%s embeddings_skipped=%s",
+                stored_chunks,
+                embeddings_skipped,
+            )
+            # Phase 3 FIX: Detailed diagnostic when ALL embeddings failed
+            if stored_chunks > 0 and embeddings_skipped == stored_chunks:
+                logger.error(
+                    "index_store_chunks - CRITICAL: All embeddings failed! "
+                    "This indicates Ollama embedding service is not accessible. "
+                    "Current config: ollama_base_url=%s ollama_model=%s "
+                    "If using Podman, ensure the container is running and network is accessible. "
+                    "To debug: curl %s/api/models",
+                    settings.ollama_base_url,
+                    settings.ollama_embedding_model,
+                    settings.ollama_base_url,
+                )
 

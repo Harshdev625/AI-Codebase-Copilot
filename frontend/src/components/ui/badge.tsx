@@ -22,7 +22,7 @@ const badgeVariants = cva(
         error:
           "bg-error/10 text-error border border-error/20",
         ai:
-          "bg-gradient-to-r from-primary/10 to-indigo-500/10 text-primary border border-primary/20 shadow-glow-sm",
+          "bg-gradient-to-r from-primary/10 to-[hsl(var(--glow)/0.18)] text-primary border border-primary/20 shadow-glow-sm",
         muted:
           "bg-muted text-muted-foreground border border-border/20",
         live:

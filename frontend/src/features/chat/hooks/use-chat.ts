@@ -1,211 +1,210 @@
-import * as React from 'react';
-import { chatService } from '../services/chat-service';
-import { ChatMessage } from '../types/chat-types';
-import { useToast } from '@/components/shared/toast-provider';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as React from "react";
+import { v4 as uuidv4 } from "uuid";
 
-interface UseChatOptions {
-  projectId?: string;
-  repositoryId?: string;
-  mode: 'project' | 'repository';
-  initialSessionId?: string;
-}
+import { chatService } from "@/features/chat/services/chat-service";
+import type { ChatMessage, ChatRequestPayload, ChatStreamEvent } from "@/features/chat/types/chat-types";
 
-type StreamDoneEvent = {
-  type: 'done';
-  intent?: string;
-  sources?: Array<Record<string, unknown>>;
-  answer?: string;
-  proposal?: {
-    title?: string;
-    summary?: string;
-    diff?: string;
-    files?: string[];
-    intent?: string;
-  };
+export const chatKeys = {
+  sessions: (repositoryId?: string) => ["chat", "sessions", repositoryId] as const,
+  messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
 };
 
-function extractProposal(sources: Array<Record<string, unknown>> | undefined, directProposal: StreamDoneEvent['proposal']) {
-  if (directProposal?.diff) {
-    return directProposal;
-  }
-
-  const proposalSource = sources?.find((source) => {
-    const kind = typeof source.kind === 'string' ? source.kind : '';
-    return kind === 'patch_proposal';
+export function useChatSessions(limit = 20, offset = 0, repositoryId?: string) {
+  return useQuery({
+    queryKey: [...chatKeys.sessions(repositoryId), limit, offset],
+    queryFn: () => chatService.listSessions(limit, offset, repositoryId),
   });
-
-  const proposal = proposalSource?.proposal;
-  if (proposal && typeof proposal === 'object') {
-    const typed = proposal as Record<string, unknown>;
-    return {
-      title: typeof typed.title === 'string' ? typed.title : undefined,
-      summary: typeof typed.summary === 'string' ? typed.summary : undefined,
-      diff: typeof typed.diff === 'string' ? typed.diff : undefined,
-      files: Array.isArray(typed.files) ? typed.files.filter((file): file is string => typeof file === 'string') : undefined,
-      intent: typeof typed.intent === 'string' ? typed.intent : undefined,
-    };
-  }
-
-  return undefined;
 }
 
-export function useChat({ projectId, repositoryId, mode, initialSessionId }: UseChatOptions) {
+export function useApplyPatchMutation() {
+  return useMutation({
+    mutationFn: ({ repositoryId, diff }: { repositoryId: string; diff: string }) =>
+      chatService.applyPatch(repositoryId, diff),
+  });
+}
+
+export function useChatMessages(sessionId: string | null, limit = 100, offset = 0) {
+  return useQuery({
+    queryKey: sessionId ? [...chatKeys.messages(sessionId), limit, offset] : ["chat", "messages", "empty"],
+    queryFn: () => chatService.listMessages(sessionId as string, limit, offset),
+    enabled: Boolean(sessionId),
+  });
+}
+
+export function useDeleteSessionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (sessionId: string) => chatService.deleteSession(sessionId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+    },
+  });
+}
+
+type UseChatOptions = {
+  repositoryId?: string;
+  mode: "repository" | "project";
+};
+
+export function useChat({ repositoryId, mode }: UseChatOptions) {
+  const [currentSessionId, setCurrentSessionId] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
-  const [isHistoryLoading, setIsHistoryLoading] = React.useState(false);
-  const [currentSessionId, setCurrentSessionId] = React.useState<string | undefined>(initialSessionId);
-  const historyRequestIdRef = React.useRef(0);
-  const { warning, error } = useToast();
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const queryClient = useQueryClient();
 
-  const mapHistoryMessage = React.useCallback((message: any): ChatMessage => {
-    return {
-      id: String(message.id),
-      role: message.role === 'assistant' ? 'assistant' : 'user',
-      content: String(message.content ?? ''),
-      created_at: message.created_at,
-      metadata: message.metadata,
-    };
-  }, []);
-
-  const hasValidScope = React.useMemo(() => {
-    if (mode === 'project') {
-      return !!projectId;
-    }
-    return !!repositoryId;
-  }, [mode, projectId, repositoryId]);
-
-  const loadSessionHistory = React.useCallback(async (sessionId: string) => {
-    const requestId = ++historyRequestIdRef.current;
-    setCurrentSessionId(sessionId);
-    setMessages([]);
-    setIsHistoryLoading(true);
-
-    try {
-      const response = await chatService.getSessionMessages(sessionId);
-      if (requestId !== historyRequestIdRef.current) {
-        return;
-      }
-      setMessages(response.map(mapHistoryMessage));
-    } catch (err: any) {
-      if (requestId !== historyRequestIdRef.current) {
-        return;
-      }
-      setMessages([]);
-      error('History Load Failed', err?.message || 'Unable to load session history.');
-    } finally {
-      if (requestId === historyRequestIdRef.current) {
-        setIsHistoryLoading(false);
-      }
-    }
-  }, [error, mapHistoryMessage]);
+  const messagesQuery = useChatMessages(currentSessionId, 100, 0);
 
   React.useEffect(() => {
-    if (initialSessionId) {
-      void loadSessionHistory(initialSessionId);
-    }
-  }, [initialSessionId, loadSessionHistory]);
-
-  const selectSession = React.useCallback((sessionId: string) => {
-    if (!sessionId) {
+    if (!currentSessionId) {
       return;
     }
-    void loadSessionHistory(sessionId);
-  }, [loadSessionHistory]);
+    const items = messagesQuery.data?.items;
+    if (Array.isArray(items) && !isSending) {
+      setMessages(items);
+    }
+  }, [currentSessionId, messagesQuery.data?.items, isSending]);
 
   const clearMessages = React.useCallback(() => {
-    historyRequestIdRef.current += 1;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setCurrentSessionId(null);
     setMessages([]);
-    setCurrentSessionId(undefined);
-    setIsHistoryLoading(false);
   }, []);
 
-  const sendMessage = React.useCallback(async (query: string) => {
-    if (!hasValidScope) {
-      warning(
-        'Selection Required',
-        mode === 'project'
-          ? 'Choose a project to run a federated query.'
-          : 'Choose a repository to start analyzing.'
-      );
-      return;
+  const selectSession = React.useCallback((sessionId: string) => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
-    if (isHistoryLoading) {
-      return;
-    }
+    setCurrentSessionId(sessionId);
+    setMessages([]);
+  }, []);
 
-    const userMessage: ChatMessage = {
-      id: Math.random().toString(36).substring(7),
-      role: 'user',
-      content: query,
-    };
-
-    const assistantId = Math.random().toString(36).substring(7);
-    const assistantPlaceholder: ChatMessage = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      metadata: { intent: 'thinking...' },
-    };
-
-    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
-    setIsSending(true);
-
-    try {
-      let fullContent = '';
-      await chatService.streamChat(
-        {
-          query,
-          session_id: currentSessionId,
-          ...(mode === 'project' ? { project_id: projectId } : { repository_id: repositoryId }),
-        },
-        (event) => {
-          if (event.type === 'start' && event.session_id) {
-            setCurrentSessionId(String(event.session_id));
-          }
-          if (event.type === 'chunk' && event.delta) {
-            fullContent += event.delta;
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId ? { ...msg, content: fullContent } : msg
-              )
-            );
-          }
-          if (event.type === 'done') {
-            const doneEvent = event as StreamDoneEvent;
-            const proposal = extractProposal(doneEvent.sources, doneEvent.proposal);
-            const finalContent = fullContent || String(doneEvent.answer || '');
-
-            setMessages((prev) =>
-              prev.map((msg) =>
-                msg.id === assistantId
-                  ? {
-                      ...msg,
-                      content: finalContent,
-                      metadata: {
-                        intent: doneEvent.intent,
-                        sources: doneEvent.sources,
-                        proposal,
-                      },
-                    }
-                  : msg
-              )
-            );
-          }
-        }
-      );
-    } catch (err: any) {
-      error('Message Failed', err.message || 'The AI service encountered an error.');
-      setMessages((prev) => prev.filter((msg) => msg.id !== assistantId));
-    } finally {
+  const stopGeneration = React.useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
       setIsSending(false);
     }
-  }, [hasValidScope, mode, warning, isHistoryLoading, currentSessionId, projectId, repositoryId, error]);
+  }, []);
+
+  const sendMessage = React.useCallback(
+    async (content: string) => {
+      if (!content.trim() || isSending) return;
+
+      const userMessageId = uuidv4();
+      const assistantMessageId = uuidv4();
+      let localSessionId = currentSessionId;
+
+      const newUserMessage: ChatMessage = {
+        id: userMessageId,
+        role: "user",
+        content,
+        created_at: new Date().toISOString(),
+        metadata: {},
+      };
+
+      const placeholderAssistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        created_at: new Date().toISOString(),
+        metadata: {},
+      };
+
+      setMessages((prev) => [...prev, newUserMessage, placeholderAssistantMessage]);
+      setIsSending(true);
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      const payload: ChatRequestPayload = {
+        query: content,
+        mode: "question",
+        session_id: localSessionId || undefined,
+      };
+
+      if (mode === "repository" && repositoryId) {
+        payload.repository_id = repositoryId;
+      }
+
+      try {
+        await chatService.stream(
+          payload,
+          (event: ChatStreamEvent) => {
+            if (event.type === 'start' && event.session_id) {
+              if (localSessionId !== event.session_id) {
+                localSessionId = event.session_id;
+                setCurrentSessionId(event.session_id);
+                void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+              }
+            } else if (event.type === 'chunk' && event.delta) {
+              setMessages((prev) => 
+                prev.map((msg) => {
+                  if (msg.id === assistantMessageId) {
+                    return { ...msg, content: msg.content + event.delta! };
+                  }
+                  return msg;
+                })
+              );
+            } else if (event.type === 'done' && event.sources) {
+              // H6 FIX: Ensure patch_proposal is also stored in frontend metadata
+              setMessages((prev) => 
+                prev.map((msg) => {
+                  if (msg.id === assistantMessageId) {
+                    const newMetadata = { ...msg.metadata, sources: event.sources };
+                    if (event.proposal) {
+                      newMetadata.sources = [
+                        ...(newMetadata.sources || []),
+                        { kind: 'patch_proposal', proposal: event.proposal }
+                      ];
+                    }
+                    return { ...msg, metadata: newMetadata };
+                  }
+                  return msg;
+                })
+              );
+            }
+          },
+          controller.signal
+        );
+      } catch (error: any) {
+        if (error.name !== "AbortError") {
+          const message = error instanceof Error ? error.message : "Unable to send message.";
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === assistantMessageId) {
+                return { ...msg, content: msg.content + `\n\n**Error:** ${message}` };
+              }
+              return msg;
+            })
+          );
+          throw error;
+        }
+      } finally {
+        if (abortControllerRef.current === controller) {
+          abortControllerRef.current = null;
+          setIsSending(false);
+          // Invalidate messages list to ensure backend sync
+          if (localSessionId) {
+            void queryClient.invalidateQueries({ queryKey: chatKeys.messages(localSessionId) });
+          }
+        }
+      }
+    },
+    [mode, repositoryId, currentSessionId, queryClient]
+  );
 
   return {
     messages,
     sendMessage,
+    stopGeneration,
     isSending,
-    isHistoryLoading,
+    isHistoryLoading: Boolean(currentSessionId) && messagesQuery.isFetching,
+    historyError: messagesQuery.isError ? messagesQuery.error : null,
     clearMessages,
     currentSessionId,
     selectSession,

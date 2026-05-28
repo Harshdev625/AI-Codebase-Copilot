@@ -43,11 +43,11 @@ const steps: Step[] = [
     badge: 'Step 1 of 3',
     title: 'Create a Project',
     description: 'Projects group related repositories together. Start by creating your first project — give it a meaningful name like "Backend Services" or "Mobile App".',
-    detail: 'Projects also define usage scope for SaaS limits and billing attribution, so keep boundaries intentional.',
+    detail: 'Projects are being simplified in the refactor; start by linking a repository.',
     cta: 'Create my first project',
     ctaHref: '/repositories',
-    color: 'text-indigo-500',
-    bgColor: 'bg-indigo-500/10',
+    color: 'text-warning',
+    bgColor: 'bg-warning/10',
   },
   {
     id: 2,
@@ -55,11 +55,11 @@ const steps: Step[] = [
     badge: 'Step 2 of 3',
     title: 'Add a Repository',
     description: 'Connect a GitHub URL or point to a local path. The AI will index your codebase — parsing functions, classes, and relationships — and store them as semantic vectors.',
-    detail: 'Indexing typically takes 1-5 minutes. You\'ll see real-time progress, and your dashboard now shows daily index quota usage.',
+    detail: 'Indexing typically takes 1-5 minutes. You’ll see real-time progress as chunks are stored.',
     cta: 'Add my first repository',
     ctaHref: '/repositories',
-    color: 'text-emerald-500',
-    bgColor: 'bg-emerald-500/10',
+    color: 'text-success',
+    bgColor: 'bg-success/10',
   },
   {
     id: 3,
@@ -67,11 +67,11 @@ const steps: Step[] = [
     badge: 'Step 3 of 3',
     title: 'Start Your First Chat',
     description: 'Once indexed, head to the Chat workspace and ask anything: "Where is authentication handled?", "Explain the payment flow", "Why is this function slow?"',
-    detail: 'The AI cites exact source files and functions, and your usage meter tracks daily query/token consumption.',
+    detail: 'The AI cites exact source files and functions.',
     cta: 'Open Chat workspace',
     ctaHref: '/chat',
-    color: 'text-violet-500',
-    bgColor: 'bg-violet-500/10',
+    color: 'text-ai',
+    bgColor: 'bg-ai/10',
   },
 ];
 
@@ -83,7 +83,7 @@ export function OnboardingOverlay() {
 
   React.useEffect(() => {
     initializeForUser(user?.id ?? null);
-  }, [user?.id, initializeForUser]);
+  }, [user?.id]); // Only depend on user ID, not the function reference
 
   const step = steps[currentStep];
   const isLast = currentStep === steps.length - 1;

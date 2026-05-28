@@ -32,35 +32,35 @@ export function CodeBlock({
   return (
     <div className={cn('group relative rounded-xl overflow-hidden border border-border/40', className)}>
       {/* Header */}
-      <div className="flex items-center justify-between bg-zinc-900 px-4 py-2 border-b border-white/5">
+      <div className="flex items-center justify-between bg-muted/50 px-4 py-2 border-b border-border/30">
         <div className="flex items-center gap-2">
           <div className="flex gap-1.5">
-            <div className="h-2.5 w-2.5 rounded-full bg-rose-500/70" />
-            <div className="h-2.5 w-2.5 rounded-full bg-amber-500/70" />
-            <div className="h-2.5 w-2.5 rounded-full bg-emerald-500/70" />
+            <div className="h-2.5 w-2.5 rounded-full bg-destructive/70" />
+            <div className="h-2.5 w-2.5 rounded-full bg-warning/70" />
+            <div className="h-2.5 w-2.5 rounded-full bg-success/70" />
           </div>
           {filename && (
-            <span className="ml-2 text-[10px] font-mono text-zinc-400">{filename}</span>
+            <span className="ml-2 text-[10px] font-mono text-muted-foreground/60">{filename}</span>
           )}
           {!filename && language !== 'text' && (
-            <span className="ml-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500">
+            <span className="ml-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
               {language}
             </span>
           )}
         </div>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-bold text-zinc-400 transition-all hover:bg-white/5 hover:text-white"
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-bold text-muted-foreground transition-all hover:bg-accent hover:text-foreground"
           title="Copy code"
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-emerald-400">Copied!</span>
+              <Check className="h-4 w-4 text-success" />
+              <span className="text-success">Copied!</span>
             </>
           ) : (
             <>
-              <Copy className="h-3 w-3" />
+              <Copy className="h-4 w-4" />
               <span>Copy</span>
             </>
           )}

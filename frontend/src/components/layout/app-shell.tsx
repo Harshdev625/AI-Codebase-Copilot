@@ -1,28 +1,21 @@
 "use client";
 
 import * as React from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { Sidebar, type NavItem } from "@/components/layout/sidebar";
+import { useRouter } from "next/navigation";
 import { TopNavbar } from "@/components/layout/top-navbar";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
 
 interface AppShellProps {
   title: string;
-  items: NavItem[];
   children: React.ReactNode;
   /** fullBleed — no padding wrapper, used for Chat full-viewport layout */
   variant?: "default" | "fullBleed";
 }
 
-export function AppShell({ title, items, children, variant = "default" }: AppShellProps): React.JSX.Element {
-  const [isSidebarOpen, setSidebarOpen] = React.useState(false);
-  const [isSidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+export function AppShell({ title, children, variant = "default" }: AppShellProps): React.JSX.Element {
   const { user, logout } = useAuthStore();
   const router = useRouter();
-  const pathname = usePathname();
-
-  React.useEffect(() => { setSidebarOpen(false); }, [pathname]);
 
   const signOut = React.useCallback(() => {
     logout();
@@ -30,31 +23,19 @@ export function AppShell({ title, items, children, variant = "default" }: AppShe
   }, [logout, router]);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-[hsl(240,18%,4%)] transition-colors duration-300">
+    <div className="flex h-screen w-full overflow-hidden bg-background transition-colors duration-300">
+      {/* Animated background gradient orbs */}
       <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute -right-1/4 -top-1/4 h-[700px] w-[700px] rounded-full bg-violet-500/4 blur-[150px]" />
-        <div className="absolute -left-1/4 bottom-0 h-[500px] w-[500px] rounded-full bg-indigo-500/3 blur-[120px]" />
+        <div className="absolute -right-1/4 -top-1/4 h-96 md:h-[520px] lg:h-[720px] w-96 md:w-[520px] lg:w-[720px] rounded-full bg-primary/8 blur-[90px] md:blur-[130px] lg:blur-[160px] transition-all duration-300" />
+        <div className="absolute -left-1/4 bottom-0 h-80 md:h-[420px] lg:h-[520px] w-80 md:w-[420px] lg:w-[520px] rounded-full bg-[hsl(var(--glow)/0.1)] blur-[90px] md:blur-[120px] lg:blur-[140px] transition-all duration-300" />
       </div>
 
-      <Sidebar
-        title="TimeMachine"
-        items={items}
-        isOpen={isSidebarOpen}
-        collapsed={isSidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((prev) => !prev)}
-        onClose={() => setSidebarOpen(false)}
-      />
-
+      {/* Main content area */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
-        <TopNavbar
-          sectionTitle={title}
-          userEmail={user?.email}
-          onMenuClick={() => setSidebarOpen(true)}
-          onSidebarToggle={() => setSidebarCollapsed((prev) => !prev)}
-          isSidebarCollapsed={isSidebarCollapsed}
-          onSignOut={signOut}
-        />
+        {/* Top Navigation */}
+        <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />
 
+        {/* Page content */}
         <main className={cn("flex-1 overflow-auto scroll-smooth", variant === "default" && "p-0")}>
           {variant === "default" ? (
             <div className="flex min-h-full flex-col p-6 md:p-8 max-w-7xl mx-auto w-full">
