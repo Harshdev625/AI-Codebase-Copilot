@@ -1,6 +1,4 @@
 """Unit tests for the keyword-based planner node."""
-import pytest
-
 from app.graph.nodes.planner import planner_node
 
 

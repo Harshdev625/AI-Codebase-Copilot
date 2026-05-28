@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import atexit
+import logging
 from functools import lru_cache
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache
@@ -20,6 +24,7 @@ def get_http_client() -> httpx.Client:
         follow_redirects=True,
     )
 
+    logger.info("http_client - initialized shared client")
     atexit.register(_safe_close_client, client)
     return client
 
@@ -27,5 +32,7 @@ def get_http_client() -> httpx.Client:
 def _safe_close_client(client: httpx.Client) -> None:
     try:
         client.close()
+        logger.info("http_client - closed shared client")
     except Exception:
+        logger.exception("http_client - close failed")
         return

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -10,36 +12,41 @@ from app.core.http_client import get_http_client
 from app.rag.embeddings.provider import get_embedding_provider
 
 
+logger = logging.getLogger(__name__)
+
+
 class OllamaModelRouter:
     def __init__(self) -> None:
         self.base_url = settings.ollama_base_url.rstrip("/")
         self.chat_model = settings.ollama_chat_model
-        self.timeout = settings.ollama_timeout_seconds
+        self.timeout = settings.ollama_chat_timeout_seconds
         self.embedder = get_embedding_provider()
 
-    def chat(self, prompt: str, context: str = "") -> str:
+    def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> str:
+        logger.debug("ollama_chat - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         full_context = context
         short_context = context[:6000] if context else ""
         last_error: RuntimeError | None = None
+        active_system_prompt = (
+            system_prompt
+            or (
+                "You are AI Codebase Copilot."
+                "\n\nRules:"
+                "\n- Use ONLY the provided code context."
+                "\n- Do NOT assume files or features that are not in the context."
+                "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
+                "\n- If the context is insufficient, say so and list what is missing."
+                "\n- When explaining architecture, output a short module-by-module outline."
+                "\n- For every major claim, include at least one file path that appears in the provided context."
+            )
+        )
 
         for candidate_context in (full_context, short_context):
             user_prompt = prompt if not candidate_context else f"Context:\n{candidate_context}\n\nQuestion:\n{prompt}"
             payload: dict[str, Any] = {
                 "model": self.chat_model,
                 "messages": [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are AI Codebase Copilot."
-                            "\n\nRules:"
-                            "\n- Use ONLY the provided code context."
-                            "\n- Do NOT assume files or features that are not in the context."
-                            "\n- Do NOT introduce technologies/frameworks that are not explicitly present in the context text."
-                            "\n- If the context is insufficient, say so and list what is missing."
-                            "\n- When explaining architecture, output a short module-by-module outline."
-                            "\n- For every major claim, include at least one file path that appears in the provided context."
-                        ),
-                    },
+                    {"role": "system", "content": active_system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
                 "options": {
@@ -51,29 +58,55 @@ class OllamaModelRouter:
                 response = get_http_client().post(
                     f"{self.base_url}/api/chat",
                     json=payload,
-                    # First-token/model-load can be slow on CPU.
-                    timeout=max(self.timeout, 180.0),
+                    timeout=httpx.Timeout(
+                        connect=max(self.timeout, 30.0),
+                        read=self.timeout,
+                        write=max(self.timeout, 30.0),
+                        pool=max(self.timeout, 30.0),
+                    ),
                 )
                 response.raise_for_status()
-                body = response.json()
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    body_excerpt = response.text[:200] if response.text else ""
+                    last_error = RuntimeError(
+                        f"Ollama chat response was not valid JSON. Response: {body_excerpt}"
+                    )
+                    logger.warning("ollama_chat - invalid json status=%s", response.status_code)
+                    raise last_error from exc
                 message = body.get("message", {})
-                return str(message.get("content", "")).strip()
+                text = str(message.get("content", "")).strip()
+                logger.info("ollama_chat - response received chars=%s", len(text))
+                return text
             except httpx.HTTPStatusError as exc:
-                body_excerpt = exc.response.text[:200] if exc.response is not None else ""
+                body_excerpt = exc.response.text[:200] if exc.response is not None else "<no body>"
                 last_error = RuntimeError(
-                    f"Ollama chat request failed: {exc}. Response: {body_excerpt}"
+                    f"Ollama chat request failed (status {exc.response.status_code if exc.response else '?'}): {body_excerpt}"
+                )
+                logger.warning(
+                    "ollama_chat - http status failure status=%s candidate=%s",
+                    exc.response.status_code if exc.response else "unknown",
+                    "full" if not candidate_context or candidate_context == full_context else "short",
                 )
             except httpx.HTTPError as exc:
-                last_error = RuntimeError(f"Ollama chat request failed: {exc}")
+                last_error = RuntimeError(f"Ollama chat request failed: {str(exc)[:200]}")
+                logger.warning(
+                    "ollama_chat - transport failure candidate=%s error=%s",
+                    "full" if not candidate_context or candidate_context == full_context else "short",
+                    str(exc)[:100],
+                )
 
             if not candidate_context or candidate_context == short_context:
                 break
 
         if last_error is not None:
+            logger.error("ollama_chat - failed after retries error=%s", str(last_error)[:200])
             raise last_error
-        raise RuntimeError("Ollama chat request failed")
+        raise RuntimeError("Ollama chat failed: no response generated")
 
     def stream_chat(self, prompt: str, context: str = ""):
+        logger.debug("ollama_stream - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         user_prompt = prompt if not context else f"Context:\n{context}\n\nQuestion:\n{prompt}"
         payload: dict[str, Any] = {
             "model": self.chat_model,
@@ -108,6 +141,7 @@ class OllamaModelRouter:
                 timeout=httpx.Timeout(connect=max(self.timeout, 30.0), read=None, write=max(self.timeout, 30.0), pool=max(self.timeout, 30.0)),
             ) as response:
                 response.raise_for_status()
+                yielded = 0
                 for line in response.iter_lines():
                     if not line:
                         continue
@@ -118,13 +152,17 @@ class OllamaModelRouter:
                     message = body.get("message", {})
                     delta = str(message.get("content", ""))
                     if delta:
+                        yielded += 1
                         yield delta
                     if body.get("done"):
                         break
+                logger.info("ollama_stream - completed chunks=%s", yielded)
         except httpx.HTTPStatusError as exc:
             body_excerpt = exc.response.text[:200] if exc.response is not None else ""
+            logger.exception("ollama_stream - http status failure")
             raise RuntimeError(f"Ollama stream request failed: {exc}. Response: {body_excerpt}") from exc
         except httpx.HTTPError as exc:
+            logger.exception("ollama_stream - transport failure")
             raise RuntimeError(f"Ollama stream request failed: {exc}") from exc
 
     def embed(self, text: str) -> list[float]:
@@ -134,10 +172,6 @@ class OllamaModelRouter:
 def get_model_router() -> OllamaModelRouter:
     # Safe to reuse across requests: http client is pooled and embedder is stateless.
     return _get_model_router_singleton()
-
-
-from functools import lru_cache
-
 
 @lru_cache
 def _get_model_router_singleton() -> OllamaModelRouter:

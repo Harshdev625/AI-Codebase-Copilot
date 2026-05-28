@@ -1,4 +1,5 @@
 from typing import Any, Literal
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -10,6 +11,16 @@ REPO_ID_PATTERN = r"^(?:[A-Za-z0-9][A-Za-z0-9._-]{1,127}|[A-Za-z0-9][A-Za-z0-9._
 BRANCH_PATTERN = r"^[A-Za-z0-9._/-]{1,128}$"
 COMMIT_PATTERN = r"^[A-Za-z0-9._/-]{3,80}$"
 UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+SCOPE_PATTERN = r"^[a-z*]+:[a-z*]+$"
+
+
+class ChatMode(str, Enum):
+    """Chat workflow modes."""
+    QUESTION = "question"
+    REFACTOR = "refactor"
+    DEBUG = "debug"
+    DOCUMENTATION = "documentation"
+    TOOL = "tool"
 
 
 class StrictRequestModel(BaseModel):
@@ -20,10 +31,16 @@ class ChatRequest(StrictRequestModel):
     repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
     query: str = Field(..., min_length=3, max_length=4000)
+    session_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    mode: ChatMode = Field(default=ChatMode.QUESTION, description="Chat workflow mode")
+    include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
-        if bool(self.repository_id) == bool(self.repo_id):
+        has_repository = bool(self.repository_id) or bool(self.repo_id)
+        if not has_repository:
+            raise ValueError("Provide one of repository_id/repo_id")
+        if bool(self.repository_id) and bool(self.repo_id):
             raise ValueError("Provide exactly one of repository_id or repo_id")
         if self.repo_id is not None:
             self.repo_id = _normalize_repo_id(self.repo_id)
@@ -33,7 +50,42 @@ class ChatRequest(StrictRequestModel):
 class ChatResponse(BaseModel):
     answer: str
     intent: str
+    session_id: str
     sources: list[dict[str, Any]] = []
+
+
+class ApplyPatchRequest(StrictRequestModel):
+    repository_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    repo_id: str | None = Field(default=None, min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
+    diff: str = Field(..., description="The Unified Diff string to apply")
+
+    @model_validator(mode="after")
+    def normalize_repo_id(self) -> "ApplyPatchRequest":
+        has_repository = bool(self.repository_id) or bool(self.repo_id)
+        if not has_repository:
+            raise ValueError("Provide one of repository_id/repo_id")
+        if bool(self.repository_id) and bool(self.repo_id):
+            raise ValueError("Provide exactly one of repository_id or repo_id")
+        if self.repo_id is not None:
+            self.repo_id = _normalize_repo_id(self.repo_id)
+        return self
+
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    repository_id: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class ChatMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    metadata: dict[str, Any] = {}
+    created_at: str
 
 
 class IndexRequest(StrictRequestModel):
@@ -56,7 +108,7 @@ class IndexRequest(StrictRequestModel):
 class IndexResponse(BaseModel):
     indexed_chunks: int
     status: Literal["ok"] = "ok"
-    snapshot_id: str | None = None
+    indexing_job_id: str | None = None
 
 
 class AuthRegisterRequest(StrictRequestModel):
@@ -87,6 +139,7 @@ class UserResponse(BaseModel):
     email: str
     full_name: str | None = None
     role: str
+    token_scopes: list[str] = []
     is_active: bool
 
 
@@ -114,6 +167,19 @@ class AddRepositoryRequest(StrictRequestModel):
         self.repo_id = _normalize_repo_id(self.repo_id)
         if not self.remote_url and not self.local_path:
             raise ValueError("Provide either remote_url or local_path")
+        if self.remote_url:
+            normalized_url = str(self.remote_url).strip().lower()
+            if not (
+                normalized_url.startswith("https://")
+                or normalized_url.startswith("http://")
+                or normalized_url.startswith("git@")
+                or normalized_url.startswith("ssh://")
+            ):
+                raise ValueError("remote_url must use https/http/ssh/git format")
+        if self.local_path:
+            normalized_path = str(self.local_path).strip().replace("\\", "/")
+            if ".." in normalized_path.split("/"):
+                raise ValueError("local_path must not contain parent traversal segments")
         return self
 
 
@@ -137,16 +203,11 @@ def _normalize_repo_id(repo_id: str) -> str:
 
 class RepositoryResponse(BaseModel):
     id: str
-    project_id: str
+    owner_user_id: str | None = None
     repo_id: str
     remote_url: str | None = None
     local_path: str | None = None
     default_branch: str
     created_at: str
-    latest_snapshot_id: str | None = None
-    latest_index_status: str | None = None
-    latest_index_stats: dict[str, Any] | None = None
-    latest_indexed_chunks: int | None = None
-    has_completed_index: bool = False
-    latest_completed_index_stats: dict[str, Any] | None = None
-    latest_completed_indexed_chunks: int | None = None
+    latest_job_status: str | None = None
+    latest_job_stats: dict[str, Any] | None = None

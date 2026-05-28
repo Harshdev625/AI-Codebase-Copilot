@@ -1,6 +1,5 @@
-import { NextRequest } from "next/server";
-import { proxyRequest } from "@/lib/proxy";
+import { forwardJson } from "@/app/api/_shared/proxy";
 
-export async function POST(request: NextRequest) {
-  return proxyRequest(request, "/auth/login");
+export async function POST(request: Request): Promise<Response> {
+  return forwardJson(request, "/auth/login", { method: "POST", includeBody: true });
 }

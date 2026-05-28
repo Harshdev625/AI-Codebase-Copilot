@@ -1,23 +1,46 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import AdminPage from "@/app/admin/page";
+import { adminService } from "@/features/admin/services/admin-service";
 
+import { renderWithProviders } from "../test-utils";
 const mockReplace = jest.fn();
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
 }));
 
+jest.mock("@/features/admin/services/admin-service", () => ({
+  adminService: {
+    metrics: jest.fn(),
+    health: jest.fn(),
+    users: jest.fn(),
+    repositories: jest.fn(),
+    indexingStatus: jest.fn(),
+    updateUserRole: jest.fn(),
+    updateUserStatus: jest.fn(),
+    deleteUser: jest.fn(),
+  }
+}));
+
+const mockedAdmin = adminService as jest.Mocked<typeof adminService>;
+
 describe("AdminPage", () => {
   beforeEach(() => {
-    jest.restoreAllMocks();
+    jest.clearAllMocks();
     mockReplace.mockReset();
     window.localStorage.clear();
     (global as { confirm: (message: string) => boolean }).confirm = jest.fn(() => true);
+    
+    mockedAdmin.metrics.mockResolvedValue({ users_count: 2, projects_count: 1, repositories_count: 0, indexed_chunks_count: 0 });
+    mockedAdmin.users.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
+    mockedAdmin.health.mockResolvedValue([]);
+    mockedAdmin.repositories.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
+    mockedAdmin.indexingStatus.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
   });
 
   it("redirects to login when session is missing", async () => {
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
 
     await waitFor(() => {
       expect(mockReplace).toHaveBeenCalledWith("/login");
@@ -31,7 +54,7 @@ describe("AdminPage", () => {
       JSON.stringify({ id: "u1", email: "dev@example.com", role: "USER", is_active: true })
     );
 
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
 
     await waitFor(() => {
       expect(mockReplace).toHaveBeenCalledWith("/dashboard");
@@ -78,7 +101,7 @@ describe("AdminPage", () => {
         })
       );
 
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
 
     expect(await screen.findByText("Admin Control Panel")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /users/i }));
@@ -132,7 +155,7 @@ describe("AdminPage", () => {
         new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       );
 
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
 
     fireEvent.click(await screen.findByRole("button", { name: /users/i }));
 
@@ -159,7 +182,7 @@ describe("AdminPage", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
 
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
 
     expect(await screen.findByText("Forbidden")).toBeInTheDocument();
   });
@@ -206,7 +229,7 @@ describe("AdminPage", () => {
         new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
       );
 
-    render(<AdminPage />);
+    renderWithProviders(<AdminPage />);
     fireEvent.click(await screen.findByRole("button", { name: /users/i }));
 
     const deleteButton = (await screen.findAllByTitle("Delete user"))[0];

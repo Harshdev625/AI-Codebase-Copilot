@@ -1,15 +1,18 @@
-"use client";
+﻿import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+export default async function HomePage(): Promise<never> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("tm_token")?.value;
+  const role = String(cookieStore.get("tm_role")?.value ?? "").toUpperCase();
 
-export default function HomePage() {
-  const router = useRouter();
+  if (!token) {
+    redirect("/login");
+  }
 
-  useEffect(() => {
-    const token = localStorage.getItem("aicc_token");
-    router.replace(token ? "/dashboard" : "/login");
-  }, [router]);
+  if (role === "ADMIN") {
+    redirect("/admin/dashboard");
+  }
 
-  return null;
+  redirect("/dashboard");
 }
