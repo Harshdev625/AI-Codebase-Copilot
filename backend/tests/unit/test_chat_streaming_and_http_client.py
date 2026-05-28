@@ -75,7 +75,7 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
         def __init__(self, session):
             self.session = session
 
-        def prepare_generation(self, repository_id: str, repo_id: str, query: str):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False):
             _ = repository_id
             return (
                 {
@@ -88,7 +88,10 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
                 True,
             )
 
-        def finalize_result(self, *_args, **_kwargs):
+        async def _ensure_session(self, session_id, user_id, repository_id):
+            return session_id or "new-session"
+
+        async def finalize_result(self, *_args, **_kwargs):
             raise AssertionError("should not finalize cached results")
 
         @property
@@ -120,7 +123,7 @@ def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.Monkey
             self.session = session
             self._router = FakeModelRouter()
 
-        def prepare_generation(self, repository_id: str, repo_id: str, query: str):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False):
             _ = repository_id
             return (
                 {
@@ -132,7 +135,10 @@ def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.Monkey
                 False,
             )
 
-        def finalize_result(self, *_args, **_kwargs):
+        async def _ensure_session(self, session_id, user_id, repository_id):
+            return session_id or "new-session"
+
+        async def finalize_result(self, *_args, **_kwargs):
             finalized["called"] += 1
             return {}
 
@@ -161,7 +167,7 @@ def test_chat_stream_llm_failure_emits_error_event(monkeypatch: pytest.MonkeyPat
             self.session = session
             self._router = FakeModelRouter()
 
-        def prepare_generation(self, *_args, **_kwargs):
+        async def prepare_generation(self, *_args, **_kwargs):
             return (
                 {"intent": "explain", "retrieved_context": []},
                 "context",
@@ -169,7 +175,10 @@ def test_chat_stream_llm_failure_emits_error_event(monkeypatch: pytest.MonkeyPat
                 False,
             )
 
-        def finalize_result(self, *_args, **_kwargs):
+        async def _ensure_session(self, session_id, user_id, repository_id):
+            return session_id or "new-session"
+
+        async def finalize_result(self, *_args, **_kwargs):
             raise AssertionError("should not finalize when LLM fails")
 
         @property
@@ -192,8 +201,8 @@ def test_chat_no_indexed_context_maps_to_409(monkeypatch: pytest.MonkeyPatch) ->
         def __init__(self, session):
             self.session = session
 
-        def run(self, *_args, **_kwargs):
-            raise chat_module.NoIndexedContextError("index first")
+        async def run(self, *_args, **_kwargs):
+            raise chat_module.NoContextError("index first")
 
     monkeypatch.setattr(main_module, "ensure_app_schema", lambda: None)
     app = main_module.create_app()
@@ -212,4 +221,4 @@ def test_chat_no_indexed_context_maps_to_409(monkeypatch: pytest.MonkeyPatch) ->
     assert resp.status_code == 409
     body = resp.json()
     assert body["success"] is False
-    assert "index" in body["error"].lower()
+    assert "index" in body["error"]["message"].lower()

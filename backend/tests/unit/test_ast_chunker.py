@@ -1,8 +1,6 @@
 """Unit tests for the AST-based Python chunker."""
 from pathlib import Path
 
-import pytest
-
 from app.rag.chunking.ast_chunker import chunk_python_file
 
 
