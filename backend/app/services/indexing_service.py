@@ -21,6 +21,7 @@ from pathspec.patterns import GitWildMatchPattern
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.db.utils import is_sqlite_session, get_jsonb_cast_sql
 from app.core.config import settings
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
@@ -663,13 +664,15 @@ class IndexingService:
                 stats_payload.update(extra_stats)
             except Exception:
                 pass
+        is_sqlite = is_sqlite_session(self.session)
+        stats_sql = get_jsonb_cast_sql("stats", is_sqlite)
         try:
             self.session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE indexing_jobs
                     SET message = :message,
-                        stats = CAST(:stats AS jsonb),
+                        stats = {stats_sql},
                         updated_at = NOW(),
                         status = CASE WHEN status = 'pending' THEN 'running' ELSE status END
                     WHERE id = :id
@@ -1033,14 +1036,17 @@ class IndexingService:
             else None
         )
 
+        is_sqlite = is_sqlite_session(self.session)
+        metadata_sql = get_jsonb_cast_sql("metadata", is_sqlite)
+
         stmt_without_embedding = text(
-            """
+            f"""
             INSERT INTO code_chunks (
                             id, repo_id, repository_id, commit_sha, path, language, symbol,
               chunk_type, start_line, end_line, content, metadata, embedding
             ) VALUES (
                             :id, :repo_id, :repository_id, :commit_sha, :path, :language, :symbol,
-              :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
+              :chunk_type, :start_line, :end_line, :content, {metadata_sql},
               NULL
             )
             ON CONFLICT (id) DO UPDATE SET
@@ -1051,13 +1057,13 @@ class IndexingService:
         )
 
         stmt_with_embedding = text(
-            """
+            f"""
             INSERT INTO code_chunks (
                             id, repo_id, repository_id, commit_sha, path, language, symbol,
               chunk_type, start_line, end_line, content, metadata, embedding
             ) VALUES (
                             :id, :repo_id, :repository_id, :commit_sha, :path, :language, :symbol,
-              :chunk_type, :start_line, :end_line, :content, CAST(:metadata AS jsonb),
+              :chunk_type, :start_line, :end_line, :content, {metadata_sql},
               CAST(:embedding AS vector)
             )
             ON CONFLICT (id) DO UPDATE SET

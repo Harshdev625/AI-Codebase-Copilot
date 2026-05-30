@@ -19,8 +19,8 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Force SQLite BEFORE importing anything from `app`
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# Force file-based SQLite for stable fixture isolation
+os.environ.setdefault("DATABASE_URL", "sqlite:///test.db")
 os.environ.setdefault("QDRANT_HOST", "localhost")
 os.environ.setdefault("QDRANT_PORT", "6333")
 os.environ.setdefault("REDIS_HOST", "localhost")
@@ -36,7 +36,7 @@ from app.core.security import create_access_token
 # ---------------------------------------------------------------------------
 
 _test_engine = create_engine(
-    "sqlite:///:memory:",
+    "sqlite:///test.db",
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
     future=True,
@@ -63,9 +63,18 @@ _TestSessionLocal = sessionmaker(
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def reset_circuit_breakers():
+    """Reset all circuit breakers before each test to prevent state leakage."""
+    from app.core.resilience import _circuit_breakers
+    for cb in _circuit_breakers.values():
+        cb.reset()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _create_tables():
     """Create all tables once for the entire test session."""
+    Base.metadata.drop_all(bind=_test_engine)
     Base.metadata.create_all(bind=_test_engine)
     yield
     Base.metadata.drop_all(bind=_test_engine)
@@ -76,7 +85,7 @@ def db_session():
     """Yield an isolated DB session. Rolls back after each test."""
     connection = _test_engine.connect()
     transaction = connection.begin()
-    session = _TestSessionLocal(bind=connection)
+    session = _TestSessionLocal(bind=connection, join_transaction_mode="create_savepoint")
     try:
         yield session
     finally:
@@ -104,14 +113,13 @@ def client(db_session):
 def test_user(db_session):
     """Create a test user in the DB and return user dict + token."""
     from app.db.models import User
-    from passlib.context import CryptContext
+    from app.core.security import hash_password
 
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     user_id = str(uuid.uuid4())
     user = User(
         id=user_id,
         email=f"test+{uuid.uuid4().hex[:8]}@example.com",
-        password_hash=pwd_context.hash("password123"),
+        password_hash=hash_password("password123"),
         full_name="Test User",
         role="USER",
         is_active=True,
@@ -120,7 +128,8 @@ def test_user(db_session):
     db_session.flush()
 
     token = create_access_token(
-        data={"sub": user_id, "scopes": ["repository:read", "repository:write", "indexing:write", "chat:query"]},
+        subject=user_id,
+        claims={"scopes": ["repository:read", "repository:write", "indexing:write", "chat:query"]},
     )
     return {
         "id": user_id,
@@ -140,14 +149,13 @@ def auth_headers(test_user):
 def admin_user(db_session):
     """Create an admin test user."""
     from app.db.models import User
-    from passlib.context import CryptContext
+    from app.core.security import hash_password
 
-    pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
     user_id = str(uuid.uuid4())
     user = User(
         id=user_id,
         email=f"admin+{uuid.uuid4().hex[:8]}@example.com",
-        password_hash=pwd_context.hash("adminpass123"),
+        password_hash=hash_password("adminpass123"),
         full_name="Admin User",
         role="ADMIN",
         is_active=True,
@@ -156,7 +164,8 @@ def admin_user(db_session):
     db_session.flush()
 
     token = create_access_token(
-        data={"sub": user_id, "scopes": ["*"]},
+        subject=user_id,
+        claims={"scopes": ["*"]},
     )
     return {
         "id": user_id,

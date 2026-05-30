@@ -154,7 +154,7 @@ def update_user_role(
 
     # Update role
     session.execute(
-        text("UPDATE users SET role = :role, updated_at = NOW() WHERE id = :user_id"),
+        text("UPDATE users SET role = :role, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"),
         {"role": normalized_role, "user_id": user_id},
     )
     session.commit()
@@ -190,7 +190,7 @@ def update_user_status(
 
     # Update status
     session.execute(
-        text("UPDATE users SET is_active = :is_active, updated_at = NOW() WHERE id = :user_id"),
+        text("UPDATE users SET is_active = :is_active, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"),
         {"is_active": request.is_active, "user_id": user_id},
     )
     session.commit()

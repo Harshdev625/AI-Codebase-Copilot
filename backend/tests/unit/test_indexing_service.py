@@ -25,7 +25,7 @@ def mock_embedding_provider():
 def indexing_service(mock_qdrant, mock_embedding_provider):
     with patch("app.services.indexing_service.QdrantService", return_value=mock_qdrant):
         with patch("app.services.indexing_service.get_embedding_provider", return_value=mock_embedding_provider):
-            session = AsyncMock()
+            session = MagicMock()
             return IndexingService(session=session)
 
 

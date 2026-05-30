@@ -20,9 +20,7 @@ import type { ChatMessage } from "@/features/chat/types/chat-types";
 import { cn } from "@/lib/utils";
 
 interface ChatWorkspaceProps {
-  projectId?: string;
   repositoryId?: string;
-  mode: "project" | "repository";
 }
 
 function toSourceLabels(message: ChatMessage): string[] {
@@ -118,7 +116,7 @@ const ChatBubble = React.memo(({ message }: { message: ChatMessage }) => {
 });
 ChatBubble.displayName = "ChatBubble";
 
-export function ChatWorkspace({ repositoryId, mode }: ChatWorkspaceProps) {
+export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
   const toast = useToast();
   const [query, setQuery] = React.useState("");
   const virtuosoRef = React.useRef<any>(null);
@@ -133,7 +131,7 @@ export function ChatWorkspace({ repositoryId, mode }: ChatWorkspaceProps) {
     clearMessages,
     currentSessionId,
     selectSession,
-  } = useChat({ repositoryId, mode });
+  } = useChat({ repositoryId });
 
   const sessionsQuery = useChatSessions(40, 0);
   const deleteMutation = useDeleteSessionMutation();
@@ -143,7 +141,7 @@ export function ChatWorkspace({ repositoryId, mode }: ChatWorkspaceProps) {
 
 
 
-  const canSend = mode === "repository" && Boolean(repositoryId) && query.trim().length > 0 && !isSending;
+  const canSend = Boolean(repositoryId) && query.trim().length > 0 && !isSending;
 
   const handleSend = async () => {
     if (!canSend) return;
@@ -172,7 +170,7 @@ export function ChatWorkspace({ repositoryId, mode }: ChatWorkspaceProps) {
     }
   };
 
-  const showDisabledBanner = mode !== "repository" || !repositoryId;
+  const showDisabledBanner = !repositoryId;
 
   return (
     <div className="grid h-full w-full grid-cols-1 gap-0 lg:grid-cols-[280px_1fr]">
