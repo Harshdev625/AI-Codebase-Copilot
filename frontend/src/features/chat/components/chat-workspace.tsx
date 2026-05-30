@@ -17,6 +17,7 @@ import {
   useDeleteSessionMutation,
 } from "@/features/chat/hooks/use-chat";
 import type { ChatMessage } from "@/features/chat/types/chat-types";
+import { ChatMessageItemBubble } from "./chat-message-item-bubble";
 import { cn } from "@/lib/utils";
 
 interface ChatWorkspaceProps {
@@ -46,75 +47,7 @@ function toSourceLabels(message: ChatMessage): string[] {
     .filter((label): label is string => Boolean(label));
 }
 
-// Memoized message component for performance
-const ChatBubble = React.memo(({ message }: { message: ChatMessage }) => {
-  const isUser = message.role === "user";
-  const sourceLabels = React.useMemo(() => toSourceLabels(message), [message]);
 
-  return (
-    <div className={cn("flex w-full mb-4 px-4", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[88%] rounded-2xl px-5 py-4 shadow-sm",
-          isUser
-            ? "bg-primary text-primary-foreground ml-auto"
-            : "border border-border/60 bg-card/80 text-foreground"
-        )}
-      >
-        {isUser ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
-        ) : (
-          <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-foreground prose-a:text-primary dark:prose-invert">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ node, inline, className, children, ...props }: any) {
-                  const match = /language-(\w+)/.exec(className || "");
-                  return !inline && match ? (
-                    <div className="overflow-hidden rounded-lg my-4 border border-border/40 shadow-sm">
-                      <div className="bg-muted/50 px-4 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center justify-between">
-                        <span>{match[1]}</span>
-                      </div>
-                      <SyntaxHighlighter
-                        {...props}
-                        style={vscDarkPlus}
-                        language={match[1]}
-                        PreTag="div"
-                        customStyle={{ margin: 0, borderRadius: 0, padding: '1rem', fontSize: '0.85rem' }}
-                      >
-                        {String(children).replace(/\n$/, "")}
-                      </SyntaxHighlighter>
-                    </div>
-                  ) : (
-                    <code {...props} className={cn("bg-muted px-1.5 py-0.5 rounded-md text-[0.85em] font-mono", className)}>
-                      {children}
-                    </code>
-                  );
-                },
-              }}
-            >
-              {message.content || "..."}
-            </ReactMarkdown>
-          </div>
-        )}
-
-        {!isUser && sourceLabels.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2 pt-3 border-t border-border/40">
-            {sourceLabels.slice(0, 8).map((label) => (
-              <span
-                key={`${message.id}-${label}`}
-                className="rounded-md border border-border/60 bg-background/50 px-2 py-1 text-[10px] text-muted-foreground font-mono"
-              >
-                {label}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
-ChatBubble.displayName = "ChatBubble";
 
 export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
   const toast = useToast();
@@ -270,7 +203,7 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
              <Virtuoso
                 ref={virtuosoRef}
                 data={messages}
-                itemContent={(_, message) => <ChatBubble key={message.id} message={message} />}
+                itemContent={(_, message) => <ChatMessageItemBubble key={message.id} message={message} />}
                 className="h-full w-full custom-scrollbar"
                 alignToBottom
                 followOutput="smooth"
