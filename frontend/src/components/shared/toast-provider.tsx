@@ -47,14 +47,31 @@ function iconForVariant(variant: ToastVariant): React.JSX.Element {
 export function ToastProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
   const [toasts, setToasts] = React.useState<ToastItem[]>([]);
 
+  const timersRef = React.useRef<Record<string, number>>({});
+
+  React.useEffect(() => {
+    return () => {
+      // Clear all timers on unmount to prevent open handles in tests and memory leaks
+      const timers = timersRef.current;
+      Object.values(timers).forEach(window.clearTimeout);
+    };
+  }, []);
+
   const removeToast = React.useCallback((id: string): void => {
+    if (timersRef.current[id]) {
+      window.clearTimeout(timersRef.current[id]);
+      delete timersRef.current[id];
+    }
     setToasts((previous) => previous.filter((toast) => toast.id !== id));
   }, []);
 
   const showToast = React.useCallback((toast: Omit<ToastItem, "id">): void => {
     const id = makeToastId();
     setToasts((previous) => [...previous, { ...toast, id }]);
-    window.setTimeout(() => removeToast(id), 4200);
+    
+    timersRef.current[id] = window.setTimeout(() => {
+      removeToast(id);
+    }, 4200);
   }, [removeToast]);
 
   const value = React.useMemo<ToastContextValue>(() => ({

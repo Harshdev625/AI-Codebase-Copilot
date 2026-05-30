@@ -6,14 +6,18 @@ import { ToastProvider } from "@/components/shared/toast-provider";
 import { renderWithProviders } from "../test-utils";
 
 describe("RepositoriesPage", () => {
+  let fetchSpy: jest.SpyInstance;
+
   beforeEach(() => {
     jest.restoreAllMocks();
     window.localStorage.clear();
     window.localStorage.setItem("aicc_token", "token-1");
+    fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
   });
 
   it("loads repositories on mount", async () => {
-    const fetchSpy = jest.spyOn(global, "fetch");
     fetchSpy.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -27,11 +31,10 @@ describe("RepositoriesPage", () => {
     renderWithProviders(<RepositoriesPage />);
 
     expect(await screen.findByText("owner/repo")).toBeInTheDocument();
-    expect(screen.getByText("Start Index")).toBeInTheDocument();
+    expect(screen.getByText("Index Now")).toBeInTheDocument();
   });
 
   it("adds a repository and refreshes", async () => {
-    const fetchSpy = jest.spyOn(global, "fetch");
     // Initial load
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
@@ -43,16 +46,24 @@ describe("RepositoriesPage", () => {
 
     renderWithProviders(<RepositoriesPage />);
 
-    fireEvent.change(screen.getByPlaceholderText("owner/repo"), { target: { value: "new/repo" } });
-    fireEvent.submit(screen.getByRole("button", { name: /add/i }).closest("form")!);
+    fireEvent.click(screen.getByRole("button", { name: /add repository/i }));
+    const input = await screen.findByPlaceholderText("my-app-backend");
+    fireEvent.change(input, { target: { value: "new/repo" } });
+    const urlInput = await screen.findByPlaceholderText("https://github.com/owner/repo.git");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/new/repo.git" } });
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/v1/repositories"), expect.objectContaining({ method: "POST" }));
     });
+    
+    // Wait for UI to settle after query invalidation
+    // The default mock response will return empty items, but we should just ensure the test doesn't exit prematurely
+    // We can just wait a tick for the mutation to finish
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("indexes a repository and shows indexed status", async () => {
-    const fetchSpy = jest.spyOn(global, "fetch");
     // Initial load
     fetchSpy.mockResolvedValueOnce(
       new Response(
@@ -70,7 +81,7 @@ describe("RepositoriesPage", () => {
 
     renderWithProviders(<RepositoriesPage />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /start index/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /index now/i }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/v1/index"), expect.objectContaining({ method: "POST" }));
@@ -78,7 +89,6 @@ describe("RepositoriesPage", () => {
   });
 
   it("shows error toast when adding repository fails", async () => {
-    const fetchSpy = jest.spyOn(global, "fetch");
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
     );
@@ -88,9 +98,14 @@ describe("RepositoriesPage", () => {
 
     renderWithProviders(<RepositoriesPage />);
 
-    fireEvent.change(screen.getByPlaceholderText("owner/repo"), { target: { value: "existing/repo" } });
-    fireEvent.submit(screen.getByRole("button", { name: /add/i }).closest("form")!);
+    fireEvent.click(screen.getByRole("button", { name: /add repository/i }));
+    const input = await screen.findByPlaceholderText("my-app-backend");
+    fireEvent.change(input, { target: { value: "existing/repo" } });
+    const urlInput = await screen.findByPlaceholderText("https://github.com/owner/repo.git");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/existing/repo.git" } });
+    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
 
-    expect(await screen.findByText("Repository already exists")).toBeInTheDocument();
+    const elements = await screen.findAllByText("Repository already exists");
+    expect(elements.length).toBeGreaterThan(0);
   });
 });

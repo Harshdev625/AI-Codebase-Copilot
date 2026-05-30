@@ -107,17 +107,6 @@ const STAT_CONFIG = [
     iconClass: 'text-ai',
     metricKey: 'chat_count',
   },
-  {
-    label: 'Active Projects',
-    suffix: 'groups',
-    icon: (className: string) => <Activity className={className} />,
-    gradient: 'from-warning/30 to-warning/10',
-    glow: 'via-warning/70',
-    glowSoft: 'from-warning/15',
-    glowOrb: 'bg-warning/20',
-    iconClass: 'text-warning',
-    metricKey: 'projects_count',
-  },
 ] as const;
 
 export function DashboardStatsGrid() {

@@ -4,26 +4,6 @@ import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/core/api/errors';
 import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
 
-export function useProjects() {
-  return {
-    projects: [],
-    isLoading: false,
-    refetch: async () => undefined,
-  };
-}
-
-export function useCreateProject() {
-  const toast = useToast();
-
-  return useMutation({
-    mutationFn: async () => {
-      throw new Error('Projects are disabled in the simplified schema.');
-    },
-    onError: (error) => {
-      toast.error('Action Disabled', toApiError(error));
-    },
-  });
-}
 
 export function useRepositories(limit = 100, offset = 0) {
   const query = useQuery({
