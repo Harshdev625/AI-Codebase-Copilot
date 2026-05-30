@@ -58,7 +58,7 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
     );
   }
 
-  if (normalized === 'in_progress') {
+  if (normalized === 'in_progress' || normalized === 'pending' || normalized === 'running') {
     return (
       <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
         <Clock className="h-3 w-3 animate-spin" />
