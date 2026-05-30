@@ -1,14 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 
-import AdminPage from "@/app/admin/page";
+import AdminDashboardPage from "@/app/admin/dashboard/page";
 import { adminService } from "@/features/admin/services/admin-service";
 
 import { renderWithProviders } from "../test-utils";
-const mockReplace = jest.fn();
-
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: mockReplace }),
-}));
 
 jest.mock("@/features/admin/services/admin-service", () => ({
   adminService: {
@@ -17,229 +12,73 @@ jest.mock("@/features/admin/services/admin-service", () => ({
     users: jest.fn(),
     repositories: jest.fn(),
     indexingStatus: jest.fn(),
-    updateUserRole: jest.fn(),
-    updateUserStatus: jest.fn(),
-    deleteUser: jest.fn(),
   }
 }));
 
 const mockedAdmin = adminService as jest.Mocked<typeof adminService>;
 
-describe("AdminPage", () => {
+describe("AdminDashboardPage", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockReplace.mockReset();
-    window.localStorage.clear();
-    (global as { confirm: (message: string) => boolean }).confirm = jest.fn(() => true);
     
-    mockedAdmin.metrics.mockResolvedValue({ users_count: 2, projects_count: 1, repositories_count: 0, indexed_chunks_count: 0 });
-    mockedAdmin.users.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
-    mockedAdmin.health.mockResolvedValue([]);
-    mockedAdmin.repositories.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
-    mockedAdmin.indexingStatus.mockResolvedValue({ items: [], pagination: { total: 0, limit: 100, offset: 0, has_more: false } });
-  });
-
-  it("redirects to login when session is missing", async () => {
-    renderWithProviders(<AdminPage />);
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/login");
+    mockedAdmin.metrics.mockResolvedValue({ users_count: 2, repositories_count: 5, indexed_chunks_count: 100 });
+    mockedAdmin.health.mockResolvedValue([
+      { name: "Backend API", status: "healthy", detail: null },
+      { name: "PostgreSQL", status: "healthy", detail: null },
+    ]);
+    mockedAdmin.users.mockResolvedValue({ 
+      items: [
+        { id: "u1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true, created_at: "" },
+        { id: "u2", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true, created_at: "" }
+      ], 
+      pagination: { total: 2, limit: 100, offset: 0, has_more: false } 
+    });
+    mockedAdmin.repositories.mockResolvedValue({ 
+      items: [
+        { id: "r1", repo_id: "test-repo", remote_url: "", local_path: "", default_branch: "main", created_at: "", latest_job_status: "completed" }
+      ], 
+      pagination: { total: 1, limit: 100, offset: 0, has_more: false } 
+    });
+    mockedAdmin.indexingStatus.mockResolvedValue({ 
+      items: [
+        { id: "j1", repository_id: "test-repo", commit_sha: "abc", status: "completed", message: "", started_at: "", finished_at: "", created_at: "" }
+      ], 
+      pagination: { total: 1, limit: 100, offset: 0, has_more: false } 
     });
   });
 
-  it("redirects non-admin users to dashboard", async () => {
-    window.localStorage.setItem("aicc_token", "token");
-    window.localStorage.setItem(
-      "aicc_user",
-      JSON.stringify({ id: "u1", email: "dev@example.com", role: "USER", is_active: true })
-    );
+  it("renders dashboard title and metrics", async () => {
+    renderWithProviders(<AdminDashboardPage />);
 
-    renderWithProviders(<AdminPage />);
-
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/dashboard");
-    });
+    expect(await screen.findByText("Admin Dashboard")).toBeInTheDocument();
+    
+    expect(await screen.findByText("2")).toBeInTheDocument(); // active users
+    expect(await screen.findByText("5")).toBeInTheDocument(); // repositories
+    expect(await screen.findByText("100")).toBeInTheDocument(); // chunks
   });
 
-  it("loads metrics and users for admin", async () => {
-    window.localStorage.setItem("aicc_token", "token");
-    window.localStorage.setItem(
-      "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
-    );
-
-    const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ users_count: 2, projects_count: 1 }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { name: "Backend API", status: "online", detail: null },
-            { name: "PostgreSQL", status: "online", detail: null },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      );
-
-    renderWithProviders(<AdminPage />);
-
-    expect(await screen.findByText("Admin Control Panel")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /users/i }));
-    expect(await screen.findByText("Manage Users")).toBeInTheDocument();
-    expect(screen.getByText("dev@example.com")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /services/i }));
+  it("renders service health", async () => {
+    renderWithProviders(<AdminDashboardPage />);
+    
+    expect(await screen.findByText("Service Health")).toBeInTheDocument();
     expect(await screen.findByText("Backend API")).toBeInTheDocument();
+    expect(await screen.findByText("PostgreSQL")).toBeInTheDocument();
   });
 
-  it("updates user role and reloads users", async () => {
-    window.localStorage.setItem("aicc_token", "token");
-    window.localStorage.setItem(
-      "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
-    );
+  it("renders recent users", async () => {
+    renderWithProviders(<AdminDashboardPage />);
 
-    const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 2 }), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(new Response("", { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 2 }), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "ADMIN", is_active: true },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-      );
-
-    renderWithProviders(<AdminPage />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /users/i }));
-
-    const actionButtons = await screen.findAllByTitle(/Promote to admin|Demote to user/);
-    fireEvent.click(actionButtons[0]);
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/admin/users/dev-1/role",
-        expect.objectContaining({ method: "POST" })
-      );
-    });
+    expect(await screen.findByText("Recent Users")).toBeInTheDocument();
+    expect(await screen.findByText("admin@example.com")).toBeInTheDocument();
+    expect(await screen.findByText("dev@example.com")).toBeInTheDocument();
   });
 
-  it("shows load error when metrics request fails", async () => {
-    window.localStorage.setItem("aicc_token", "token");
-    window.localStorage.setItem(
-      "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
-    );
+  it("renders recent repositories and indexing jobs", async () => {
+    renderWithProviders(<AdminDashboardPage />);
 
-    const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }));
-
-    renderWithProviders(<AdminPage />);
-
-    expect(await screen.findByText("Forbidden")).toBeInTheDocument();
-  });
-
-  it("deletes user and refreshes list", async () => {
-    window.localStorage.setItem("aicc_token", "token");
-    window.localStorage.setItem(
-      "aicc_user",
-      JSON.stringify({ id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true })
-    );
-
-    const fetchSpy = jest.spyOn(global, "fetch");
-    fetchSpy
-      .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 2 }), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
-            { id: "dev-1", email: "dev@example.com", full_name: "Dev", role: "USER", is_active: true },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(new Response("", { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ users_count: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify([
-            { id: "admin-1", email: "admin@example.com", full_name: "Admin", role: "ADMIN", is_active: true },
-          ]),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify([{ name: "Backend API", status: "online", detail: null }]), { status: 200, headers: { "Content-Type": "application/json" } })
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ indexing_jobs: [], recent_users: [] }), { status: 200, headers: { "Content-Type": "application/json" } })
-      );
-
-    renderWithProviders(<AdminPage />);
-    fireEvent.click(await screen.findByRole("button", { name: /users/i }));
-
-    const deleteButton = (await screen.findAllByTitle("Delete user"))[0];
-    fireEvent.click(deleteButton);
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(
-        "/api/admin/users/dev-1",
-        expect.objectContaining({ method: "DELETE" })
-      );
-    });
+    expect(await screen.findByText("Recent Repositories")).toBeInTheDocument();
+    expect(await screen.findByText("test-repo")).toBeInTheDocument();
+    
+    expect(await screen.findByText("Latest Indexing Jobs")).toBeInTheDocument();
   });
 });

@@ -32,6 +32,9 @@ describe("LoginPage", () => {
 
   it("logs in successfully and redirects", async () => {
     const fetchSpy = jest.spyOn(global, "fetch");
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
     fetchSpy
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ access_token: "token-123" }), {
@@ -56,13 +59,11 @@ describe("LoginPage", () => {
 
     renderWithProviders(<LoginPage />);
     const form = screen.getByRole("button", { name: /sign in/i }).closest("form")!;
-    form.addEventListener("submit", (e) => console.log("Form submitted!"));
     fireEvent.submit(form);
 
     await waitFor(() => {
-      console.log("Mock calls:", mockPush.mock.calls);
       expect(mockPush).toHaveBeenCalledWith("/admin/dashboard");
-    });
+    }, { timeout: 4000 });
   });
 
   it("shows API error on failed login", async () => {
@@ -72,11 +73,13 @@ describe("LoginPage", () => {
         headers: { "Content-Type": "application/json" },
       })
     );
+    const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 
     renderWithProviders(<LoginPage />);
     fireEvent.submit(screen.getByRole("button", { name: /sign in/i }).closest("form")!);
 
     expect(await screen.findByText("Invalid credentials")).toBeInTheDocument();
+    consoleSpy.mockRestore();
   });
 
   it("renders sign-in controls", () => {

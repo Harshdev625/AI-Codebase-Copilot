@@ -11,9 +11,21 @@ const customJestConfig = {
     "src/app/api/**/*.{ts,tsx}",
     "src/components/**/*.{ts,tsx}",
     "src/lib/**/*.{ts,tsx}",
+    "src/features/**/*.{ts,tsx}",
+    "src/store/**/*.{ts,tsx}",
+    "src/core/**/*.{ts,tsx}",
     "!**/*.d.ts",
-    "!**/src/app/layout.tsx"
+    "!**/src/app/layout.tsx",
+    "!src/components/ui/**/*.{ts,tsx}"
   ],
+  coverageThreshold: {
+    global: {
+      branches: 55,
+      functions: 72,
+      lines: 73,
+      statements: 72
+    }
+  },
   moduleNameMapper: {
     "^@/app/page$": "<rootDir>/src/app/page.tsx",
     "^@/app/chat/page$": "<rootDir>/src/app/(user)/chat/page.tsx",
@@ -31,6 +43,10 @@ const customJestConfig = {
     "^\\.\\.\\/\\.\\.\\/src\\/app\\/admin\\/page$": "<rootDir>/src/app/admin/page.tsx",
     "^@/components/sidebar$": "<rootDir>/src/components/layout/sidebar.tsx",
     "^@/components/chat-shell$": "<rootDir>/src/features/chat/components/chat-workspace.tsx",
+    "^react-syntax-highlighter(.*)$": "<rootDir>/tests/__mocks__/react-syntax-highlighter.tsx",
+    "^react-markdown$": "<rootDir>/tests/__mocks__/react-markdown.tsx",
+    "^remark-gfm$": "<rootDir>/tests/__mocks__/remark-gfm.ts",
+    "^uuid$": require.resolve("uuid"),
     "^@/(.*)$": "<rootDir>/src/$1"
   },
   testMatch: ["**/*.test.ts", "**/*.test.tsx"]

@@ -30,7 +30,24 @@ jest.mock("next/navigation", () => ({
   usePathname: () => "/",
   useSearchParams: () => new URLSearchParams(),
   useParams: () => ({}),
+  redirect: jest.fn(),
 }));
+
+// ---------------------------------------------------------------------------
+// Mock react-markdown
+// ---------------------------------------------------------------------------
+jest.mock("react-markdown", () => {
+  return function MockReactMarkdown({ children }: any) {
+    return require("react").createElement("div", { "data-testid": "mock-markdown" }, children);
+  };
+});
+jest.mock("remark-gfm", () => () => {});
+jest.mock("react-syntax-highlighter", () => {
+  return {
+    Prism: ({ children }: any) => require("react").createElement("div", null, children),
+    SyntaxHighlighter: ({ children }: any) => require("react").createElement("div", null, children),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock framer-motion to avoid animation issues in JSDOM

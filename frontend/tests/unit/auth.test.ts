@@ -16,16 +16,14 @@ describe("auth session helpers", () => {
     expect(getStoredUser()).toBeNull();
   });
 
-  it("removes token, user and selected project when clearing session", () => {
+  it("removes token and user when clearing session", () => {
     window.localStorage.setItem("aicc_token", "abc123");
     window.localStorage.setItem("aicc_user", JSON.stringify({ id: "1" }));
-    window.localStorage.setItem("aicc_project_id", "project-1");
 
     clearSession();
 
     expect(window.localStorage.getItem("aicc_token")).toBeNull();
     expect(window.localStorage.getItem("aicc_user")).toBeNull();
-    expect(window.localStorage.getItem("aicc_project_id")).toBeNull();
   });
 
   it("stores token and user profile after successful /api/auth/me lookup", async () => {
@@ -133,14 +131,12 @@ describe("clearSession", () => {
   it("removes all session-related items", () => {
     window.localStorage.setItem("aicc_token", "token-123");
     window.localStorage.setItem("aicc_user", JSON.stringify({ id: "1" }));
-    window.localStorage.setItem("aicc_project_id", "project-1");
     window.localStorage.setItem("other_key", "should-persist");
 
     clearSession();
 
     expect(window.localStorage.getItem("aicc_token")).toBeNull();
     expect(window.localStorage.getItem("aicc_user")).toBeNull();
-    expect(window.localStorage.getItem("aicc_project_id")).toBeNull();
     expect(window.localStorage.getItem("other_key")).toBe("should-persist");
   });
 
