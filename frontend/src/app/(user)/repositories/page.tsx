@@ -118,16 +118,16 @@ function RepositoryCard({ repository, onRefresh }: { repository: Repository; onR
   const isReady = status === 'completed';
 
   const progress = localProgress || (isIndexing ? {
-    percentage: repository.latest_job_stats?.percentage || repository.latest_index_stats?.percentage || 0,
+    percentage: Number(repository.latest_job_stats?.percentage) || Number(repository.latest_index_stats?.percentage) || 0,
     status: status,
     message: 'Indexing in progress...',
     indexingJobId: '',
     stats: repository.latest_job_stats || repository.latest_index_stats,
   } : null);
 
-  let displayPercentage = progress?.percentage || 0;
-  if (progress?.stats?.current_stage === 'storage' && progress.stats?.total_chunks > 0) {
-    displayPercentage = (progress.stats.stored_chunks / progress.stats.total_chunks) * 100;
+  let displayPercentage = Number(progress?.percentage) || 0;
+  if (progress?.stats?.current_stage === 'storage' && Number(progress.stats?.total_chunks) > 0) {
+    displayPercentage = (Number(progress.stats.stored_chunks) / Number(progress.stats.total_chunks)) * 100;
   }
 
   React.useEffect(() => {
