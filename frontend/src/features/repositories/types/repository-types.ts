@@ -17,9 +17,6 @@ export type RepositoryRecord = {
 };
 
 export type Repository = RepositoryRecord;
-export type Project = never;
-export type ProjectRecord = never;
-export type CreateProjectPayload = never;
 
 export type AddRepositoryPayload = {
   repo_id: string;

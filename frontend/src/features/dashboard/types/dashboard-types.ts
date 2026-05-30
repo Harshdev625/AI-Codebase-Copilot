@@ -1,5 +1,5 @@
-﻿export type DashboardMetrics = {
-  projects_count?: number;
+export type DashboardMetrics = {
+
   repositories_count?: number;
   chat_count?: number;
   indexed_chunks_count?: number;

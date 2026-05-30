@@ -36,7 +36,7 @@ import { ToastProvider } from "@/components/shared/toast-provider";
  * Wrapper that provides all required context providers for tests.
  */
 function TestProviders({ children }: { children: ReactNode }) {
-  const queryClient = createTestQueryClient();
+  const [queryClient] = React.useState(() => createTestQueryClient());
   return React.createElement(
     QueryClientProvider,
     { client: queryClient },

@@ -45,10 +45,9 @@ export function useDeleteSessionMutation() {
 
 type UseChatOptions = {
   repositoryId?: string;
-  mode: "repository" | "project";
 };
 
-export function useChat({ repositoryId, mode }: UseChatOptions) {
+export function useChat({ repositoryId }: UseChatOptions) {
   const [currentSessionId, setCurrentSessionId] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
@@ -127,7 +126,7 @@ export function useChat({ repositoryId, mode }: UseChatOptions) {
         session_id: localSessionId || undefined,
       };
 
-      if (mode === "repository" && repositoryId) {
+      if (repositoryId) {
         payload.repository_id = repositoryId;
       }
 
@@ -195,7 +194,7 @@ export function useChat({ repositoryId, mode }: UseChatOptions) {
         }
       }
     },
-    [mode, repositoryId, currentSessionId, queryClient]
+    [repositoryId, currentSessionId, queryClient]
   );
 
   return {

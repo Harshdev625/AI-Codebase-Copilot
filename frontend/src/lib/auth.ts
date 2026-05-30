@@ -1,4 +1,4 @@
-﻿export type UserRole = "USER" | "ADMIN" | string;
+export type UserRole = "USER" | "ADMIN" | string;
 
 export interface AuthUser {
   id: string;
@@ -15,7 +15,6 @@ const ACCESS_TOKEN_KEY = "tm.access_token";
 const USER_KEY = "tm.user";
 const LEGACY_ACCESS_TOKEN_KEY = "aicc_token";
 const LEGACY_USER_KEY = "aicc_user";
-const LEGACY_PROJECT_KEY = "aicc_project_id";
 const TOKEN_COOKIE = "tm_token";
 const ROLE_COOKIE = "tm_role";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
@@ -125,7 +124,6 @@ export function clearAuthSession(): void {
   window.localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
   window.localStorage.removeItem(LEGACY_USER_KEY);
-  window.localStorage.removeItem(LEGACY_PROJECT_KEY);
   clearCookie(TOKEN_COOKIE);
   clearCookie(ROLE_COOKIE);
 }

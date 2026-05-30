@@ -174,7 +174,7 @@ export default function ChatPage() {
               </p>
             </div>
           ) : (
-            <ChatWorkspace mode="repository" repositoryId={selectedRepositoryId || undefined} />
+            <ChatWorkspace repositoryId={selectedRepositoryId || undefined} />
           )}
         </div>
       </div>
