@@ -10,6 +10,12 @@ export function useRepositories(limit = 100, offset = 0) {
     queryKey: ['repositories', 'list', limit, offset],
     queryFn: () => repositoryService.listRepositories(limit, offset),
     staleTime: 20_000,
+    refetchInterval: (query) => {
+      const isAnyRunning = query.state.data?.items.some(
+        (r) => r.latest_job_status === 'running' || r.latest_job_status === 'in_progress' || r.latest_job_status === 'pending'
+      );
+      return isAnyRunning ? 3000 : false;
+    },
   });
 
   return {

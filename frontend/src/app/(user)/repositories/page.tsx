@@ -105,7 +105,7 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
 function RepositoryCard({ repository, onRefresh }: { repository: Repository; onRefresh: () => void }) {
   const toast = useToast();
   const indexMutation = useIndexRepository();
-  const [progress, setProgress] = React.useState<{
+  const [localProgress, setLocalProgress] = React.useState<{
     percentage: number;
     status: string;
     message: string;
@@ -113,20 +113,33 @@ function RepositoryCard({ repository, onRefresh }: { repository: Repository; onR
     stats?: any;
   } | null>(null);
 
-  const status = (progress?.status || repository.latest_job_status || repository.latest_index_status || 'not_indexed').toLowerCase();
+  const status = (localProgress?.status || repository.latest_job_status || repository.latest_index_status || 'not_indexed').toLowerCase();
   const isIndexing = status === 'pending' || status === 'running' || status === 'in_progress';
   const isReady = status === 'completed';
 
+  const progress = localProgress || (isIndexing ? {
+    percentage: repository.latest_job_stats?.percentage || repository.latest_index_stats?.percentage || 0,
+    status: status,
+    message: 'Indexing in progress...',
+    indexingJobId: '',
+    stats: repository.latest_job_stats || repository.latest_index_stats,
+  } : null);
+
+  let displayPercentage = progress?.percentage || 0;
+  if (progress?.stats?.current_stage === 'storage' && progress.stats?.total_chunks > 0) {
+    displayPercentage = (progress.stats.stored_chunks / progress.stats.total_chunks) * 100;
+  }
+
   React.useEffect(() => {
-    if (!progress?.indexingJobId || !isIndexing) {
+    if (!localProgress?.indexingJobId || !isIndexing) {
       return;
     }
 
     const timer = window.setInterval(async () => {
       try {
-        const detail = await repositoryService.getIndexProgress(progress.indexingJobId);
-        setProgress({
-          indexingJobId: progress.indexingJobId,
+        const detail = await repositoryService.getIndexProgress(localProgress.indexingJobId);
+        setLocalProgress({
+          indexingJobId: localProgress.indexingJobId,
           percentage: detail.percentage,
           status: detail.job_status,
           message: detail.message,
@@ -143,7 +156,7 @@ function RepositoryCard({ repository, onRefresh }: { repository: Repository; onR
     }, 2500);
 
     return () => clearInterval(timer);
-  }, [progress?.indexingJobId, isIndexing, onRefresh]);
+  }, [localProgress?.indexingJobId, isIndexing, onRefresh]);
 
   const startIndexing = () => {
     indexMutation.mutate(
@@ -151,7 +164,7 @@ function RepositoryCard({ repository, onRefresh }: { repository: Repository; onR
       {
         onSuccess: (response) => {
           if (response.indexing_job_id) {
-            setProgress({
+            setLocalProgress({
               indexingJobId: response.indexing_job_id,
               percentage: 0,
               status: 'pending',
@@ -198,14 +211,14 @@ function RepositoryCard({ repository, onRefresh }: { repository: Repository; onR
       {/* Indexing progress */}
       {progress && isIndexing && (
         <div className="mb-4 rounded-xl bg-card/60 border border-border/40 p-3">
-          <IndexingStepper stage={progress.stats?.current_stage} percentage={progress.percentage} />
+          <IndexingStepper stage={progress.stats?.current_stage} percentage={displayPercentage} />
           
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium">
               <span className="truncate pr-2">{progress.message}</span>
-              <span className="whitespace-nowrap">{Math.round(progress.percentage)}%</span>
+              <span className="whitespace-nowrap">{Math.round(displayPercentage)}%</span>
             </div>
-            <Progress value={progress.percentage} className="h-1.5" />
+            <Progress value={displayPercentage} className="h-1.5" />
           </div>
 
           {progress.stats?.current_stage === 'storage' && progress.stats?.total_chunks > 0 && (
