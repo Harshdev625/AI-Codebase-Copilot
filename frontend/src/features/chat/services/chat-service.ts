@@ -43,13 +43,22 @@ function parseEnvelopeFromLine(line: string): StreamEnvelope | null {
 }
 
 export const chatService = {
-  listSessions(limit = 20, offset = 0, repositoryId?: string): Promise<PaginatedPayload<ChatSession>> {
+  listSessions(limit = 20, offset = 0, repositoryId?: string, search?: string, isArchived?: boolean): Promise<PaginatedPayload<ChatSession>> {
     const params: Record<string, any> = { limit, offset };
     if (repositoryId) {
       params.repository_id = repositoryId;
     }
+    if (search !== undefined) params.search = search;
+    if (isArchived !== undefined) params.is_archived = isArchived;
     return apiClient<PaginatedPayload<ChatSession>>("/v1/chat/sessions", {
       params,
+    });
+  },
+
+  updateSession(sessionId: string, payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean }): Promise<ChatSession> {
+    return apiClient<ChatSession>(`/v1/chat/sessions/${sessionId}`, {
+      method: "PATCH",
+      body: payload,
     });
   },
 
@@ -122,29 +131,48 @@ export const chatService = {
       if (read.done) break;
 
       buffer += decoder.decode(read.value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
 
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
+      for (const rawEvent of events) {
+        if (!rawEvent.trim()) continue;
 
-        const envelope = parseEnvelopeFromLine(line);
-        if (!envelope) continue;
-        if (!envelope.success) {
-          throw new Error(envelope.message || envelope.error || "Stream failed");
+        let dataStr = "";
+        let eventType = "message";
+        const lines = rawEvent.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("event: ")) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith("data: ")) {
+            dataStr += line.slice(6);
+          }
         }
-        if (envelope.data) onEvent(envelope.data);
+
+        if (dataStr) {
+          const envelope = parseEnvelopeFromLine(dataStr);
+          if (!envelope) continue;
+          if (!envelope.success) {
+            throw new Error(envelope.message || envelope.error || "Stream failed");
+          }
+          if (envelope.data) onEvent(envelope.data);
+        }
       }
     }
 
-    const finalLine = buffer.trim();
-    if (finalLine.length > 0) {
-      const envelope = parseEnvelopeFromLine(finalLine);
-      if (envelope && envelope.success && envelope.data) onEvent(envelope.data);
-      if (envelope && !envelope.success) {
-        throw new Error(envelope.message || envelope.error || "Stream failed");
-      }
+    const finalEvent = buffer.trim();
+    if (finalEvent.length > 0) {
+        let dataStr = "";
+        const lines = finalEvent.split("\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) dataStr += line.slice(6);
+        }
+        if (dataStr) {
+          const envelope = parseEnvelopeFromLine(dataStr);
+          if (envelope && envelope.success && envelope.data) onEvent(envelope.data);
+          if (envelope && !envelope.success) {
+            throw new Error(envelope.message || envelope.error || "Stream failed");
+          }
+        }
     }
   },
 };

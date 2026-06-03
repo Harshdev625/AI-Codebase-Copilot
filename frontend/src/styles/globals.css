@@ -1,4 +1,4 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
 
 @theme {
   /* ── Spacing Scale ─────────────────────────────────────── */
@@ -161,46 +161,53 @@
   --warning-foreground:    0 0% 100%;
   --error:                 0 72% 52%;
   --error-foreground:      0 0% 100%;
-  --ai:                    18 80% 55%;
+  --ai:                    199 89% 50%;
   --ai-foreground:         0 0% 100%;
-  --glow:                  32 85% 55%;
-  --cyan:                  190 70% 45%;
-  --radius:                0.9rem;
+  --plan:                  255 92% 66%;
+  --act:                   38 92% 40%;
+  --glow:                  239 84% 57%;
+  --cyan:                  190 70% 35%;
+  --radius:                0.75rem;
 }
 
 /* ══════════════════════════════════════════════════════════
   DARK MODE - Night Studio
 ══════════════════════════════════════════════════════════ */
 .dark {
-  --background:            210 16% 9%;
-  --foreground:            32 20% 92%;
-  --card:                  210 16% 12%;
-  --card-foreground:       32 20% 92%;
-  --primary:               176 55% 45%;
-  --primary-foreground:    210 16% 10%;
-  --secondary:             210 12% 18%;
-  --secondary-foreground:  32 15% 80%;
-  --muted:                 210 12% 16%;
-  --muted-foreground:      32 12% 65%;
-  --accent:                210 12% 20%;
-  --accent-foreground:     32 20% 88%;
-  --destructive:           0 65% 52%;
-  --destructive-foreground:0 0% 100%;
-  --border:                210 10% 24%;
-  --input:                 210 10% 18%;
-  --ring:                  176 55% 45%;
+  --background:            240 9% 4%;
+  --foreground:            0 0% 98%;
+  --card:                  240 8% 7%;
+  --card-foreground:       0 0% 98%;
+  --primary:               239 84% 67%;
+  --primary-foreground:    0 0% 98%;
+  --secondary:             240 4% 16%;
+  --secondary-foreground:  0 0% 98%;
+  --muted:                 240 5% 12%;
+  --muted-foreground:      240 5% 65%;
+  --accent:                240 5% 12%;
+  --accent-foreground:     0 0% 98%;
+  --destructive:           0 62.8% 30.6%;
+  --destructive-foreground:0 0% 98%;
+  --border:                240 4% 16%;
+  --input:                 240 4% 16%;
+  --ring:                  239 84% 67%;
 
   --success:               142 50% 45%;
   --success-foreground:    0 0% 100%;
-  --warning:               36 85% 55%;
+  --warning:               38 92% 50%;
   --warning-foreground:    0 0% 100%;
   --error:                 0 65% 55%;
   --error-foreground:      0 0% 100%;
-  --ai:                    18 80% 60%;
+  
+  /* Modes */
+  --ai:                    199 89% 60%; /* ASK mode */
   --ai-foreground:         0 0% 100%;
-  --glow:                  32 85% 60%;
+  --plan:                  255 92% 76%; /* PLAN mode */
+  --act:                   38 92% 50%;  /* ACT mode */
+  
+  --glow:                  239 84% 67%;
   --cyan:                  190 70% 45%;
-  --radius:                0.9rem;
+  --radius:                0.75rem;
 }
 
 /* ══════════════════════════════════════════════════════════

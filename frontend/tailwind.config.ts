@@ -57,6 +57,10 @@ const config: Config = {
           DEFAULT:    "hsl(var(--ai))",
           foreground: "hsl(var(--ai-foreground))",
         },
+        plan: "hsl(var(--plan))",
+        act: "hsl(var(--act))",
+        glow: "hsl(var(--glow))",
+        cyan: "hsl(var(--cyan))",
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -64,9 +68,9 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["var(--font-space-grotesk)", "sans-serif"],
-        display: ["var(--font-fraunces)", "serif"],
-        mono: ["var(--font-plex-mono)", "monospace"],
+        sans: ["var(--font-sans)", "sans-serif"],
+        display: ["var(--font-display)", "sans-serif"],
+        mono: ["var(--font-mono)", "monospace"],
       },
       animation: {
         "fade-up":      "fadeUp 260ms ease-out both",

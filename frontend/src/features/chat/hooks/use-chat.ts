@@ -3,17 +3,17 @@ import * as React from "react";
 import { v4 as uuidv4 } from "uuid";
 
 import { chatService } from "@/features/chat/services/chat-service";
-import type { ChatMessage, ChatRequestPayload, ChatStreamEvent } from "@/features/chat/types/chat-types";
+import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source } from "@/features/chat/types/chat-types";
 
 export const chatKeys = {
   sessions: (repositoryId?: string) => ["chat", "sessions", repositoryId] as const,
   messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
 };
 
-export function useChatSessions(limit = 20, offset = 0, repositoryId?: string) {
+export function useChatSessions(limit = 20, offset = 0, repositoryId?: string, search?: string, isArchived?: boolean) {
   return useQuery({
-    queryKey: [...chatKeys.sessions(repositoryId), limit, offset],
-    queryFn: () => chatService.listSessions(limit, offset, repositoryId),
+    queryKey: [...chatKeys.sessions(repositoryId), limit, offset, search, isArchived],
+    queryFn: () => chatService.listSessions(limit, offset, repositoryId, search, isArchived),
   });
 }
 
@@ -37,6 +37,18 @@ export function useDeleteSessionMutation() {
 
   return useMutation({
     mutationFn: (sessionId: string) => chatService.deleteSession(sessionId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+    },
+  });
+}
+
+export function useUpdateSessionMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean } }) => 
+      chatService.updateSession(sessionId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
     },
@@ -91,8 +103,9 @@ export function useChat({ repositoryId }: UseChatOptions) {
   }, []);
 
   const sendMessage = React.useCallback(
-    async (content: string) => {
-      if (!content.trim() || isSending) return;
+    async (content: string, mode: ChatMode = "ASK", scopePaths?: string[]) => {
+      if (isSending) return;
+      if (!content.trim()) return;
 
       const userMessageId = uuidv4();
       const assistantMessageId = uuidv4();
@@ -122,8 +135,9 @@ export function useChat({ repositoryId }: UseChatOptions) {
 
       const payload: ChatRequestPayload = {
         query: content,
-        mode: "question",
+        mode,
         session_id: localSessionId || undefined,
+        scope_paths: scopePaths,
       };
 
       if (repositoryId) {
@@ -140,11 +154,42 @@ export function useChat({ repositoryId }: UseChatOptions) {
                 setCurrentSessionId(event.session_id);
                 void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
               }
-            } else if (event.type === 'chunk' && event.delta) {
+            } else if ((event.type === 'chunk' && event.delta) || (event.type === 'answer' && event.text)) {
+              const deltaStr = event.type === 'chunk' ? event.delta : event.text;
               setMessages((prev) => 
                 prev.map((msg) => {
                   if (msg.id === assistantMessageId) {
-                    return { ...msg, content: msg.content + event.delta! };
+                    return { ...msg, content: msg.content + deltaStr };
+                  }
+                  return msg;
+                })
+              );
+            } else if (event.type === 'status') {
+              setMessages((prev) => 
+                prev.map((msg) => {
+                  if (msg.id === assistantMessageId) {
+                    const statuses = (msg.metadata.statuses as string[]) || [];
+                    return { ...msg, metadata: { ...msg.metadata, statuses: [...statuses, event.step] } };
+                  }
+                  return msg;
+                })
+              );
+            } else if (event.type === 'source') {
+              setMessages((prev) => 
+                prev.map((msg) => {
+                  if (msg.id === assistantMessageId) {
+                    const sources = (msg.metadata.sources as any[]) || [];
+                    return { ...msg, metadata: { ...msg.metadata, sources: [...sources, event.source] } };
+                  }
+                  return msg;
+                })
+              );
+            } else if (event.type === 'patch') {
+              setMessages((prev) => 
+                prev.map((msg) => {
+                  if (msg.id === assistantMessageId) {
+                    const patches = (msg.metadata.patches as string[]) || [];
+                    return { ...msg, metadata: { ...msg.metadata, patches: [...patches, event.diff] } };
                   }
                   return msg;
                 })
@@ -158,7 +203,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
                     if (event.proposal) {
                       newMetadata.sources = [
                         ...(newMetadata.sources || []),
-                        { kind: 'patch_proposal', proposal: event.proposal }
+                        { kind: 'patch_proposal', proposal: event.proposal } as Source
                       ];
                     }
                     return { ...msg, metadata: newMetadata };
