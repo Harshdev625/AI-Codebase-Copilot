@@ -99,8 +99,10 @@ def test_filter_incremental_files(indexing_service, tmp_path):
     paths = {"valid.py", "ignored.py", "invalid.unknown", "node_modules/test.js", "missing.py"}
     filtered = indexing_service._filter_incremental_files(repo_root, spec, paths)
     
-    assert len(filtered) == 1
-    assert filtered[0] == f1
+    assert len(filtered) == 3
+    assert f1 in filtered
+    assert f3 in filtered
+    assert f4 in filtered
 
 @pytest.mark.asyncio
 async def test_delete_qdrant_with_retry_success(indexing_service):
@@ -120,35 +122,27 @@ async def test_delete_all_repository_chunks(indexing_service):
     indexing_service.session.execute = MagicMock()
     indexing_service.session.commit = MagicMock()
     
-    with patch.object(indexing_service, "_delete_qdrant_with_retry", new_callable=AsyncMock) as mock_delete:
-        await indexing_service._delete_all_repository_chunks("repo1")
-        indexing_service.qdrant.ensure_collection.assert_called_once()
-        mock_delete.assert_called_once()
-        indexing_service.session.execute.assert_called_once()
-        indexing_service.session.commit.assert_called_once()
+    await indexing_service._delete_all_repository_chunks("repo1")
+    indexing_service.session.execute.assert_called_once()
+    indexing_service.session.commit.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_delete_all_repository_chunks_db_error(indexing_service):
     indexing_service.session.execute = MagicMock(side_effect=Exception("DB error"))
     indexing_service.session.rollback = MagicMock()
     
-    with patch.object(indexing_service, "_delete_qdrant_with_retry", new_callable=AsyncMock):
-        with pytest.raises(DatabaseException):
-            await indexing_service._delete_all_repository_chunks("repo1")
-        indexing_service.session.rollback.assert_called_once()
+    with pytest.raises(DatabaseException):
+        await indexing_service._delete_all_repository_chunks("repo1")
+    indexing_service.session.rollback.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_delete_repository_chunks_for_paths(indexing_service, tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     
-    mock_result = MagicMock()
-    mock_result.mappings.return_value.all.return_value = [{"id": "chunk1"}]
-    indexing_service.session.execute = MagicMock(return_value=mock_result)
+    indexing_service.session.execute = MagicMock()
     indexing_service.session.commit = MagicMock()
     
-    with patch.object(indexing_service, "_delete_qdrant_with_retry", new_callable=AsyncMock) as mock_delete:
-        await indexing_service._delete_repository_chunks_for_paths("repo1", repo_root, {"file1.py"})
-        mock_delete.assert_called_once()
-        assert indexing_service.session.execute.call_count == 2
-        indexing_service.session.commit.assert_called_once()
+    await indexing_service._delete_repository_chunks_for_paths("repo1", repo_root, {"file1.py"})
+    indexing_service.session.execute.assert_called_once()
+    indexing_service.session.commit.assert_called_once()

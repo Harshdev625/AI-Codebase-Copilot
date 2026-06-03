@@ -21,6 +21,9 @@ class ChatMode(str, Enum):
     DEBUG = "debug"
     DOCUMENTATION = "documentation"
     TOOL = "tool"
+    ASK = "ASK"
+    PLAN = "PLAN"
+    ACT = "ACT"
 
 
 class StrictRequestModel(BaseModel):
@@ -34,6 +37,7 @@ class ChatRequest(StrictRequestModel):
     session_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     mode: ChatMode = Field(default=ChatMode.QUESTION, description="Chat workflow mode")
     include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
+    scope_paths: list[str] | None = Field(default=None, description="Paths to restrict retrieval scope")
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
@@ -74,10 +78,20 @@ class ApplyPatchRequest(StrictRequestModel):
 class ChatSessionResponse(BaseModel):
     id: str
     repository_id: str | None = None
-    title: str | None = None
+    session_title: str | None = None
+    session_mode: str
+    is_pinned: bool
+    is_archived: bool
     summary: str | None = None
     created_at: str
     updated_at: str
+    last_activity_at: str
+
+
+class ChatSessionUpdateRequest(StrictRequestModel):
+    session_title: str | None = None
+    is_pinned: bool | None = None
+    is_archived: bool | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -208,6 +222,42 @@ class RepositoryResponse(BaseModel):
     remote_url: str | None = None
     local_path: str | None = None
     default_branch: str
+    latest_indexed_commit: str | None = None
+    retain_snapshots_mode: str = "LAST_N"
+    retain_snapshot_count: int = 20
     created_at: str
     latest_job_status: str | None = None
     latest_job_stats: dict[str, Any] | None = None
+
+
+class SnapshotResponse(BaseModel):
+    id: str
+    repository_id: str
+    commit_sha: str
+    indexed_at: str
+    files_count: int
+    chunks_count: int
+    files_skipped: int
+    is_pinned: bool
+    is_release: bool
+
+
+class SnapshotUpdateRequest(BaseModel):
+    is_pinned: bool | None = None
+    is_release: bool | None = None
+    status: str | None = None
+
+
+class RepositoryFileResponse(BaseModel):
+    id: str
+    path: str
+    type: str
+    extension: str | None = None
+    language: str | None = None
+    size_bytes: int | None = None
+    line_count: int | None = None
+    token_count: int | None = None
+    is_generated: bool
+    status: str
+    skip_reason: str | None = None
+    last_indexed_commit: str | None = None

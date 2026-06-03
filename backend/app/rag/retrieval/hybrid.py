@@ -125,6 +125,7 @@ def _dense_search_postgres_with_embedding(
     repository_id: str,
     embedding: list[float],
     top_k: int = 20,
+    scope_paths: list[str] | None = None,
 ) -> list[dict]:
     logger.debug(
         "retrieval_dense_postgres_embedding - request repository_id=%s top_k=%s",
@@ -141,21 +142,31 @@ def _dense_search_postgres_with_embedding(
         )
         return []
     vector_literal = _to_vector_literal(embedding)
+    
+    scope_clause = ""
+    params = {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k}
+    if scope_paths:
+        scope_conditions = []
+        for i, path in enumerate(scope_paths):
+            param_key = f"scope_{i}"
+            scope_conditions.append(f"path LIKE :{param_key}")
+            params[param_key] = f"{path}%"
+        scope_clause = f"AND ({' OR '.join(scope_conditions)})"
+
     stmt = text(
-        """
+        f"""
         SELECT id, path, symbol, content, repository_id, repo_id,
                1 - (embedding <=> CAST(:embedding AS vector)) AS score
         FROM code_chunks
         WHERE repository_id = :repository_id
+          AND status = 'ACTIVE'
+          {scope_clause}
           AND embedding IS NOT NULL
         ORDER BY embedding <=> CAST(:embedding AS vector)
         LIMIT :top_k
         """
     )
-    rows = session.execute(
-        stmt,
-        {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k},
-    ).mappings()
+    rows = session.execute(stmt, params).mappings()
     result = [dict(row) for row in rows]
     logger.debug("retrieval_dense_postgres_embedding - response repository_id=%s count=%s", repository_id, len(result))
     return result
@@ -163,7 +174,7 @@ def _dense_search_postgres_with_embedding(
 
 
 
-def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
+def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None) -> list[dict]:
     logger.debug("retrieval_dense - request repository_id=%s top_k=%s", repository_id, top_k)
     try:
         embedding = get_embedding_provider().embed_text(query)
@@ -177,28 +188,25 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
         return []  # Ollama unavailable; dense search not possible
 
     try:
-        matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k)
+        matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k * 3 if scope_paths else top_k)
     except RuntimeError as exc:
         logger.warning(
             "retrieval_dense - qdrant failed; falling back to postgres repository_id=%s error=%s",
             repository_id,
             exc,
         )
-        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
 
     if not matches:
-        # Qdrant can be reachable but missing points/payload indexes.
-        # Fall back to Postgres dense search if embeddings are stored there.
         logger.debug("retrieval_dense - qdrant empty; falling back to postgres repository_id=%s", repository_id)
-        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
 
     matched_ids = [str(item.get("id")) for item in matches]
     score_map = {str(item.get("id")): float(item.get("score", 0.0)) for item in matches}
 
-    # Fetch only the matched rows by primary key (efficient vs. full table scan)
     placeholders = ", ".join(f":mid{i}" for i in range(len(matched_ids)))
     stmt = text(
-        f"SELECT id, path, symbol, content, repository_id, repo_id FROM code_chunks WHERE id IN ({placeholders})"
+        f"SELECT id, path, symbol, content, repository_id, repo_id FROM code_chunks WHERE id IN ({placeholders}) AND status = 'ACTIVE'"
     )
     params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
     rows = session.execute(stmt, params).mappings().all()
@@ -210,38 +218,70 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
         if not row:
             continue
         row["score"] = score_map.get(item_id, 0.0)
-        if _is_noisy_path(str(row.get("path", ""))):
+        
+        path = str(row.get("path", ""))
+        if _is_noisy_path(path):
             continue
+        if scope_paths and not any(path.startswith(sp) for sp in scope_paths):
+            continue
+            
         merged.append(row)
     if merged:
         logger.debug("retrieval_dense - response repository_id=%s count=%s source=qdrant", repository_id, len(merged))
-        return merged
+        return merged[:top_k]
 
-    # Qdrant returned matches, but none could be hydrated (e.g., stale IDs).
-    logger.debug("retrieval_dense - qdrant stale ids; falling back to postgres repository_id=%s", repository_id)
-    return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k)
+    logger.debug("retrieval_dense - qdrant stale ids or filtered out; falling back to postgres repository_id=%s", repository_id)
+    return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
 
 
-def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20) -> list[dict]:
+def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None) -> list[dict]:
     if not query.strip():
         return []
     logger.debug("retrieval_lexical - request repository_id=%s top_k=%s", repository_id, top_k)
 
-    stmt = text(
-        """
-        SELECT id, path, symbol, content, repository_id, repo_id,
-               ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
-        FROM code_chunks
-        WHERE repository_id = :repository_id
-          AND to_tsvector('english', content) @@ plainto_tsquery('english', :query)
-        ORDER BY score DESC
-        LIMIT :top_k
-        """
-    )
-    rows = session.execute(
-        stmt,
-        {"query": query, "repository_id": repository_id, "top_k": top_k},
-    ).mappings()
+    scope_clause = ""
+    params = {"query": query, "repository_id": repository_id, "top_k": top_k}
+    if scope_paths:
+        scope_conditions = []
+        for i, path in enumerate(scope_paths):
+            param_key = f"scope_{i}"
+            scope_conditions.append(f"path LIKE :{param_key}")
+            params[param_key] = f"{path}%"
+        scope_clause = f"AND ({' OR '.join(scope_conditions)})"
+
+    bind = getattr(session, "bind", None)
+    dialect = getattr(getattr(bind, "dialect", None), "name", None)
+    is_sqlite = bool(dialect and str(dialect).lower() == "sqlite")
+
+    if is_sqlite:
+        stmt = text(
+            f"""
+            SELECT id, path, symbol, content, repository_id, repo_id,
+                   1.0 AS score
+            FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND status = 'ACTIVE'
+              {scope_clause}
+              AND content LIKE :like_query
+            LIMIT :top_k
+            """
+        )
+        params["like_query"] = f"%{query}%"
+    else:
+        stmt = text(
+            f"""
+            SELECT id, path, symbol, content, repository_id, repo_id,
+                   ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
+            FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND status = 'ACTIVE'
+              {scope_clause}
+              AND to_tsvector('english', content) @@ plainto_tsquery('english', :query)
+            ORDER BY score DESC
+            LIMIT :top_k
+            """
+        )
+    rows = session.execute(stmt, params).mappings()
     filtered: list[dict] = []
     for row in rows:
         item = dict(row)
@@ -286,11 +326,13 @@ def _looks_like_docs_path(path: str) -> bool:
     return any(token in lower for token in DOC_PATH_TOKENS)
 
 
-def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8) -> list[dict]:
+def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None) -> list[dict]:
     logger.info("retrieval_hybrid - request repository_id=%s top_k=%s", repository_id, top_k)
     candidate_pool = max(top_k, settings.retrieval_rerank_candidate_pool)
-    dense = dense_search(session, repository_id, query, top_k=candidate_pool)
-    lexical = lexical_search(session, repository_id, query, top_k=candidate_pool)
+    if scope_paths:
+        candidate_pool = max(candidate_pool, 50)  # Need more candidates to ensure we hit scopes
+    dense = dense_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
+    lexical = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
 
     # For "architecture" and similar high-level questions, boost documentation-ish files
     # so the model sees entrypoints/README/docs, not just arbitrary constructors.

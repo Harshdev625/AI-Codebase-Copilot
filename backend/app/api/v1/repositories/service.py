@@ -131,8 +131,8 @@ def add_repository_for_user(
         session.execute(
             text(
                 """
-                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch)
-                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch)
+                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch, retain_snapshots_mode, retain_snapshot_count)
+                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch, 'LAST_N', 20)
                 """
             ),
             {
@@ -146,6 +146,7 @@ def add_repository_for_user(
         )
         session.commit()
     except Exception as exc:
+        logger.exception("add_repository_for_user - database insert failed repo_id=%s owner_user_id=%s", repo_id, owner_user_id)
         session.rollback()
         raise DuplicateException("Repository", repo_id) from exc
 
@@ -224,12 +225,31 @@ def queue_repository_indexing(
         raise IndexingAlreadyRunningError("Indexing already in progress for this repository")
 
     indexing_job_id = str(uuid.uuid4())
+    trigger_type = "MANUAL"
+    priority = 5
+    if str(source).upper() in {"MANUAL", "GIT_PULL", "ACT_PATCH", "SCHEDULED"}:
+        trigger_type = str(source).upper()
+        if trigger_type == "ACT_PATCH":
+            priority = 1
+        elif trigger_type == "SCHEDULED":
+            priority = 9
+
+    errors_val_sql = ":errors" if is_sqlite else "CAST(:errors AS JSONB)"
+
     try:
         session.execute(
             text(
                 f"""
-                INSERT INTO indexing_jobs (id, repository_id, status, message, commit_sha, stats, started_at, updated_at, created_at)
-                VALUES (:id, :repository_id, 'pending', :message, :commit_sha, {stats_value_sql}, {timestamp_sql}, {timestamp_sql}, {timestamp_sql})
+                INSERT INTO indexing_jobs (
+                    id, repository_id, status, message, commit_sha, stats, 
+                    trigger_type, priority, files_indexed, files_skipped, chunks_created, errors,
+                    started_at, updated_at, created_at
+                )
+                VALUES (
+                    :id, :repository_id, 'pending', :message, :commit_sha, {stats_value_sql}, 
+                    :trigger_type, :priority, 0, 0, 0, {errors_val_sql},
+                    {timestamp_sql}, {timestamp_sql}, {timestamp_sql}
+                )
                 """
             ),
             {
@@ -238,10 +258,14 @@ def queue_repository_indexing(
                 "message": f"Indexing queued ({source})",
                 "commit_sha": normalized_commit,
                 "stats": "{}",
+                "trigger_type": trigger_type,
+                "priority": priority,
+                "errors": "[]",
             },
         )
         session.commit()
     except Exception as exc:
+        logger.exception("queue_repository_indexing - failed to insert job record")
         session.rollback()
         raise DatabaseException("Failed to create indexing job record") from exc
 
@@ -480,4 +504,165 @@ def get_index_job_progress(session: Session, *, indexing_job_id: str, user_id: s
         "percentage": int(stats.get("percentage") or 0),
         "current_file": stats.get("current_file"),
         "eta_seconds": stats.get("eta_seconds"),
+    }
+
+
+def get_repository_insights(session: Session, repository_id: str) -> dict[str, Any]:
+    # 1. Total, indexed, skipped counts
+    counts_row = session.execute(
+        text(
+            """
+            SELECT
+              COUNT(*) as total,
+              SUM(CASE WHEN status = 'INDEXED' THEN 1 ELSE 0 END) as indexed,
+              SUM(CASE WHEN status = 'SKIPPED' THEN 1 ELSE 0 END) as skipped
+            FROM repository_files
+            WHERE repository_id = :rid
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()
+    
+    files_total = counts_row["total"] or 0
+    files_indexed = counts_row["indexed"] or 0
+    files_skipped = counts_row["skipped"] or 0
+
+    # 2. Skip reason breakdown
+    skip_rows = session.execute(
+        text(
+            """
+            SELECT skip_reason, COUNT(*) as count
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'SKIPPED' AND skip_reason IS NOT NULL
+            GROUP BY skip_reason
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().all()
+    skip_reason_breakdown = {r["skip_reason"]: r["count"] for r in skip_rows}
+
+    # 3. Language breakdown
+    lang_rows = session.execute(
+        text(
+            """
+            SELECT language, COUNT(*) as count
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'INDEXED' AND language IS NOT NULL
+            GROUP BY language
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().all()
+    
+    extension_to_language = {
+        "py": "python",
+        "js": "javascript",
+        "ts": "typescript",
+        "tsx": "typescript",
+        "jsx": "javascript",
+        "md": "markdown",
+        "json": "json",
+        "html": "html",
+        "css": "css",
+        "go": "go",
+        "java": "java",
+        "cpp": "cpp",
+        "c": "c",
+        "h": "c",
+        "hpp": "cpp",
+        "rs": "rust",
+        "rb": "ruby",
+        "php": "php",
+        "txt": "text",
+        "sh": "shell",
+        "yaml": "yaml",
+        "yml": "yaml",
+        "toml": "toml",
+        "ini": "ini",
+        "sql": "sql"
+    }
+    language_breakdown = {}
+    for r in lang_rows:
+        lang_ext = r["language"].lower()
+        lang_name = extension_to_language.get(lang_ext, lang_ext)
+        language_breakdown[lang_name] = language_breakdown.get(lang_name, 0) + r["count"]
+
+    # 4. Largest files
+    large_rows = session.execute(
+        text(
+            """
+            SELECT path, size_bytes
+            FROM repository_files
+            WHERE repository_id = :rid AND size_bytes IS NOT NULL
+            ORDER BY size_bytes DESC
+            LIMIT 10
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().all()
+    largest_files = [{"path": r["path"], "size_bytes": r["size_bytes"]} for r in large_rows]
+
+    # 5. Indexing health
+    # Latest job
+    latest_job = session.execute(
+        text(
+            """
+            SELECT status, message, created_at
+            FROM indexing_jobs
+            WHERE repository_id = :rid
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()
+
+    # Total failed jobs
+    failed_count = session.execute(
+        text(
+            """
+            SELECT COUNT(*) as count
+            FROM indexing_jobs
+            WHERE repository_id = :rid AND status = 'failed'
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()["count"] or 0
+
+    # Recent error logs from all failed jobs
+    recent_errors = []
+    failed_jobs = session.execute(
+        text(
+            """
+            SELECT id, message, created_at
+            FROM indexing_jobs
+            WHERE repository_id = :rid AND status = 'failed'
+            ORDER BY created_at DESC
+            LIMIT 5
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().all()
+    for job in failed_jobs:
+        recent_errors.append({
+            "job_id": job["id"],
+            "message": job["message"],
+            "created_at": str(job["created_at"])
+        })
+
+    indexing_health = {
+        "latest_job_status": latest_job["status"] if latest_job else None,
+        "latest_job_message": latest_job["message"] if latest_job else None,
+        "total_failed_jobs": failed_count,
+        "recent_errors": recent_errors
+    }
+
+    return {
+        "files_total": files_total,
+        "files_indexed": files_indexed,
+        "files_skipped": files_skipped,
+        "skip_reason_breakdown": skip_reason_breakdown,
+        "language_breakdown": language_breakdown,
+        "largest_files": largest_files,
+        "indexing_health": indexing_health
     }

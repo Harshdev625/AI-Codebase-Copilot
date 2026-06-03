@@ -75,7 +75,7 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
         def __init__(self, session):
             self.session = session
 
-        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None):
             _ = repository_id
             return (
                 {
@@ -102,7 +102,7 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
     resp = client.post("/v1/chat/stream", json={"repo_id": "repo", "query": "hey"})
     assert resp.status_code == 200
 
-    events = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+    events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
     assert events[0]["data"]["type"] == "start"
     assert any(e["data"].get("type") == "chunk" for e in events)
     assert events[-1]["data"]["type"] == "done"
@@ -123,7 +123,7 @@ def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.Monkey
             self.session = session
             self._router = FakeModelRouter()
 
-        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None):
             _ = repository_id
             return (
                 {
@@ -150,7 +150,7 @@ def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.Monkey
     resp = client.post("/v1/chat/stream", json={"repo_id": "repo", "query": "hey"})
     assert resp.status_code == 200
 
-    events = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+    events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
     chunks = [e["data"]["delta"] for e in events if e["data"].get("type") == "chunk"]
     assert "".join(chunks) == "ab"
     assert events[-1]["data"]["type"] == "done"
@@ -189,7 +189,7 @@ def test_chat_stream_llm_failure_emits_error_event(monkeypatch: pytest.MonkeyPat
     resp = client.post("/v1/chat/stream", json={"repo_id": "repo", "query": "hey"})
     assert resp.status_code == 200
 
-    events = [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+    events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
     assert any(e["success"] is False for e in events)
 
 

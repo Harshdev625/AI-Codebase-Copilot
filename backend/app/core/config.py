@@ -70,7 +70,9 @@ class Settings(BaseSettings):
     vector_dim: int = 768
     max_retrieval_k: int = 12
     repo_cache_dir: str = ".repo_cache"
-    repo_cache_persist: bool = False
+    # When True, remote clones are NOT deleted after indexing (required for File Explorer
+    # and ACT mode). Set False only in CI / resource-constrained environments.
+    repo_cache_persist: bool = True
     max_index_file_size_bytes: int = 1_000_000
     indexing_timeout_seconds: int = 60 * 30
     indexing_stall_timeout_seconds: int = 60 * 5
@@ -78,6 +80,13 @@ class Settings(BaseSettings):
     indexing_local_fallback_enabled: bool = True
     indexing_incremental_enabled: bool = True
     indexing_force_full_reindex: bool = False
+
+    # Snapshot retention defaults (overridden per-repository via DB)
+    # ALL | LAST_N | IMPORTANT_ONLY
+    default_retain_snapshots_mode: str = "LAST_N"
+    default_retain_snapshot_count: int = 20
+    # How often the background retention cleanup runs (seconds)
+    snapshot_retention_interval_seconds: int = 60 * 60  # 1 hour
 
     retrieval_rerank_enabled: bool = True
     retrieval_rerank_candidate_pool: int = 32

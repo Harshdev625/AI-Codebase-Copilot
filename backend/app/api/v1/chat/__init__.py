@@ -26,6 +26,7 @@ from app.models.api_models import (
     ChatSessionResponse,
     ChatMessageResponse,
     ApplyPatchRequest,
+    ChatSessionUpdateRequest,
 )
 from app.services.query_service import QueryService
 from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 @router.get("/sessions")
 def list_sessions(
     repository_id: str | None = None,
+    search: str | None = None,
+    is_archived: bool | None = None,
     current_user: dict = Depends(get_current_user),
     pagination: PaginationParams = Depends(get_pagination),
     session: Session = Depends(get_db_session),
@@ -45,6 +48,10 @@ def list_sessions(
     query = session.query(ChatSession).filter(ChatSession.user_id == str(current_user["id"]))
     if repository_id:
         query = query.filter(ChatSession.repository_id == repository_id)
+    if is_archived is not None:
+        query = query.filter(ChatSession.is_archived == is_archived)
+    if search:
+        query = query.filter(ChatSession.session_title.ilike(f"%{search}%"))
 
     total = query.count()
     rows = (
@@ -58,10 +65,14 @@ def list_sessions(
         ChatSessionResponse(
             id=str(r.id),
             repository_id=str(r.repository_id) if r.repository_id else None,
-            title=str(r.title) if r.title else None,
+            session_title=str(r.session_title) if r.session_title else None,
+            session_mode=str(r.session_mode),
+            is_pinned=bool(r.is_pinned),
+            is_archived=bool(r.is_archived),
             summary=str(r.summary) if r.summary else None,
             created_at=str(r.created_at),
             updated_at=str(r.updated_at),
+            last_activity_at=str(r.last_activity_at),
         ) for r in rows
     ]
     return paginated_success_response(
@@ -70,6 +81,39 @@ def list_sessions(
         limit=pagination.limit,
         offset=pagination.offset,
     )
+
+
+@router.patch("/sessions/{session_id}")
+def update_session(
+    session_id: str,
+    req: ChatSessionUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Updates session metadata like title, pinned status, and archived status."""
+    chat_session = (
+        session.query(ChatSession)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .first()
+    )
+    if not chat_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if req.session_title is not None:
+        chat_session.session_title = req.session_title
+    if req.is_pinned is not None:
+        chat_session.is_pinned = req.is_pinned
+    if req.is_archived is not None:
+        chat_session.is_archived = req.is_archived
+
+    session.commit()
+    session.refresh(chat_session)
+    return success_response({
+        "id": chat_session.id,
+        "session_title": chat_session.session_title,
+        "is_pinned": chat_session.is_pinned,
+        "is_archived": chat_session.is_archived
+    })
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -192,6 +236,8 @@ async def chat(
             user_id=str(current_user["id"]),
             session_id=req.session_id,
             federated=False,
+            scope_paths=req.scope_paths,
+            chat_mode=req.mode,
         )
     except NoContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -258,6 +304,8 @@ async def chat_stream(
             user_id=str(current_user["id"]),
             session_id=active_session_id,
             federated=False,
+            scope_paths=req.scope_paths,
+            chat_mode=req.mode,
         )
     except NoContextError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -279,16 +327,19 @@ async def chat_stream(
             session_id=active_session_id,
         )
 
-    def _event_success(payload: dict) -> str:
-        return json.dumps({"success": True, "data": payload, "error": None}) + "\n"
+    def _event_success(payload: dict, event_type: str = "message") -> str:
+        # True SSE format
+        data_str = json.dumps({"success": True, "data": payload, "error": None})
+        return f"event: {event_type}\ndata: {data_str}\n\n"
 
     def _event_error(error_msg: str, error_type: str = "stream_error") -> str:
-        """H6 FIX: Format error event for streaming response."""
-        return json.dumps({
+        """Format error event for streaming response in SSE format."""
+        data_str = json.dumps({
             "success": False,
             "data": {"type": error_type, "error": error_msg},
             "error": error_msg,
-        }) + "\n"
+        })
+        return f"event: error\ndata: {data_str}\n\n"
 
     async def _iter_stream() -> AsyncIterator[str]:
         """H6 FIX: Improved streaming with error recovery and proper error signaling."""
@@ -431,7 +482,7 @@ async def chat_stream(
 
     return StreamingResponse(
         _iter_stream(),
-        media_type="application/x-ndjson",
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 

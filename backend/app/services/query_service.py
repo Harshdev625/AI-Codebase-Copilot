@@ -48,6 +48,8 @@ class QueryService:
         user_id: str | None = None,
         session_id: str | None = None,
         federated: bool = False,
+        scope_paths: list[str] | None = None,
+        chat_mode: str = "ASK",
     ) -> dict:
         logger.info(
             "query_run - request received repository_id=%s repo_id=%s user_id=%s session_id=%s federated=%s",
@@ -69,6 +71,8 @@ class QueryService:
             user_id=user_id,
             session_id=active_session_id,
             federated=federated,
+            scope_paths=scope_paths,
+            chat_mode=chat_mode,
         )
         if from_cache:
             logger.info("query_run - completed from cache repository_id=%s repo_id=%s", repository_id, repo_id)
@@ -200,6 +204,8 @@ class QueryService:
         user_id: str | None = None,
         session_id: str | None = None,
         federated: bool = False,
+        scope_paths: list[str] | None = None,
+        chat_mode: str = "ASK",
     ) -> tuple[dict, str, str, bool]:
         logger.debug(
             "query_prepare - start repository_id=%s repo_id=%s user_id=%s session_id=%s",
@@ -215,7 +221,8 @@ class QueryService:
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
         mode_key = "federated" if federated else "single"
-        scope_key = repository_id
+        scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
+        scope_key = f"{repository_id}{scope_suffix}"
         cache_key = f"chat:v3:{mode_key}:{scope_key}:{query_hash}:{history_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
@@ -231,6 +238,7 @@ class QueryService:
             "query": query,
             "session": self.session,
             "history": history,
+            "scope_paths": scope_paths,
         }
         result = await self._invoke_graph_with_trace(state)
         proposal = self._build_patch_proposal_from_state(result)
@@ -242,6 +250,7 @@ class QueryService:
                 repository_id=repository_id,
                 query=query,
                 top_k=8,
+                scope_paths=scope_paths,
             )
             if retrieved:
                 result["retrieved_context"] = retrieved
@@ -255,8 +264,9 @@ class QueryService:
 
         assembled_context, source_index = build_context_packet(
             query=query,
-            snippets=snippets,
+            snippets=result.get("retrieved_context", []),
             history=history,
+            chat_mode=chat_mode,
         )
         result["source_index"] = source_index
         logger.debug(

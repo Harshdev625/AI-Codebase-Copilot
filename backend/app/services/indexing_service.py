@@ -28,6 +28,8 @@ from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
 from app.rag.embeddings.provider import embed_text_cached, get_embedding_provider, validate_embedding_dimension
 from app.services.qdrant_service import QdrantService
+from app.services.cache_service import get_cache_service
+from app.services.indexing_helpers import upsert_file_records, create_snapshot
 from app.core.exceptions import DatabaseException, ExternalServiceError, ValidationException
 from app.core.resilience import retry
 
@@ -56,6 +58,11 @@ class IndexingService:
         self._active_total_files: int | None = None
         self._active_started_at_perf: float | None = None
         self._active_repository_id: str | None = None
+        # Counters accumulated during a single index_repository() call
+        self._files_indexed: int = 0
+        self._files_skipped: int = 0
+        self._chunks_created: int = 0
+        self._index_errors: list[dict] = []
 
     def _is_low_signal_file(self, file_path: Path
                             , repo_root: Path) -> bool:
@@ -183,6 +190,7 @@ class IndexingService:
         repo_path: str | None,
         repo_url: str | None,
         repo_ref: str | None,
+        repository_id: str | None = None,
     ) -> Path:
         logger.info(
             "index_resolve_repo - start repo_id=%s repo_path=%s repo_url=%s repo_ref=%s",
@@ -210,20 +218,81 @@ class IndexingService:
         cache_root.mkdir(parents=True, exist_ok=True)
 
         target = cache_root / self._slugify_repo_id(repo_id)
+        meta_file = target / "cache_meta.json"
+        
+        is_valid_cache = False
+        
+        if target.exists() and meta_file.exists():
+            try:
+                with meta_file.open("r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                
+                # Verify basic details, schema version, and indexer version
+                if (
+                    meta.get("repository_id") == (repository_id or repo_id)
+                    and meta.get("repo_url") == repo_url
+                    and meta.get("branch") == repo_ref
+                    and meta.get("cache_schema_version") == 2
+                    and meta.get("indexer_version") == "1.0.0"
+                ):
+                    logger.info("index_resolve_repo - validating cache ancestry for %s", target)
+                    # To verify ancestry, we fetch first
+                    if repo_ref:
+                        await self._run_git(["-C", str(target), "fetch", "origin", repo_ref, "--force"], timeout=600)
+                        
+                        # Verify commit ancestry: is the stored commit an ancestor of origin/branch?
+                        stored_commit = meta.get("latest_commit_sha")
+                        if stored_commit and isinstance(stored_commit, str):
+                            await self._run_git(["-C", str(target), "merge-base", "--is-ancestor", stored_commit, f"origin/{repo_ref}"], timeout=120)
+                            is_valid_cache = True
+                    else:
+                        is_valid_cache = True
+            except Exception as e:
+                logger.warning("index_resolve_repo - cache validation failed %s", e)
+        
         try:
-            if target.exists():
-                self._kill_git_processes(target)
-                self._force_delete_directory(target)
+            if not is_valid_cache:
+                if target.exists():
+                    self._kill_git_processes(target)
+                    self._force_delete_directory(target)
 
-            logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
-            
-            clone_args = ["clone", "--depth", "1"]
+                logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
+                clone_args = ["clone", repo_url, str(target)]
+                await self._run_git(clone_args, timeout=600)
+
+            # Force state to exact branch
             if repo_ref:
-                clone_args.extend(["--branch", repo_ref])
+                await self._run_git(["-C", str(target), "checkout", repo_ref], timeout=120)
+                if is_valid_cache:
+                    # Hard reset to ensure clean state and proper ancestry alignment
+                    await self._run_git(["-C", str(target), "reset", "--hard", f"origin/{repo_ref}"], timeout=120)
             
-            clone_args.extend([repo_url, str(target)])
-            
-            await self._run_git(clone_args, timeout=600)
+            # Clean untracked files
+            await self._run_git(["-C", str(target), "clean", "-fdx"], timeout=120)
+    
+            # Save meta
+            latest_commit_sha = ""
+            try:
+                rev_parse_res = await self._run_git(["-C", str(target), "rev-parse", "HEAD"])
+                if rev_parse_res and hasattr(rev_parse_res, "stdout"):
+                    raw_sha = rev_parse_res.stdout
+                    if isinstance(raw_sha, str):
+                        latest_commit_sha = raw_sha.strip()
+            except Exception:
+                pass
+
+            target.mkdir(parents=True, exist_ok=True)
+            with meta_file.open("w", encoding="utf-8") as f:
+                json.dump({
+                    "repository_id": repository_id or repo_id,
+                    "repo_url": repo_url,
+                    "branch": repo_ref,
+                    "latest_commit_sha": latest_commit_sha,
+                    "cache_schema_version": 2,
+                    "indexer_version": "1.0.0",
+                    "last_accessed_at": time.time()
+                }, f)
+                
             logger.info("index_clone - success repo_id=%s target=%s", repo_id, target)
         except Exception as exc:
             detail = self._format_process_error(exc, "Repository preparation failed")
@@ -248,15 +317,8 @@ class IndexingService:
             if not rel_path:
                 continue
             file_path = repo_root / rel_path
-            if not file_path.is_file():
-                continue
-            if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
-                continue
-            if self._is_low_signal_file(file_path, repo_root):
-                continue
-            if file_path.stat().st_size > settings.max_index_file_size_bytes:
-                continue
-            yield file_path
+            if file_path.is_file():
+                yield file_path
 
     def _load_gitignore_spec(self, repo_root: Path) -> PathSpec:
         gitignore_path = repo_root / ".gitignore"
@@ -296,13 +358,7 @@ class IndexingService:
 
             for filename in filenames:
                 file_path = current_dir / filename
-                if self._is_ignored(spec, repo_root, file_path):
-                    continue
-                if file_path.suffix.lower() in self.SUPPORTED_SUFFIXES:
-                    if self._is_low_signal_file(file_path, repo_root):
-                        continue
-                    if file_path.stat().st_size > settings.max_index_file_size_bytes:
-                        continue
+                if not self._is_ignored(spec, repo_root, file_path):
                     yield file_path
 
     def _get_previous_completed_commit(self, repository_id: str) -> str | None:
@@ -387,12 +443,6 @@ class IndexingService:
                 continue
             if self._is_ignored(spec, repo_root, file_path):
                 continue
-            if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
-                continue
-            if self._is_low_signal_file(file_path, repo_root):
-                continue
-            if file_path.stat().st_size > settings.max_index_file_size_bytes:
-                continue
             files.append(file_path)
         return files
 
@@ -441,37 +491,26 @@ class IndexingService:
                     await asyncio.sleep(wait_time)
 
     async def _delete_all_repository_chunks(self, repository_id: str) -> None:
-        """Delete all code chunks for a repository from both Qdrant and PostgreSQL.
-        H4 Fix: Use transactional pattern - Qdrant first with retry, then DB deletion.
-        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
+        """Mark all active code chunks for a repository as OBSOLETE in the database.
+        Never physically delete them to preserve auditability.
         """
-        # Phase 3 FIX: Ensure collection exists before deletion to avoid 404 errors
-        try:
-            self.qdrant.ensure_collection()
-        except Exception as exc:
-            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
-            # Continue anyway - if collection doesn't exist, there's nothing to delete
-        
-        # H4: Delete from Qdrant FIRST with retry logic
-        # If Qdrant fails, exception is raised and DB deletion never happens
-        await self._delete_qdrant_with_retry(
-            f"repository_purge({repository_id})",
-            self.qdrant.delete_points_by_repository,
-            repository_id,
-        )
-        
-        # H4: Only delete from DB if Qdrant succeeded
         try:
             self.session.execute(
-                text("DELETE FROM code_chunks WHERE repository_id = :repository_id"),
+                text(
+                    """
+                    UPDATE code_chunks
+                    SET status = 'OBSOLETE', obsolete_at = CURRENT_TIMESTAMP
+                    WHERE repository_id = :repository_id AND status = 'ACTIVE'
+                    """
+                ),
                 {"repository_id": repository_id},
             )
             self.session.commit()
-            logger.info("index_delete_db_success - repository_id=%s", repository_id)
+            logger.info("index_obsolete_db_success - repository_id=%s", repository_id)
         except Exception as exc:
             self.session.rollback()
-            logger.error("index_delete_db_failed - repository_id=%s error=%s", repository_id, str(exc))
-            raise DatabaseException("Failed to delete repository chunks from database") from exc
+            logger.error("index_obsolete_db_failed - repository_id=%s error=%s", repository_id, str(exc))
+            raise DatabaseException("Failed to transition repository chunks to OBSOLETE") from exc
 
     async def _delete_repository_chunks_for_paths(
         self,
@@ -479,24 +518,18 @@ class IndexingService:
         repo_root: Path,
         relative_paths: set[str],
     ) -> None:
-        """Delete code chunks for specific paths in a repository.
-        H4 Fix: Two-phase commit - collect IDs, delete from Qdrant with retry, then from DB.
-        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
+        """Mark code chunks for specific paths as OBSOLETE.
+        Never physically delete them to preserve auditability.
         """
         if not relative_paths:
             return
 
-        # Phase 3 FIX: Ensure collection exists before any Qdrant operations
-        try:
-            self.qdrant.ensure_collection()
-        except Exception as exc:
-            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
-            # Continue anyway - if collection doesn't exist, there's nothing to delete
-
         stmt = text(
             """
-            DELETE FROM code_chunks
+            UPDATE code_chunks
+            SET status = 'OBSOLETE', obsolete_at = CURRENT_TIMESTAMP
             WHERE repository_id = :repository_id
+              AND status = 'ACTIVE'
               AND (
                 path = :abs_path
                 OR path = :rel_path
@@ -505,63 +538,7 @@ class IndexingService:
               )
             """
         )
-        query_ids_stmt = text(
-            """
-            SELECT id
-            FROM code_chunks
-            WHERE repository_id = :repository_id
-              AND (
-                path = :abs_path
-                OR path = :rel_path
-                OR path LIKE :unix_suffix
-                OR path LIKE :win_suffix
-              )
-            """
-        )
-        point_ids: set[str] = set()
 
-        try:
-            # H4: PHASE 1 - Collect IDs to delete
-            for rel in sorted(relative_paths):
-                normalized_rel = rel.replace("\\", "/").lstrip("/")
-                if not normalized_rel:
-                    continue
-
-                abs_path = str((repo_root / normalized_rel).resolve())
-                windows_rel = normalized_rel.replace("/", "\\")
-                params = {
-                    "repository_id": repository_id,
-                    "abs_path": abs_path,
-                    "rel_path": normalized_rel,
-                    "unix_suffix": f"%/{normalized_rel}",
-                    "win_suffix": f"%\\{windows_rel}",
-                }
-
-                id_rows = self.session.execute(query_ids_stmt, params).mappings().all()
-                for row in id_rows:
-                    chunk_id = str(row.get("id") or "").strip()
-                    if chunk_id:
-                        point_ids.add(chunk_id)
-
-        except Exception as exc:
-            self.session.rollback()
-            logger.error(
-                "index_delete_collect_ids_failed - repository_id=%s count=%s error=%s",
-                repository_id,
-                len(relative_paths),
-                str(exc),
-            )
-            raise DatabaseException("Failed to collect chunk IDs for deletion") from exc
-
-        # H4: PHASE 2 - Delete from Qdrant FIRST with retry
-        if point_ids:
-            await self._delete_qdrant_with_retry(
-                f"path_purge(repo={repository_id}, count={len(point_ids)})",
-                self.qdrant.delete_points_by_ids,
-                list(point_ids),
-            )
-
-        # H4: PHASE 3 - Delete from DB only if Qdrant succeeded
         try:
             for rel in sorted(relative_paths):
                 normalized_rel = rel.replace("\\", "/").lstrip("/")
@@ -582,20 +559,19 @@ class IndexingService:
 
             self.session.commit()
             logger.info(
-                "index_delete_db_success - repository_id=%s path_count=%s point_count=%s",
+                "index_obsolete_db_success - repository_id=%s path_count=%s",
                 repository_id,
                 len(relative_paths),
-                len(point_ids),
             )
         except Exception as exc:
             self.session.rollback()
             logger.error(
-                "index_delete_db_failed - repository_id=%s path_count=%s error=%s",
+                "index_obsolete_db_failed - repository_id=%s path_count=%s error=%s",
                 repository_id,
                 len(relative_paths),
                 str(exc),
             )
-            raise DatabaseException("Failed to delete chunks for specific paths") from exc
+            raise DatabaseException("Failed to mark chunks as OBSOLETE for specific paths") from exc
 
     async def _update_progress(
         self,
@@ -709,6 +685,25 @@ class IndexingService:
         indexing_job_id: str | None = None,
         full_reindex: bool = False,
     ) -> int:
+        
+        # Acquire repository lock to prevent concurrent indexing of the same repo
+        lock_manager = get_cache_service().repository_lock(repository_id or repo_id, lock_timeout=3600)
+        with lock_manager:
+            return await self._index_repository_locked(
+                repo_id, repository_id, commit_sha, repo_path, repo_url, repo_ref, indexing_job_id, full_reindex
+            )
+
+    async def _index_repository_locked(
+        self,
+        repo_id: str,
+        repository_id: str | None,
+        commit_sha: str,
+        repo_path: str | None = None,
+        repo_url: str | None = None,
+        repo_ref: str | None = None,
+        indexing_job_id: str | None = None,
+        full_reindex: bool = False,
+    ) -> int:
         logger.info(
             "index_repository - start repo_id=%s repository_id=%s commit_sha=%s",
             repo_id,
@@ -716,7 +711,13 @@ class IndexingService:
             commit_sha,
         )
         logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
-        root = await self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
+        root = await self._resolve_repo_root(
+            repo_id, 
+            repo_path=repo_path, 
+            repo_url=repo_url, 
+            repo_ref=repo_ref, 
+            repository_id=repository_id
+        )
         cleanup_cached_repo = bool(repo_url and not repo_path)
         started_at = time.perf_counter()
         self._active_indexing_job_id = indexing_job_id
@@ -789,12 +790,26 @@ class IndexingService:
                     mode_reason = "non-commit indexing request"
 
             total_files = len(file_list)
+            
+            # --- Persist file records and get incremental chunk list ---
+            if repository_id:
+                self._files_indexed, files_to_chunk = await upsert_file_records(
+                    self.session,
+                    repository_id=repository_id,
+                    repo_root=root,
+                    commit_sha=commit_sha,
+                    file_list=file_list,
+                )
+                self._files_skipped = total_files - len(files_to_chunk)
+                file_list = files_to_chunk
+                
             self._active_total_files = total_files
             logger.info(
-                "index_repository - files discovered repo_id=%s mode=%s total_files=%s reason=%s",
+                "index_repository - files discovered repo_id=%s mode=%s total_files=%s chunks_to_process=%s reason=%s",
                 repo_id,
                 indexing_mode,
                 total_files,
+                len(file_list),
                 mode_reason,
             )
             logger.info(
@@ -954,6 +969,18 @@ class IndexingService:
                 len(chunks),
             )
             logger.info("indexing_success - repo_id=%s repository_id=%s chunks=%s", repo_id, repository_id, len(chunks))
+
+            # --- Create snapshot ---
+            if repository_id:
+                await create_snapshot(
+                    self.session,
+                    repository_id=repository_id,
+                    commit_sha=commit_sha,
+                    files_count=self._files_indexed,
+                    files_skipped=self._files_skipped,
+                    chunks_count=len(chunks),
+                )
+
             return len(chunks)
         except Exception as exc:
             logger.exception(
@@ -964,21 +991,30 @@ class IndexingService:
             )
             raise
         finally:
-            if cleanup_cached_repo and root.exists():
+            # Respect persistent cache setting: only delete remote clones when
+            # repo_cache_persist is False (e.g. CI environments)
+            should_delete = cleanup_cached_repo and not settings.repo_cache_persist
+            if should_delete and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
             self._active_indexing_job_id = None
             self._active_total_files = None
             self._active_started_at_perf = None
             self._active_repository_id = None
+            self._files_indexed = 0
+            self._files_skipped = 0
+            self._chunks_created = 0
+            self._index_errors = []
             logger.debug("index_repository - cleanup complete repo_id=%s", repo_id)
 
     def _assign_repository_ids_and_chunk_ids(self, repository_id: str, chunks: list[CodeChunk]) -> None:
         for chunk in chunks:
             chunk.repository_id = repository_id
-            content_hash = hashlib.sha256((chunk.content or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+            full_content_hash = hashlib.sha256((chunk.content or "").encode("utf-8", errors="ignore")).hexdigest()
+            chunk.content_hash = full_content_hash
+            short_hash = full_content_hash[:16]
             raw_key = (
                 f"{repository_id}|{chunk.commit_sha}|{chunk.path}|{chunk.symbol}|{chunk.chunk_type}"
-                f"|{chunk.start_line}|{chunk.end_line}|{content_hash}"
+                f"|{chunk.start_line}|{chunk.end_line}|{short_hash}"
             )
             chunk.id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
@@ -1330,3 +1366,6 @@ class IndexingService:
                     settings.ollama_base_url,
                 )
 
+
+    # NEW: File record + snapshot helpers added in Phase 1
+    _PHASE1_MARKER = True

@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import MagicMock
 from app.services.indexing_service import IndexingService
 from app.core.exceptions import DatabaseException
 
@@ -20,40 +20,13 @@ async def test_delete_repository_chunks_for_paths_empty(indexing_service, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_delete_repository_chunks_for_paths_collect_ids_exception(indexing_service, tmp_path):
+async def test_delete_repository_chunks_for_paths_db_exception(indexing_service, tmp_path):
     repo_root = tmp_path
     
-    # Ensure qdrant doesn't blow up
-    indexing_service.qdrant.ensure_collection = MagicMock()
-    # Mock session.execute to raise Exception (collect ids phase)
+    # Mock session.execute to raise Exception
     indexing_service.session.execute.side_effect = Exception("DB error")
     
-    with pytest.raises(DatabaseException, match="Failed to collect chunk IDs for deletion"):
+    with pytest.raises(DatabaseException, match="Failed to mark chunks as OBSOLETE for specific paths"):
         await indexing_service._delete_repository_chunks_for_paths("test-repo", repo_root, {"file1.txt"})
         
-    indexing_service.session.rollback.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_delete_repository_chunks_for_paths_db_delete_exception(indexing_service, tmp_path):
-    repo_root = tmp_path
-    
-    # Mock collect IDs to succeed (returns rows with chunk IDs)
-    mock_result = MagicMock()
-    mock_result.mappings.return_value.all.return_value = [{"id": "chunk1"}]
-    
-    call_count = [0]
-    def mock_execute(stmt, params):
-        call_count[0] += 1
-        if "SELECT id" in str(stmt):
-            return mock_result
-        raise Exception("Delete error")
-        
-    indexing_service.session.execute.side_effect = mock_execute
-    indexing_service._delete_qdrant_with_retry = AsyncMock()
-    
-    with pytest.raises(DatabaseException, match="Failed to delete chunks for specific paths"):
-        await indexing_service._delete_repository_chunks_for_paths("test-repo", repo_root, {"file1.txt"})
-        
-    indexing_service._delete_qdrant_with_retry.assert_called_once()
     indexing_service.session.rollback.assert_called_once()
