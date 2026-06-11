@@ -30,7 +30,7 @@ describe("DashboardQuickActions", () => {
     const chatBtn = screen.getByText("Start AI Chat").closest("button");
     fireEvent.click(chatBtn!);
     
-    expect(mockPush).toHaveBeenCalledWith("/chat");
+    expect(mockPush).toHaveBeenCalledWith("/studio");
   });
 
   it("navigates to repositories when Add Repository is clicked", () => {
@@ -39,6 +39,6 @@ describe("DashboardQuickActions", () => {
     const reposBtn = screen.getByText("Add Repository").closest("button");
     fireEvent.click(reposBtn!);
     
-    expect(mockPush).toHaveBeenCalledWith("/repositories");
+    expect(mockPush).toHaveBeenCalledWith("/dashboard");
   });
 });

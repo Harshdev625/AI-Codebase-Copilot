@@ -1,11 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-import { isStudioEnabled } from "./src/lib/feature-flags";
-
 const AUTH_PATHS = ["/login", "/register"];
 const ADMIN_AUTH_PATHS = ["/admin/login", "/admin/register"];
-const USER_PATHS = ["/workspace", "/studio", "/dashboard"];
+const USER_PATHS = ["/studio", "/dashboard"];
 
 /**
  * Decode the JWT payload and return true if the token is valid and not expired.
@@ -89,15 +87,6 @@ export function middleware(request: NextRequest): NextResponse {
       response.cookies.delete("tm_role");
     }
     return response;
-  }
-
-  // Phase 0: /studio is auth-protected but redirects to /workspace when the flag is off.
-  if (pathname === "/studio" || pathname.startsWith("/studio/")) {
-    if (!isStudioEnabled()) {
-      const redirectUrl = new URL("/workspace", request.url);
-      redirectUrl.search = request.nextUrl.search;
-      return NextResponse.redirect(redirectUrl);
-    }
   }
 
   return NextResponse.next();

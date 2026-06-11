@@ -9,8 +9,8 @@ import { cn } from "@/lib/utils";
 interface AppShellProps {
   title: string;
   children: React.ReactNode;
-  /** fullBleed — no padding wrapper, used for Chat full-viewport layout */
-  variant?: "default" | "fullBleed" | "workspace";
+  /** studio — full-viewport layout without TopNavbar (used by /studio) */
+  variant?: "default" | "fullBleed" | "studio";
 }
 
 export function AppShell({ title, children, variant = "default" }: AppShellProps): React.JSX.Element {
@@ -33,7 +33,7 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
       {/* Main content area */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
         {/* Top Navigation */}
-        {variant !== "workspace" && <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />}
+        {variant !== "studio" && <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />}
 
         {/* Page content */}
         <main className={cn("flex-1 overflow-auto scroll-smooth custom-scrollbar", variant === "default" && "p-0")}>

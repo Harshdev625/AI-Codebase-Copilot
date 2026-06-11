@@ -2,10 +2,10 @@
 
 import * as React from "react";
 
-import { BackgroundTasksPanel } from "@/features/workspace/components/background-tasks-panel";
-import { PatchListPanel } from "@/features/workspace/components/patch-list-panel";
-import { SearchPanel } from "@/features/workspace/components/search-panel";
-import { SettingsPanel } from "@/features/workspace/components/settings-panel";
+import { BackgroundTasksPanel } from "@/features/studio/panels/background-tasks-panel";
+import { PatchListPanel } from "@/features/studio/panels/patch-list-panel";
+import { SearchPanel } from "@/features/studio/panels/search-panel";
+import { SettingsPanel } from "@/features/studio/panels/settings-panel";
 import { SnapshotTimeline } from "@/features/repositories/components/snapshot-timeline";
 
 import { useStudioStore } from "../store/studio-store";

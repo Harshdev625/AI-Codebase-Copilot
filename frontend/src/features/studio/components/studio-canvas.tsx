@@ -18,7 +18,7 @@ interface StudioCanvasProps {
 /**
  * Studio canvas — Mode router for all four canvas modes.
  *
- * chat         — Full AI chat workspace (Phase 1+)
+ * chat         — Full AI chat surface (default)
  * editor       — Monaco file viewer, triggered from Explorer / Search (Phase 3)
  * diff         — Standalone diff view; falls back to patch-review when a patch
  *                is active, otherwise renders an empty state (Phase 3)

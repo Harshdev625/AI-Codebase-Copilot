@@ -1,13 +1,13 @@
 'use client';
 
 import React from 'react';
-import { useWorkspaceStore } from '../store/workspace-store';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 import { Activity, CheckCircle, FileCode2, Blocks, GitBranch, GitCommit, Loader2 } from 'lucide-react';
 import { useRepositoryInsights, useIndexingJobs, useRepositories } from '@/features/repositories/hooks/use-repositories';
 import { cn } from '@/lib/utils';
 
 export function StatusBar() {
-  const { selectedRepositoryId } = useWorkspaceStore();
+  const { selectedRepositoryId } = useStudioStore();
   const { repositories } = useRepositories();
   const selectedRepository = repositories.find(r => r.id === selectedRepositoryId);
 

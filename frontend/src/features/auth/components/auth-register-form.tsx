@@ -111,7 +111,7 @@ export function AuthenticationRegisterForm() {
       <motion.div variants={itemVariants} className="space-y-2 text-center sm:text-left">
         <h1 className="text-3xl font-display font-semibold tracking-tight text-foreground">Create Account</h1>
         <p className="text-sm text-muted-foreground font-light">
-          Build your workspace and start indexing immediately.
+          Create your account and start indexing immediately.
         </p>
       </motion.div>
 
@@ -297,7 +297,7 @@ export function AuthenticationRegisterForm() {
                 </>
               ) : (
                 <>
-                  Create Workspace Account
+                  Create Studio Account
                   <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
                 </>
               )}

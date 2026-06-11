@@ -7,10 +7,9 @@ import { PageTransition } from '@/components/layout/page-transition';
 
 export default function UserLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isFullViewportRoute =
-    pathname.startsWith('/workspace') || pathname.startsWith('/studio');
+  const isFullViewportRoute = pathname.startsWith('/studio');
 
-  const variant = isFullViewportRoute ? "workspace" : "default";
+  const variant = isFullViewportRoute ? "studio" : "default";
 
   return (
     <AppShell title="AI Codebase Copilot" variant={variant}>

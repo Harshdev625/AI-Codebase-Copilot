@@ -3,21 +3,15 @@
 import * as React from "react";
 import { GitBranch } from "lucide-react";
 
-import { PatchReviewEditor } from "@/features/workspace/components/patch-review-editor";
+import { PatchReviewEditor } from "@/features/studio/panels/patch-review-editor";
 
 import { useStudioStore } from "../store/studio-store";
 import { StudioCanvasEmptyState } from "./studio-canvas-editor";
 
 /**
- * Phase 3 — Patch-review canvas mode.
- *
- * Activated when canvasMode === 'patch-review'.
- * Reads activePatchId from the studio store (proxied from useWorkspaceStore).
- * Renders the existing PatchReviewEditor with an onClose override so that
- * closing/deleting a patch returns to 'chat' mode instead of calling closeTab.
- *
- * /workspace is not affected — PatchReviewEditor's onClose is optional and
- * defaults to the original closeTab behaviour when not provided.
+ * Patch-review canvas mode (canvasMode === 'patch-review').
+ * Reads activePatchId from useStudioStore and renders PatchReviewEditor.
+ * Closing returns to chat mode via setCanvasMode('chat').
  */
 export function StudioCanvasPatchReview() {
   const { activePatchId, setActivePatchId, setCanvasMode } = useStudioStore();

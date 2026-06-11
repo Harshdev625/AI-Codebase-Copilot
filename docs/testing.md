@@ -109,30 +109,29 @@ Configured in `frontend/jest.config.js`:
 | Branches | 54% |
 | Functions | 63% |
 
-Studio, workspace shell, and several large UI modules are excluded from coverage collection until dedicated tests land. See `collectCoverageFrom` in `jest.config.js` for the full exclusion list.
+Studio shell and panel modules under `features/studio/` are excluded from coverage collection until dedicated tests land. See `collectCoverageFrom` in `jest.config.js` for the full exclusion list.
 
 ### Test layout
 
 ```
 frontend/tests/
-├── unit/                    # 34 suites — hooks, services, components, stores
+├── unit/                    # hooks, services, components, stores
 │   ├── chat-service.test.ts
-│   ├── chat-workspace.test.tsx
+│   ├── studio-canvas-chat.test.tsx
 │   ├── studio-store.test.ts
-│   ├── feature-flags.test.ts
 │   └── ...
 ├── integration/             # Auth and admin page flows
 │   ├── auth-pages.test.tsx
 │   └── admin-page.test.tsx
 ├── e2e/                     # Playwright (not wired to npm scripts yet)
-│   └── engineering_workspace.spec.ts
+│   └── engineering_studio.spec.ts
 └── __mocks__/               # Monaco, markdown, diff-viewer mocks
 ```
 
 ### Run a single test file
 
 ```bash
-npm test -- tests/unit/chat-shell.test.tsx
+npm test -- tests/unit/studio-canvas-chat.test.tsx
 ```
 
 ### Type check and lint
@@ -144,10 +143,10 @@ npm run lint
 
 ### Playwright E2E (manual)
 
-A Playwright spec exists at `tests/e2e/engineering_workspace.spec.ts` but there is no `npm run test:e2e` script yet. Run Playwright directly when the dev server is up:
+A Playwright spec exists at `tests/e2e/engineering_studio.spec.ts` but there is no `npm run test:e2e` script yet. Run Playwright directly when the dev server is up:
 
 ```bash
-npx playwright test tests/e2e/engineering_workspace.spec.ts
+npx playwright test tests/e2e/engineering_studio.spec.ts
 ```
 
 ---
@@ -159,7 +158,7 @@ Use this before merging large UI or ACT-mode changes:
 ### Authentication
 
 - [ ] Register a user at `/register` and sign in at `/login`
-- [ ] Confirm protected routes (`/dashboard`, `/workspace`, `/studio`) redirect when logged out
+- [ ] Confirm protected routes (`/dashboard`, `/studio`) redirect when logged out
 - [ ] Create an admin via `/admin/register` (requires `ADMIN_REGISTRATION_SECRET_KEY`)
 
 ### Repository & indexing
@@ -168,9 +167,9 @@ Use this before merging large UI or ACT-mode changes:
 - [ ] Trigger indexing and confirm progress updates (`POST /v1/index`)
 - [ ] File tree populates after indexing completes
 
-### Studio / workspace
+### Studio
 
-- [ ] With `NEXT_PUBLIC_STUDIO_ENABLED=true`, `/studio` loads the 4-region layout
+- [ ] `/studio` loads the 4-region layout
 - [ ] Explorer opens files in the Monaco editor canvas
 - [ ] Session sidebar lists, pins, and archives sessions
 

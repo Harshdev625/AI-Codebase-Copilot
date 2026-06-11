@@ -69,7 +69,7 @@ describe("RegisterPage", () => {
   it("renders registration controls", () => {
     renderWithProviders(<RegisterPage />);
     expect(screen.getByText("Create Account")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /create workspace account/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create studio account/i })).toBeInTheDocument();
   });
 
   it("calls register on submit", () => {
@@ -80,7 +80,7 @@ describe("RegisterPage", () => {
     fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "Password1!" } });
     fireEvent.change(screen.getByPlaceholderText("Repeat password"), { target: { value: "Password1!" } });
 
-    fireEvent.submit(screen.getByRole("button", { name: /create workspace account/i }).closest("form")!);
+    fireEvent.submit(screen.getByRole("button", { name: /create studio account/i }).closest("form")!);
 
     expect(mockRegister).toHaveBeenCalledWith({
       email: "user@example.com",

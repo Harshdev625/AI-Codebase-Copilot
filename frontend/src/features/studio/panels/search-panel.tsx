@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useWorkspaceStore } from '../store/workspace-store';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 import { useRepositoryRetrieveMutation, useRepositories } from '@/features/repositories/hooks/use-repositories';
 import { Search, Loader2, FileCode, SearchX, Code2, Text } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -10,19 +10,23 @@ interface SearchPanelProps {
   /**
    * Optional result-click handler override.
    * When provided (e.g. in Studio canvas), called with file path, content, and
-   * start line instead of opening a workspace tab. Content is fetched from the
+   * start line in the editor canvas. Content is fetched from the
    * API first (same as the default flow) and then forwarded to the callback.
    */
   onResultClick?: (path: string, content: string, initialLine?: number) => void;
 }
 
 export function SearchPanel({ onResultClick }: SearchPanelProps = {}) {
-  const { 
-    selectedRepositoryId, openTab, 
-    searchQuery: query, setSearchQuery: setQuery, 
-    searchResults: results, setSearchResults: setResults, 
-    hasSearched, setHasSearched 
-  } = useWorkspaceStore();
+  const {
+    selectedRepositoryId,
+    openFileInEditor,
+    searchQuery: query,
+    setSearchQuery: setQuery,
+    searchResults: results,
+    setSearchResults: setResults,
+    hasSearched,
+    setHasSearched,
+  } = useStudioStore();
   const { repositories } = useRepositories();
   const selectedRepository = repositories.find(r => r.id === selectedRepositoryId);
   
@@ -54,28 +58,14 @@ export function SearchPanel({ onResultClick }: SearchPanelProps = {}) {
         return;
       }
 
-      openTab({
-        id: `file-${selectedRepository?.id}-${item.path}`,
-        type: 'code',
-        title: item.path.split('/').pop() || item.path,
-        filePath: item.path,
-        content: content,
-        initialLine: item.start_line
-      });
+      openFileInEditor(item.path, item.start_line);
     } catch (err) {
       console.error(err);
       if (onResultClick) {
         onResultClick(item.path, item.content, item.start_line);
         return;
       }
-      openTab({
-        id: `file-${selectedRepository?.id}-${item.path}`,
-        type: 'code',
-        title: item.path.split('/').pop() || item.path,
-        filePath: item.path,
-        content: item.content,
-        initialLine: item.start_line
-      });
+      openFileInEditor(item.path, item.start_line);
     }
   };
 
@@ -90,7 +80,7 @@ export function SearchPanel({ onResultClick }: SearchPanelProps = {}) {
   return (
     <div className="flex flex-col h-full bg-background">
       <div className="p-4 border-b space-y-3 shrink-0 bg-surface">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Workspace Search</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Code Search</h2>
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-2 h-4 w-4 text-muted-foreground" />

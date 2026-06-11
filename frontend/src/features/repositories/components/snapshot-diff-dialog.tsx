@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { useSnapshotDiff } from "../hooks/use-repositories";
 import { repositoryService } from "../services/repository-service";
-import { MonacoDiffViewer } from "@/features/workspace/components/monaco-diff-viewer";
+import { MonacoDiffViewer } from "@/features/studio/panels/monaco-diff-viewer";
 import { Loader2, Plus, Minus, FileEdit, ArrowRightLeft, ArrowLeft, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 

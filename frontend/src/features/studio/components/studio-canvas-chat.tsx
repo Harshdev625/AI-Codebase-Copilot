@@ -28,10 +28,7 @@ interface StudioCanvasChatProps {
   isRepositoriesLoading?: boolean;
 }
 
-/**
- * Studio canvas chat mode.
- * Phase 1: Extracted chat functionality from ChatWorkspace, adapted for studio store.
- */
+/** Studio canvas chat mode — primary chat surface for /studio. */
 export function StudioCanvasChat({
   repositoryId,
   repositories = [],

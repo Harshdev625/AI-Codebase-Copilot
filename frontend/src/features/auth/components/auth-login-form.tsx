@@ -55,7 +55,7 @@ export function AuthenticationLoginForm() {
           Welcome back
         </h1>
         <p className="text-sm text-muted-foreground font-light">
-          Continue your build with a focused workspace.
+          Continue your build in Copilot Studio.
         </p>
       </motion.div>
 
@@ -170,7 +170,7 @@ export function AuthenticationLoginForm() {
                 </>
               ) : (
                 <>
-                  Sign In to Workspace
+                  Sign In to Studio
                   <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
                 </>
               )}

@@ -109,7 +109,7 @@ class ConflictService:
             else:
                 # MODIFIED or DELETED: before hash must match current state
                 expected_before = pf.content_hash_before
-                # Match disk first (since disk represents the actual workspace), then DB
+                # Match disk first (on-disk repo copy), then DB
                 actual_hash = disk_hash if disk_hash is not None else db_hash
                 if actual_hash != expected_before:
                     logger.warning(

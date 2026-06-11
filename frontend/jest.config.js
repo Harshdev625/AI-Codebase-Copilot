@@ -19,7 +19,6 @@ const customJestConfig = {
     "!**/src/app/layout.tsx",
     "!src/components/ui/**/*.{ts,tsx}",
     "!src/features/studio/**",
-    "!src/features/workspace/**",
     "!src/features/explorer/**",
     "!src/features/repositories/components/**",
     "!src/features/repositories/hooks/**",
@@ -43,7 +42,6 @@ const customJestConfig = {
     }
   },
   moduleNameMapper: {
-    "^@/components/chat-shell$": "<rootDir>/src/features/chat/components/chat-workspace.tsx",
     "^react-syntax-highlighter(.*)$": "<rootDir>/tests/__mocks__/react-syntax-highlighter.tsx",
     "^react-diff-viewer-continued$": "<rootDir>/tests/__mocks__/react-diff-viewer-continued.tsx",
     "^react-markdown$": "<rootDir>/tests/__mocks__/react-markdown.tsx",

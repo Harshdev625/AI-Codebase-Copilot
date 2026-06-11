@@ -5,7 +5,7 @@ import { ArrowLeft, Loader2, FileCode2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { repositoryService } from "@/features/repositories/services/repository-service";
-import { MonacoViewer } from "@/features/workspace/components/monaco-viewer";
+import { MonacoViewer } from "@/features/studio/panels/monaco-viewer";
 
 import { useStudioStore } from "../store/studio-store";
 

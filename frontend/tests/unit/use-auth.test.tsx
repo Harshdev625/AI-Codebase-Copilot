@@ -54,7 +54,7 @@ describe("use-auth hook", () => {
     expect(state.token).toBe("token-123");
     expect(state.isAuthenticated).toBe(true);
     
-    expect(mockReplace).toHaveBeenCalledWith("/dashboard");
+    expect(mockReplace).toHaveBeenCalledWith("/studio");
   });
 
   it("handles login mutation and redirects to admin dashboard (ADMIN role)", async () => {

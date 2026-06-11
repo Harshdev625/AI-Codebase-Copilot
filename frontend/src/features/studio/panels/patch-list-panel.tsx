@@ -1,5 +1,5 @@
 import React from 'react';
-import { useWorkspaceStore } from '../store/workspace-store';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 import { usePatches, useDeletePatchMutation, useApplyPatchMutation, useValidatePatchMutation } from '@/features/repositories/hooks/use-repositories';
 import { GitPullRequestDraft, Trash2, PlayCircle, CheckCircle2, XCircle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -10,14 +10,13 @@ interface PatchListPanelProps {
   /**
    * Optional click handler override.
    * When provided (e.g. in Studio canvas), called with the patch ID instead of
-   * opening a workspace tab — allowing canvas-mode navigation without touching
-   * the workspace openTab flow.
+   * opening patch-review canvas mode via useStudioStore.
    */
   onPatchClick?: (patchId: string) => void;
 }
 
 export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
-  const { selectedRepositoryId, openTab } = useWorkspaceStore();
+  const { selectedRepositoryId, setActivePatchId, setCanvasMode } = useStudioStore();
   const { data: patches, isLoading } = usePatches(selectedRepositoryId || '');
 
   if (!selectedRepositoryId) {
@@ -55,12 +54,8 @@ export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
             if (onPatchClick) {
               onPatchClick(patch.id);
             } else {
-              openTab({
-                id: `patch-${patch.id}`,
-                type: 'patch-review' as any,
-                title: `Patch ${patch.id.split('-')[0]}`,
-                content: patch.id,
-              });
+              setActivePatchId(patch.id);
+              setCanvasMode('patch-review');
             }
           }}
         />

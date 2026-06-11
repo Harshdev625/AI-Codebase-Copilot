@@ -1,6 +1,6 @@
 # AI Codebase Copilot
 
-An open-source, self-hosted AI engineering workspace for exploring, understanding, and modifying large codebases using local LLMs.
+An open-source, self-hosted AI engineering studio for exploring, understanding, and modifying large codebases using local LLMs.
 
 ---
 
@@ -97,7 +97,6 @@ See [docs/deployment.md](deployment.md) for full production deployment.
 | `NEXT_PUBLIC_API_URL` | Yes | — | Backend API base URL (must include `/v1`, e.g. `http://localhost:8000/v1`) |
 | `NEXT_PUBLIC_API_BASE_URL` | No | — | Alias for `NEXT_PUBLIC_API_URL`; used by `getFrontendApiBase()` |
 | `API_INTERNAL_URL` | No | — | Server-side API URL (SSR); defaults to `NEXT_PUBLIC_API_URL` |
-| `NEXT_PUBLIC_STUDIO_ENABLED` | No | `false` | Enable Unified Copilot Studio (`true` / `True`) |
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## 1. High-Level Architecture
 
-AI Codebase Copilot is a self-hosted, local-first AI engineering workspace. It enables developers to index codebases into a vector store, then query, reason about, and modify code through an AI chat interface with ACT (code patch) capabilities.
+AI Codebase Copilot is a self-hosted, local-first AI engineering studio. It enables developers to index codebases into a vector store, then query, reason about, and modify code through an AI chat interface with ACT (code patch) capabilities.
 
 The system is split into four primary tiers:
 
@@ -44,8 +44,7 @@ graph TD
   /register          → User registration
 /(user)/
   /dashboard         → Overview: stats, repo list, quick actions
-  /workspace         → Classic workspace (legacy; preserved)
-  /studio            → Unified Copilot Studio (feature-flagged)
+  /studio            → Unified Copilot Studio (canonical app shell)
 /admin/
   /login             → Admin sign in
   /register          → Admin registration (requires ADMIN_REGISTRATION_SECRET_KEY)
@@ -84,17 +83,8 @@ The Studio uses a **4-region layout**:
 | Store | Purpose |
 |---|---|
 | `useAuthStore` (Zustand) | JWT token, user profile, logout |
-| `useWorkspaceStore` (Zustand + persist) | Tabs, active session/repo, sidebar panel |
-| `useStudioStore` (composite) | Wraps WorkspaceStore + studio-specific state (canvas mode, secondary panel, active file) |
+| `useStudioStore` (Zustand + persist) | Repository/session selection, search state, canvas mode, secondary panel, active file/patch |
 | TanStack React Query | All server state: repos, sessions, messages, patches, snapshots |
-
-### Feature Flags
-
-```
-NEXT_PUBLIC_STUDIO_ENABLED=true   → Enables /studio route, redirects post-login to /studio
-```
-
-The canonical check is `isStudioEnabled()` from `src/lib/feature-flags.ts`. Never read `process.env.NEXT_PUBLIC_STUDIO_ENABLED` directly.
 
 ---
 

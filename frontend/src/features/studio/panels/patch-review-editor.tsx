@@ -1,5 +1,5 @@
 import React from 'react';
-import { useWorkspaceStore } from '../store/workspace-store';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 import { usePatch, useValidatePatchMutation, useApplyPatchMutation, useDeletePatchMutation } from '@/features/repositories/hooks/use-repositories';
 import { Button } from '@/components/ui/button';
 import { Loader2, PlayCircle, CheckCircle2, XCircle, AlertCircle, RefreshCw, Trash2, GitCommit, FileCode2, AlertTriangle } from 'lucide-react';
@@ -45,10 +45,19 @@ export function PatchReviewEditor({
   onClose,
 }: {
   patchId: string;
-  /** Optional close handler. When provided, used instead of closeTab (e.g. in Studio canvas). */
+  /** Optional close handler. When provided, used instead of default canvas navigation. */
   onClose?: () => void;
 }) {
-  const { selectedRepositoryId, closeTab } = useWorkspaceStore();
+  const { selectedRepositoryId, setActivePatchId, setCanvasMode } = useStudioStore();
+
+  const handleClose = () => {
+    if (onClose) {
+      onClose();
+    } else {
+      setActivePatchId(null);
+      setCanvasMode('chat');
+    }
+  };
   const repoId = selectedRepositoryId || '';
   const { data: patch, isLoading } = usePatch(repoId, patchId);
   const validateMutation = useValidatePatchMutation(repoId);
@@ -86,11 +95,7 @@ export function PatchReviewEditor({
   const handleDelete  = () => {
     deleteMutation.mutate(patchId, {
       onSuccess: () => {
-        if (onClose) {
-          onClose();
-        } else {
-          closeTab(`patch-${patchId}`);
-        }
+        handleClose();
       },
     });
   };

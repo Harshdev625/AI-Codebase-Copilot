@@ -5,7 +5,6 @@ import { authService } from "@/features/auth/services/auth-service";
 import { useAuthStore } from "@/store/auth-store";
 import { useToast } from "@/components/shared/toast-provider";
 import { toApiError } from "@/core/api/errors";
-import { isStudioEnabled } from "@/lib/feature-flags";
 import type { LoginPayload, RegisterPayload } from "@/features/auth/types/auth-types";
 
 export const authKeys = {
@@ -30,7 +29,7 @@ export function useAuth() {
         if (role === "ADMIN") {
           router.replace("/admin/dashboard");
         } else {
-          router.replace(isStudioEnabled() ? "/studio" : "/dashboard");
+          router.replace("/studio");
         }
       },
     });

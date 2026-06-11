@@ -9,7 +9,6 @@ import {
   useIndexingJobs,
 } from '@/features/repositories/hooks/use-repositories';
 import { repositoryService } from '@/features/repositories/services/repository-service';
-import { isStudioEnabled } from '@/lib/feature-flags';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   GitBranch,
@@ -24,7 +23,7 @@ import {
 } from 'lucide-react';
 import { cn, formatDate } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { TaskCard } from '@/features/workspace/components/background-tasks-panel';
+import { TaskCard } from '@/features/studio/panels/background-tasks-panel';
 
 /* ── Status configuration ──────────────────────────────── */
 
@@ -152,8 +151,8 @@ export function DashboardRecentRepositories() {
     });
   };
 
-  const handleOpenWorkspace = (repoId: string) => {
-    const targetPath = isStudioEnabled() ? `/studio?repository_id=${repoId}` : `/workspace?repository_id=${repoId}`;
+  const handleOpenStudio = (repoId: string) => {
+    const targetPath = `/studio?repository_id=${repoId}`;
     router.push(targetPath);
   };
 
@@ -336,9 +335,9 @@ export function DashboardRecentRepositories() {
                       Re-index
                     </Button>
                     <button
-                      onClick={() => handleOpenWorkspace(repo.id)}
+                      onClick={() => handleOpenStudio(repo.id)}
                       className="h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 border border-transparent hover:border-primary/20 transition-all shrink-0"
-                      title="Open Workspace"
+                      title="Open Studio"
                     >
                       <ArrowUpRight className="h-4 w-4" />
                     </button>

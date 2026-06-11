@@ -1,5 +1,5 @@
 import React from 'react';
-import { useWorkspaceStore } from '../store/workspace-store';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 import { useIndexingJobs } from '@/features/repositories/hooks/use-repositories';
 import { Activity, CheckCircle2, Clock, PlayCircle, AlertCircle, XCircle, Search, FileCode, Database, Network, LucideIcon } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
@@ -7,7 +7,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 
 export function BackgroundTasksPanel() {
-  const { selectedRepositoryId } = useWorkspaceStore();
+  const { selectedRepositoryId } = useStudioStore();
   const { data: jobs, isLoading } = useIndexingJobs(selectedRepositoryId || undefined);
 
   if (!selectedRepositoryId) {

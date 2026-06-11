@@ -5,7 +5,6 @@ import Link from "next/link";
 import { LogOut, ChevronRight, Settings, Search, Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { Button } from "@/components/ui/button";
-import { isStudioEnabled } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
 
 interface TopNavbarProps {
@@ -15,7 +14,6 @@ interface TopNavbarProps {
 }
 
 export function TopNavbar({ sectionTitle, userEmail, onSignOut }: TopNavbarProps): React.JSX.Element {
-  const studioEnabled = isStudioEnabled();
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
   return (
@@ -57,14 +55,10 @@ export function TopNavbar({ sectionTitle, userEmail, onSignOut }: TopNavbarProps
                 <Link href="/dashboard" className="hover:text-foreground transition-colors shrink-0">
                   Dashboard
                 </Link>
-                {studioEnabled && (
-                  <>
-                    <ChevronRight className="w-3 h-3 text-muted-foreground/30 shrink-0" />
-                    <Link href="/studio" className="hover:text-foreground transition-colors shrink-0">
-                      Studio
-                    </Link>
-                  </>
-                )}
+                <ChevronRight className="w-3 h-3 text-muted-foreground/30 shrink-0" />
+                <Link href="/studio" className="hover:text-foreground transition-colors shrink-0">
+                  Studio
+                </Link>
                 <ChevronRight className="w-3 h-3 text-muted-foreground/30 shrink-0" />
                 <span className="text-foreground/80 font-semibold truncate max-w-[100px] sm:max-w-[180px] lg:max-w-[280px]">
                   {sectionTitle}
@@ -131,15 +125,13 @@ export function TopNavbar({ sectionTitle, userEmail, onSignOut }: TopNavbarProps
             >
               Dashboard
             </Link>
-            {studioEnabled && (
-              <Link
-                href="/studio"
-                className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onClick={() => setMobileOpen(false)}
-              >
-                Studio
-              </Link>
-            )}
+            <Link
+              href="/studio"
+              className="flex items-center gap-2 px-3 py-2.5 rounded-lg text-[13px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              onClick={() => setMobileOpen(false)}
+            >
+              Studio
+            </Link>
             {userEmail && (
               <div className="px-3 py-2 mt-1 border-t border-border/40">
                 <p className="text-[11px] text-muted-foreground truncate">{userEmail}</p>

@@ -1,54 +1,44 @@
 "use client";
 
-/**
- * Unified Copilot Studio store (Phase 1).
- *
- * Design: composite hook pattern.
- * - Shared state (repository selection, sessions, patches, search) lives in
- *   `useWorkspaceStore` so the dormant WorkspaceShell and `/workspace` route
- *   continue to work without modification.
- * - Studio-specific state (canvasMode, secondaryPanel, activeFilePath) lives in
- *   a small internal Zustand store.
- * - `useStudioStore` merges both into one object so callers have a single import.
- * - `useStudioStore.getState()` provides imperative access for command palette /
- *   hotkey handlers that run outside the React render cycle.
- *
- * Phase 5 will promote studio-store to the sole store and retire workspace-store.
- */
-
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 import { getStoredUser } from "@/lib/auth";
-import { useWorkspaceStore } from "@/features/workspace/store/workspace-store";
-import type { WorkspaceState } from "@/features/workspace/store/workspace-store";
 import type { CanvasMode, SecondaryPanel } from "../types/studio-types";
 
-// ---------------------------------------------------------------------------
-// Studio-specific slice (state that does NOT exist in workspace-store)
-// ---------------------------------------------------------------------------
+export interface StudioStoreState {
+  selectedRepositoryId: string | null;
+  setSelectedRepositoryId: (id: string | null) => void;
+  selectedSnapshotId: string | null;
+  setSelectedSnapshotId: (id: string | null) => void;
+  activePatchId: string | null;
+  setActivePatchId: (id: string | null) => void;
+  activeSessionId: string | null;
+  setActiveSessionId: (id: string | null) => void;
 
-interface StudioSpecificState {
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  searchResults: any[];
+  setSearchResults: (results: any[]) => void;
+  hasSearched: boolean;
+  setHasSearched: (hasSearched: boolean) => void;
+
   canvasMode: CanvasMode;
   secondaryPanel: SecondaryPanel;
   activeFilePath: string | null;
-  /** Line number to reveal & highlight when the editor canvas opens a file. */
   activeFileInitialLine: number | undefined;
-  /** Commit SHA to use when fetching historical file content (snapshot browsing). */
   activeFileCommitSha: string | undefined;
 
   setCanvasMode: (mode: CanvasMode) => void;
   setSecondaryPanel: (panel: SecondaryPanel) => void;
-  /** Toggle a secondary panel on/off (same panel → close; different panel → open). */
   toggleSecondaryPanel: (panel: NonNullable<SecondaryPanel>) => void;
   setActiveFilePath: (path: string | null) => void;
   setActiveFileInitialLine: (line: number | undefined) => void;
   setActiveFileCommitSha: (sha: string | undefined) => void;
-  /** Convenience: set file + optional jump-line + optional commit SHA + switch to editor mode in one call. */
   openFileInEditor: (path: string, initialLine?: number, commitSha?: string) => void;
 }
 
-const studioScopedStorage = {
+const userScopedStorage = {
   getItem: (name: string): string | null => {
     if (typeof window === "undefined") return null;
     const userId = getStoredUser()?.id ?? "guest";
@@ -66,9 +56,58 @@ const studioScopedStorage = {
   },
 };
 
-const useStudioSpecificStore = create<StudioSpecificState>()(
+function readLegacyPersistedState(): Partial<StudioStoreState> {
+  if (typeof window === "undefined") return {};
+
+  const userId = getStoredUser()?.id ?? "guest";
+  const merged: Partial<StudioStoreState> = {};
+
+  try {
+    const studioRaw = localStorage.getItem(`studio-specific-storage-${userId}`);
+    if (studioRaw) {
+      const parsed = JSON.parse(studioRaw);
+      const state = parsed?.state ?? parsed;
+      if (state.canvasMode != null) merged.canvasMode = state.canvasMode;
+      if (state.secondaryPanel !== undefined) merged.secondaryPanel = state.secondaryPanel;
+    }
+  } catch {
+    // ignore corrupt legacy storage
+  }
+
+  return merged;
+}
+
+const studioStoreBase = create<StudioStoreState>()(
   persist(
     (set) => ({
+      selectedRepositoryId: null,
+      setSelectedRepositoryId: (id) =>
+        set((state) => {
+          if (state.selectedRepositoryId === id) return {};
+          return {
+            selectedRepositoryId: id,
+            activeSessionId: null,
+            activePatchId: null,
+            selectedSnapshotId: null,
+            searchQuery: "",
+            searchResults: [],
+            hasSearched: false,
+          };
+        }),
+      selectedSnapshotId: null,
+      setSelectedSnapshotId: (id) => set({ selectedSnapshotId: id }),
+      activePatchId: null,
+      setActivePatchId: (id) => set({ activePatchId: id }),
+      activeSessionId: null,
+      setActiveSessionId: (id) => set({ activeSessionId: id }),
+
+      searchQuery: "",
+      setSearchQuery: (query) => set({ searchQuery: query }),
+      searchResults: [],
+      setSearchResults: (results) => set({ searchResults: results }),
+      hasSearched: false,
+      setHasSearched: (hasSearched) => set({ hasSearched }),
+
       canvasMode: "chat",
       secondaryPanel: null,
       activeFilePath: null,
@@ -85,51 +124,46 @@ const useStudioSpecificStore = create<StudioSpecificState>()(
       setActiveFileInitialLine: (line) => set({ activeFileInitialLine: line }),
       setActiveFileCommitSha: (sha) => set({ activeFileCommitSha: sha }),
       openFileInEditor: (path, initialLine, commitSha) =>
-        set({ activeFilePath: path, activeFileInitialLine: initialLine, activeFileCommitSha: commitSha, canvasMode: "editor" }),
+        set({
+          activeFilePath: path,
+          activeFileInitialLine: initialLine,
+          activeFileCommitSha: commitSha,
+          canvasMode: "editor",
+        }),
     }),
     {
-      name: "studio-specific-storage",
-      storage: createJSONStorage(() => studioScopedStorage),
+      name: "studio-storage",
+      storage: createJSONStorage(() => userScopedStorage),
       partialize: (state) => ({
+        selectedRepositoryId: state.selectedRepositoryId,
+        activeSessionId: state.activeSessionId,
         canvasMode: state.canvasMode,
         secondaryPanel: state.secondaryPanel,
       }),
+      onRehydrateStorage: () => (state, error) => {
+        if (error || !state) return;
+        const legacy = readLegacyPersistedState();
+        if (Object.keys(legacy).length === 0) return;
+        studioStoreBase.setState((current) => ({
+          ...current,
+          selectedRepositoryId: current.selectedRepositoryId ?? legacy.selectedRepositoryId ?? null,
+          activeSessionId: current.activeSessionId ?? legacy.activeSessionId ?? null,
+          canvasMode: legacy.canvasMode ?? current.canvasMode,
+          secondaryPanel: legacy.secondaryPanel ?? current.secondaryPanel,
+        }));
+      },
     }
   )
 );
 
-// ---------------------------------------------------------------------------
-// Combined type — workspace state + studio-specific state
-// ---------------------------------------------------------------------------
-
-export type StudioStoreState = WorkspaceState & StudioSpecificState;
-
-// ---------------------------------------------------------------------------
-// Composite hook — explicitly typed so TypeScript resolves the call signature
-// without widening to StudioSpecificState.
-// ---------------------------------------------------------------------------
-
-interface StudioStoreHook {
-  (): StudioStoreState;
-  /**
-   * Imperative getState — mirrors the Zustand `store.getState()` contract so
-   * hotkey handlers and command-palette actions can call
-   * `useStudioStore.getState().setSecondaryPanel(...)` outside the render cycle.
-   */
-  getState: () => StudioStoreState;
-}
-
-export const useStudioStore: StudioStoreHook = Object.assign(
-  function useStudioStoreImpl(): StudioStoreState {
-    const workspace = useWorkspaceStore();
-    const specific = useStudioSpecificStore();
-    return { ...workspace, ...specific };
+export const useStudioStore = Object.assign(
+  function useStudioStoreHook(): StudioStoreState {
+    return studioStoreBase();
   },
   {
-    getState: (): StudioStoreState => ({
-      ...useWorkspaceStore.getState(),
-      ...useStudioSpecificStore.getState(),
-    }),
+    getState: (): StudioStoreState => studioStoreBase.getState(),
+    setState: studioStoreBase.setState,
+    subscribe: studioStoreBase.subscribe,
   }
 );
 

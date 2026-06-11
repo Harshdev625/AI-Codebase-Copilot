@@ -96,7 +96,6 @@ REPO_CACHE_PERSIST=true
 ```env
 NEXT_PUBLIC_API_URL=https://api.your-domain.com/v1
 API_INTERNAL_URL=http://api:8000/v1
-NEXT_PUBLIC_STUDIO_ENABLED=true
 ```
 
 ### 2. Build and start all services

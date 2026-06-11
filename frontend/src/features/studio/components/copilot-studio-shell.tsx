@@ -5,7 +5,7 @@ import * as React from "react";
 import { ContextPanel } from "@/features/chat/components/context-panel";
 import { useChatSessions, useDeleteSessionMutation, useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
 import type { Repository } from "@/features/repositories/types/repository-types";
-import { StatusBar } from "@/features/workspace/components/status-bar";
+import { StatusBar } from "@/features/studio/panels/status-bar";
 
 import { useStudioStore } from "../store/studio-store";
 import { GlobalTopBar } from "./global-top-bar";

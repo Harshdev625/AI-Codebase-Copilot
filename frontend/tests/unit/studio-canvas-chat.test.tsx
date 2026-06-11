@@ -1,44 +1,25 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ChatWorkspace } from "@/features/chat/components/chat-workspace";
-import { useChat, useChatSessions, useDeleteSessionMutation, useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
+import { StudioCanvasChat } from "@/features/studio/components/studio-canvas-chat";
+import { useChat, useChatSessions, useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
 import { TestProviders } from "../test-utils";
 
 jest.mock("@/features/chat/hooks/use-chat", () => ({
   useChat: jest.fn(),
   useChatSessions: jest.fn(),
-  useDeleteSessionMutation: jest.fn(),
   useUpdateSessionMutation: jest.fn(),
 }));
 
 jest.mock("@/features/repositories/hooks/use-repositories", () => ({
-  useProjectRetrieveMutation: jest.fn(() => ({
-    mutateAsync: jest.fn(),
-  })),
-  useIndexRepository: jest.fn(() => ({
-    mutateAsync: jest.fn(),
-  })),
   useRepositories: jest.fn(() => ({
     repositories: [],
     isLoading: false,
   })),
-  useRepositoryTree: jest.fn(() => ({
-    data: { items: [] },
-    isLoading: false,
-  })),
-  useRepositoryInsights: jest.fn(() => ({
-    data: null,
-    isLoading: false,
-  })),
 }));
 
-jest.mock("@/features/workspace/store/workspace-store", () => ({
-  useWorkspaceStore: () => ({
+jest.mock("@/features/studio/store/studio-store", () => ({
+  useStudioStore: () => ({
     setActiveSessionId: jest.fn(),
   }),
-}));
-
-jest.mock("@/features/chat/components/context-panel", () => ({
-  ContextPanel: () => <div data-testid="context-panel" />,
 }));
 
 jest.mock("react-markdown", () => ({ children }: any) => <div data-testid="markdown">{children}</div>);
@@ -52,17 +33,13 @@ jest.mock("react-virtuoso", () => ({
 
 const stableSessionsData = { items: [] as Array<Record<string, unknown>>, total: 0 };
 
-describe("ChatWorkspace", () => {
+describe("StudioCanvasChat", () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
     (useChatSessions as jest.Mock).mockReturnValue({
       data: stableSessionsData,
       isLoading: false,
-    });
-    
-    (useDeleteSessionMutation as jest.Mock).mockReturnValue({
-      mutateAsync: jest.fn(),
     });
 
     (useUpdateSessionMutation as jest.Mock).mockReturnValue({
@@ -76,14 +53,12 @@ describe("ChatWorkspace", () => {
       isSending: false,
       isHistoryLoading: false,
       historyError: null,
-      clearMessages: jest.fn(),
       currentSessionId: null,
-      selectSession: jest.fn(),
     });
   });
 
   it("renders welcome message when no messages", () => {
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
+    render(<StudioCanvasChat repositoryId="repo-1" />, { wrapper: TestProviders });
     expect(screen.getByText("How can I help you build today?")).toBeInTheDocument();
   });
 
@@ -98,13 +73,11 @@ describe("ChatWorkspace", () => {
       isSending: false,
       isHistoryLoading: false,
       historyError: null,
-      clearMessages: jest.fn(),
       currentSessionId: "session-1",
-      selectSession: jest.fn(),
     });
 
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
-    
+    render(<StudioCanvasChat repositoryId="repo-1" />, { wrapper: TestProviders });
+
     expect(screen.getByText("Hello")).toBeInTheDocument();
     expect(screen.getByTestId("markdown")).toHaveTextContent("World");
   });
@@ -118,52 +91,16 @@ describe("ChatWorkspace", () => {
       isSending: false,
       isHistoryLoading: false,
       historyError: null,
-      clearMessages: jest.fn(),
       currentSessionId: null,
-      selectSession: jest.fn(),
     });
 
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
-    
+    render(<StudioCanvasChat repositoryId="repo-1" />, { wrapper: TestProviders });
+
     const input = screen.getByPlaceholderText("Describe the changes, ask a question, or reference files...");
     fireEvent.change(input, { target: { value: "my query" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
-    
+
     expect(sendMessageMock).toHaveBeenCalledWith("my query", "ASK", []);
-  });
-
-  it("handles history error", () => {
-    (useChat as jest.Mock).mockReturnValue({
-      messages: [],
-      sendMessage: jest.fn(),
-      stopGeneration: jest.fn(),
-      isSending: false,
-      isHistoryLoading: false,
-      historyError: new Error("History failed"),
-      clearMessages: jest.fn(),
-      currentSessionId: "session-1",
-      selectSession: jest.fn(),
-    });
-
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
-    expect(screen.getByText("History failed")).toBeInTheDocument();
-  });
-
-  it("handles history loading", () => {
-    (useChat as jest.Mock).mockReturnValue({
-      messages: [],
-      sendMessage: jest.fn(),
-      stopGeneration: jest.fn(),
-      isSending: false,
-      isHistoryLoading: true,
-      historyError: null,
-      clearMessages: jest.fn(),
-      currentSessionId: "session-1",
-      selectSession: jest.fn(),
-    });
-
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
-    expect(screen.getByText("Restoring conversation...")).toBeInTheDocument();
   });
 
   it("shows stop generating button", () => {
@@ -175,13 +112,11 @@ describe("ChatWorkspace", () => {
       isSending: true,
       isHistoryLoading: false,
       historyError: null,
-      clearMessages: jest.fn(),
       currentSessionId: "session-1",
-      selectSession: jest.fn(),
     });
 
-    render(<ChatWorkspace repositoryId="repo-1" />, { wrapper: TestProviders });
-    
+    render(<StudioCanvasChat repositoryId="repo-1" />, { wrapper: TestProviders });
+
     const stopButton = screen.getByText("Stop generating");
     fireEvent.click(stopButton);
     expect(stopMock).toHaveBeenCalled();

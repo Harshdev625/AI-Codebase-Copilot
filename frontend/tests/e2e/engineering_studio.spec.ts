@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test.describe("Engineering Workspace E2E Tests", () => {
+test.describe("Engineering Studio E2E Tests", () => {
   const repositoryId = "repo-123";
   const patchId = "patch-456";
 
