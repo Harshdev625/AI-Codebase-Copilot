@@ -5,6 +5,7 @@ import { authService } from "@/features/auth/services/auth-service";
 import { useAuthStore } from "@/store/auth-store";
 import { useToast } from "@/components/shared/toast-provider";
 import { toApiError } from "@/core/api/errors";
+import { isStudioEnabled } from "@/lib/feature-flags";
 import type { LoginPayload, RegisterPayload } from "@/features/auth/types/auth-types";
 
 export const authKeys = {
@@ -26,7 +27,11 @@ export function useAuth() {
     loginMutation.mutate(payload, {
       onSuccess: () => {
         const role = useAuthStore.getState().user?.role;
-        router.replace(role === "ADMIN" ? "/admin/dashboard" : "/dashboard");
+        if (role === "ADMIN") {
+          router.replace("/admin/dashboard");
+        } else {
+          router.replace(isStudioEnabled() ? "/studio" : "/dashboard");
+        }
       },
     });
   };
@@ -59,9 +64,12 @@ export function useLoginMutation() {
   const toast = useToast();
 
   return useMutation({
-    mutationFn: (payload: LoginPayload) => authService.login(payload),
-    onSuccess: async (tokenPayload) => {
+    mutationFn: async (payload: LoginPayload) => {
+      const tokenPayload = await authService.login(payload);
       const me = await authService.me(tokenPayload.access_token);
+      return { tokenPayload, me };
+    },
+    onSuccess: ({ tokenPayload, me }) => {
       const normalizedRole = String(me.role).toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
       setAuth({ ...me, role: normalizedRole }, tokenPayload.access_token);
       void queryClient.invalidateQueries({ queryKey: authKeys.me });

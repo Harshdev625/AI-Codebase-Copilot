@@ -278,7 +278,7 @@ class TestChatSessionAndMessageModels:
         session.add(user)
         session.flush()
 
-        chat = ChatSession(id=str(uuid.uuid4()), user_id=user.id, title="Test Chat")
+        chat = ChatSession(id=str(uuid.uuid4()), user_id=user.id, session_title="Test Chat")
         session.add(chat)
         session.flush()
 

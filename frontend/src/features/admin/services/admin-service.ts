@@ -6,6 +6,10 @@ export interface SystemMetrics {
   users_count?: number;
   repositories_count?: number;
   indexed_chunks_count?: number;
+  indexed_files_count?: number;
+  patch_count?: number;
+  snapshot_count?: number;
+  active_sessions?: number;
 }
 
 export interface ServiceHealth {
@@ -29,6 +33,34 @@ export interface IndexingJob {
   status: string;
   message?: string;
   created_at: string;
+}
+
+export interface TelemetryResponse {
+  active_streams: number;
+  indexing_queue_depth: number;
+  indexing_running: number;
+  queue_health: {
+    total_jobs: number;
+    failed_jobs: number;
+    failure_rate_pct: number;
+  };
+  retrieval_hit_profile: {
+    sample_size: number;
+    top1_hit_rate_pct: number;
+    top3_hit_rate_pct: number;
+    zero_hit_rate_pct: number;
+  };
+  model_latency: {
+    avg_ms: number;
+    p50_ms: number;
+    p95_ms: number;
+    samples_ms: number[];
+  };
+}
+
+export interface RecentActivityResponse {
+  indexing_jobs: PaginatedData<IndexingJob>;
+  recent_users: PaginatedData<AdminUser>;
 }
 
 export const adminService = {
@@ -63,5 +95,11 @@ export const adminService = {
     return apiClient<{ deleted: boolean }>(`/v1/admin/users/${userId}`, {
       method: "DELETE",
     });
+  },
+  telemetry: async (): Promise<TelemetryResponse> => {
+    return apiClient<TelemetryResponse>("/v1/admin/telemetry", { method: "GET" });
+  },
+  recentActivity: async (): Promise<RecentActivityResponse> => {
+    return apiClient<RecentActivityResponse>("/v1/admin/recent-activity", { method: "GET" });
   },
 };

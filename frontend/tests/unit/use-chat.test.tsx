@@ -1,5 +1,15 @@
 import { renderHook, waitFor, act } from "@testing-library/react";
-import { useChatSessions, useChatMessages, useDeleteSessionMutation, useChat, useApplyPatchMutation } from "@/features/chat/hooks/use-chat";
+import { 
+  useChatSessions, 
+  useChatMessages, 
+  useDeleteSessionMutation, 
+  useChat, 
+  useApplyPatchMutation,
+  useCreatePatchMutation,
+  useValidatePatchMutation,
+  useCancelPatchMutation,
+  useUpdateSessionMutation
+} from "@/features/chat/hooks/use-chat";
 import { chatService } from "@/features/chat/services/chat-service";
 import { TestProviders } from "../test-utils";
 
@@ -13,13 +23,30 @@ jest.mock("@/features/chat/services/chat-service", () => ({
     listMessages: jest.fn(),
     deleteSession: jest.fn(),
     stream: jest.fn(),
+    createPatchDraft: jest.fn(),
+    validatePatch: jest.fn(),
     applyPatch: jest.fn(),
+    cancelPatchDraft: jest.fn(),
   }
+}));
+
+const mockSetActiveSessionId = jest.fn();
+let mockActiveSessionId: string | null = "existing-session";
+
+jest.mock("@/features/studio/store/studio-store", () => ({
+  useStudioStore: () => ({
+    activeSessionId: mockActiveSessionId,
+    setActiveSessionId: (id: string | null) => {
+      mockActiveSessionId = id;
+      mockSetActiveSessionId(id);
+    },
+  }),
 }));
 
 describe("use-chat hooks", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockActiveSessionId = "existing-session";
     (chatService.listMessages as jest.Mock).mockResolvedValue({ items: [], total: 0 });
   });
 
@@ -34,7 +61,7 @@ describe("use-chat hooks", () => {
     });
 
     expect(result.current.data).toEqual(mockData);
-    expect(chatService.listSessions).toHaveBeenCalledWith(20, 0, "repo-1");
+    expect(chatService.listSessions).toHaveBeenCalledWith(20, 0, "repo-1", undefined, undefined);
   });
 
   it("useChatMessages returns messages", async () => {
@@ -70,13 +97,55 @@ describe("use-chat hooks", () => {
 
     const { result } = renderHook(() => useApplyPatchMutation(), { wrapper: TestProviders });
 
-    result.current.mutate({ repositoryId: "repo-1", diff: "diff" });
+    result.current.mutate({ repositoryId: "repo-1", patchId: "patch-1" });
 
     await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
+       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(chatService.applyPatch).toHaveBeenCalledWith("repo-1", "diff");
+    expect(chatService.applyPatch).toHaveBeenCalledWith("repo-1", "patch-1");
+  });
+
+  it("useCreatePatchMutation creates patch draft", async () => {
+    (chatService.createPatchDraft as jest.Mock).mockResolvedValueOnce({ patch_id: "patch-1" });
+
+    const { result } = renderHook(() => useCreatePatchMutation(), { wrapper: TestProviders });
+
+    result.current.mutate({ repositoryId: "repo-1", payload: { base_commit_sha: "sha", patch_files: [] } });
+
+    await waitFor(() => {
+       expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(chatService.createPatchDraft).toHaveBeenCalledWith("repo-1", { base_commit_sha: "sha", patch_files: [] });
+  });
+
+  it("useValidatePatchMutation validates patch", async () => {
+    (chatService.validatePatch as jest.Mock).mockResolvedValueOnce({ status: "APPROVED" });
+
+    const { result } = renderHook(() => useValidatePatchMutation(), { wrapper: TestProviders });
+
+    result.current.mutate({ repositoryId: "repo-1", patchId: "patch-1" });
+
+    await waitFor(() => {
+       expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(chatService.validatePatch).toHaveBeenCalledWith("repo-1", "patch-1");
+  });
+
+  it("useCancelPatchMutation cancels patch draft", async () => {
+    (chatService.cancelPatchDraft as jest.Mock).mockResolvedValueOnce({ deleted: true });
+
+    const { result } = renderHook(() => useCancelPatchMutation(), { wrapper: TestProviders });
+
+    result.current.mutate({ repositoryId: "repo-1", patchId: "patch-1" });
+
+    await waitFor(() => {
+       expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(chatService.cancelPatchDraft).toHaveBeenCalledWith("repo-1", "patch-1");
   });
 
   describe("useChat", () => {
@@ -88,7 +157,7 @@ describe("use-chat hooks", () => {
         onEvent({ type: "done", sources: [] });
       });
 
-      const { result } = renderHook(() => useChat({ mode: "project" }), { wrapper: TestProviders });
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
 
       await act(async () => {
         await result.current.sendMessage("test message");
@@ -97,33 +166,33 @@ describe("use-chat hooks", () => {
       expect(result.current.isSending).toBe(false);
       expect(result.current.messages.length).toBe(2);
       expect(result.current.messages[1].content).toBe("hello world");
-      expect(result.current.currentSessionId).toBe("new-session");
+      expect(mockSetActiveSessionId).toHaveBeenCalledWith("new-session");
     });
 
     it("clears messages", () => {
-      const { result } = renderHook(() => useChat({ mode: "project" }), { wrapper: TestProviders });
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
       
       act(() => {
         result.current.clearMessages();
       });
 
       expect(result.current.messages).toEqual([]);
-      expect(result.current.currentSessionId).toBeNull();
+      expect(mockSetActiveSessionId).toHaveBeenCalledWith(null);
     });
 
     it("selects a session", () => {
-      const { result } = renderHook(() => useChat({ mode: "project" }), { wrapper: TestProviders });
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
       
       act(() => {
         result.current.selectSession("session-123");
       });
 
       expect(result.current.messages).toEqual([]);
-      expect(result.current.currentSessionId).toBe("session-123");
+      expect(mockSetActiveSessionId).toHaveBeenCalledWith("session-123");
     });
 
     it("stops generation", () => {
-      const { result } = renderHook(() => useChat({ mode: "project" }), { wrapper: TestProviders });
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
       
       act(() => {
         result.current.stopGeneration();

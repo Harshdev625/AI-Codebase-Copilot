@@ -24,17 +24,11 @@ describe("AuthenticationAdminRegisterForm", () => {
     
     render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
     
-    const nameInput = screen.getByPlaceholderText("Admin Name");
-    const emailInput = screen.getByPlaceholderText("admin@example.com");
-    const passwordInput = screen.getByPlaceholderText("Min. 8 characters");
-    const secretInput = screen.getByPlaceholderText("Paste secret key");
-    const btn = screen.getByText("Create admin access");
-
-    fireEvent.change(nameInput, { target: { value: "Admin" } });
-    fireEvent.change(emailInput, { target: { value: "test@example.com" } });
-    fireEvent.change(passwordInput, { target: { value: "password" } });
-    fireEvent.change(secretInput, { target: { value: "secret" } });
-    fireEvent.click(btn);
+    fireEvent.change(screen.getByPlaceholderText("Admin Name"), { target: { value: "Admin" } });
+    fireEvent.change(screen.getByPlaceholderText("admin@example.com"), { target: { value: "test@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password" } });
+    fireEvent.change(screen.getByPlaceholderText("Paste secret key from .env"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: /create admin access/i }));
 
     expect(registerMock).toHaveBeenCalledWith({
       email: "test@example.com",
@@ -44,25 +38,10 @@ describe("AuthenticationAdminRegisterForm", () => {
     });
   });
 
-  it("toggles password and secret visibility", () => {
-    (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: false });
+  it("disables submit while registering", () => {
+    (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: true });
     
     render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
-    
-    const passwordInput = screen.getByPlaceholderText("Min. 8 characters");
-    const secretInput = screen.getByPlaceholderText("Paste secret key");
-    expect(passwordInput).toHaveAttribute("type", "password");
-    expect(secretInput).toHaveAttribute("type", "password");
-
-    const buttons = screen.getAllByRole("button");
-    const toggleBtns = buttons.filter(b => !b.textContent || b.textContent === "");
-    const togglePwd = toggleBtns[0];
-    const toggleSecret = toggleBtns[1];
-    
-    fireEvent.click(togglePwd);
-    expect(passwordInput).toHaveAttribute("type", "text");
-    
-    fireEvent.click(toggleSecret);
-    expect(secretInput).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: /creating access/i })).toBeDisabled();
   });
 });

@@ -22,7 +22,7 @@ class RetrievalService:
         self.session = session
         self.cache = get_cache_service()
 
-    def retrieve_repository(self, *, repository_id: str, query: str, top_k: int = 8) -> list[dict[str, Any]]:
+    def retrieve_repository(self, *, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None) -> list[dict[str, Any]]:
         dialect_name = self.session.bind.dialect.name if self.session.bind is not None else "unknown"
         if dialect_name != "postgresql":
             logger.warning(
@@ -31,7 +31,8 @@ class RetrievalService:
                 repository_id,
             )
             return []
-        cache_key = self._cache_key(scope=f"repo:{repository_id}", query=query, top_k=top_k)
+        scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
+        cache_key = self._cache_key(scope=f"repo:{repository_id}{scope_suffix}", query=query, top_k=top_k)
         try:
             cached = self.cache.get_json(cache_key)
         except ExternalServiceError as exc:
@@ -44,7 +45,7 @@ class RetrievalService:
         runtime_metrics.increment("retrieval_cache_misses_total", scope="repository")
         with runtime_metrics.timer("retrieval_latency_ms", scope="repository"):
             try:
-                items = hybrid_retrieve(self.session, repository_id=repository_id, query=query, top_k=top_k)
+                items = hybrid_retrieve(self.session, repository_id=repository_id, query=query, top_k=top_k, scope_paths=scope_paths)
             except Exception as exc:
                 logger.exception("retrieval_repository - query failed repository_id=%s", repository_id)
                 raise DatabaseException("Failed to retrieve repository context") from exc

@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useDashboard } from '../hooks/use-dashboard';
+import { useRepositories } from '@/features/repositories/hooks/use-repositories';
 import { Skeleton } from '@/components/ui/skeleton';
 import { FolderGit2, Layers3, Activity, MessageSquare } from 'lucide-react';
 import { motion, useSpring, useTransform } from 'framer-motion';
@@ -33,7 +34,7 @@ function StatCard({ label, value, suffix, icon, gradient, glow, glowSoft, glowOr
 
   return (
     <div
-      className="group relative flex flex-col gap-3 p-6 bg-card/80 transition-all duration-300 hover:bg-card overflow-hidden"
+      className="group relative flex flex-col gap-3 p-6 bg-card/60 backdrop-blur-md transition-all duration-300 hover:bg-card/80 overflow-hidden"
       style={{ animationDelay: `${delay}ms` }}
     >
       {/* Neon top-border glow on hover */}
@@ -107,10 +108,30 @@ const STAT_CONFIG = [
     iconClass: 'text-ai',
     metricKey: 'chat_count',
   },
+  {
+    label: 'Active Indexing',
+    suffix: 'jobs',
+    icon: (className: string) => <Activity className={className} />,
+    gradient: 'from-warning/30 to-warning/10',
+    glow: 'via-warning/70',
+    glowSoft: 'from-warning/15',
+    glowOrb: 'bg-warning/20',
+    iconClass: 'text-warning',
+    metricKey: '_active_indexing',
+  },
 ] as const;
 
 export function DashboardStatsGrid() {
   const { summary, isLoading } = useDashboard();
+  const { repositories } = useRepositories(100, 0);
+
+  const activeIndexingCount = React.useMemo(() => {
+    return (repositories ?? []).filter((r) =>
+      ['running', 'in_progress', 'pending', 'queued'].includes(
+        (r.latest_job_status ?? '').toLowerCase(),
+      ),
+    ).length;
+  }, [repositories]);
 
   if (isLoading) {
     return (
@@ -118,7 +139,10 @@ export function DashboardStatsGrid() {
     );
   }
 
-  const metrics = summary?.metrics as Record<string, number> | undefined;
+  const metrics: Record<string, number> = {
+    ...(summary?.metrics as Record<string, number> | undefined),
+    _active_indexing: activeIndexingCount,
+  };
   return (
     <div className="space-y-3">
       <div className="relative overflow-hidden rounded-3xl border border-border/60 shadow-premium">

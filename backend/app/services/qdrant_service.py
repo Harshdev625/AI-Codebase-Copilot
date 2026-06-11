@@ -138,7 +138,34 @@ class QdrantService:
 
     @retry(retryable_exceptions=(httpx.HTTPStatusError, httpx.TimeoutException))
     @qdrant_circuit_breaker
-    def search(self, vector: list[float], repository_id: str, limit: int) -> list[dict[str, Any]]:
+    def delete_points_by_patch(self, patch_id: str) -> None:
+        """Delete all points for a patch from Qdrant using a filter."""
+        payload = {
+            "filter": {
+                "must": [
+                    {
+                        "key": "patch_id",
+                        "match": {"value": patch_id},
+                    }
+                ]
+            }
+        }
+        try:
+            client = get_http_client()
+            response = client.post(
+                f"{self.base_url}/collections/{self.collection}/points/delete",
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            logger.debug("qdrant_delete_patch - success collection=%s patch_id=%s", self.collection, patch_id)
+        except httpx.HTTPError as exc:
+            logger.exception("qdrant_delete_patch - failed patch_id=%s", patch_id)
+            raise ExternalServiceError(service_name="Qdrant", underlying_error=str(exc)) from exc
+
+    @retry(retryable_exceptions=(httpx.HTTPStatusError, httpx.TimeoutException))
+    @qdrant_circuit_breaker
+    def search(self, vector: list[float], repository_id: str, limit: int, patch_id: str | None = None) -> list[dict[str, Any]]:
         """Search for similar vectors in Qdrant.
 
         PHASE 1 FIX: Now synchronous.  Previously ``async def`` which caused
@@ -146,23 +173,48 @@ class QdrantService:
         the synchronous ``dense_search()`` in ``hybrid.py``.
         """
         logger.debug(
-            "qdrant_search - request collection=%s repository_id=%s limit=%s",
+            "qdrant_search - request collection=%s repository_id=%s limit=%s patch_id=%s",
             self.collection,
             repository_id,
             limit,
+            patch_id,
         )
+        
+        must_filters = []
+        must_not_filters = []
+        
+        if repository_id:
+            must_filters.append({
+                "key": "repository_id",
+                "match": {"value": repository_id},
+            })
+            
+        if patch_id:
+            must_filters.append({
+                "key": "patch_id",
+                "match": {"value": patch_id},
+            })
+            must_filters.append({
+                "key": "is_patch",
+                "match": {"value": True},
+            })
+        else:
+            must_not_filters.append({
+                "key": "is_patch",
+                "match": {"value": True},
+            })
+            
+        filter_payload = {}
+        if must_filters:
+            filter_payload["must"] = must_filters
+        if must_not_filters:
+            filter_payload["must_not"] = must_not_filters
+
         payload = {
             "vector": vector,
             "limit": limit,
             "with_payload": True,
-            "filter": {
-                "must": [
-                    {
-                        "key": "repository_id",
-                        "match": {"value": repository_id},
-                    }
-                ]
-            },
+            "filter": filter_payload,
         }
         try:
             client = get_http_client()
@@ -179,4 +231,4 @@ class QdrantService:
         body = response.json()
         result = list(body.get("result", []))
         logger.debug("qdrant_search - response repository_id=%s matches=%s", repository_id, len(result))
-        return result
+        return result

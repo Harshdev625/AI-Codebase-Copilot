@@ -255,7 +255,11 @@ def admin_system_metrics(
             SELECT
               (SELECT COUNT(*) FROM users) AS users_count,
               (SELECT COUNT(*) FROM repositories) AS repositories_count,
-              (SELECT COUNT(*) FROM code_chunks) AS indexed_chunks_count
+              (SELECT COUNT(*) FROM code_chunks) AS indexed_chunks_count,
+              (SELECT COUNT(*) FROM repository_files) AS indexed_files_count,
+              (SELECT COUNT(*) FROM act_patch_drafts) AS patch_count,
+              (SELECT COUNT(*) FROM repository_snapshots) AS snapshot_count,
+              (SELECT COUNT(*) FROM chat_sessions) AS active_sessions
             """
         )
     ).mappings().first()

@@ -1,12 +1,17 @@
-﻿export type ChatMode = "question" | "refactor" | "debug" | "documentation" | "tool";
+export type ChatMode = "ASK" | "PLAN" | "ACT";
 
 export type ChatSession = {
   id: string;
   repository_id: string | null;
-  title: string | null;
+  session_title: string | null;
+  session_mode: string;
+  is_pinned: boolean;
+  is_archived: boolean;
   summary: string | null;
   created_at: string;
   updated_at: string;
+  last_activity_at: string;
+  metadata?: Record<string, any>;
 };
 
 export type ChatMessage = {
@@ -24,13 +29,29 @@ export type ChatRequestPayload = {
   session_id?: string;
   mode?: ChatMode;
   include_patch?: boolean;
+  scope_paths?: string[];
+};
+
+export type Source = {
+  id?: string;
+  path: string;
+  symbol?: string;
+  content: string;
+  start_line?: number;
+  end_line?: number;
+  rerank_score?: number;
+  score?: number;
+  repository_id?: string;
+  repo_id?: string;
+  kind?: string;
+  proposal?: any;
 };
 
 export type ChatResponsePayload = {
   answer: string;
   intent: string;
   session_id: string;
-  sources: Array<Record<string, unknown>>;
+  sources: Source[];
 };
 
 export type ChatStreamStart = {
@@ -47,9 +68,25 @@ export type ChatStreamChunk = {
 export type ChatStreamDone = {
   type: "done";
   intent: string;
-  sources: Array<Record<string, unknown>>;
+  sources: Source[];
   proposal?: unknown;
   trace?: unknown;
 };
 
-export type ChatStreamEvent = ChatStreamStart | ChatStreamChunk | ChatStreamDone;
+export type ChatStreamStatus = { type: "status"; step: string };
+export type ChatStreamSource = { type: "source"; source: Source };
+export type ChatStreamProgress = { type: "progress"; stage: string; percent: number };
+export type ChatStreamError = { type: "error"; error: string };
+export type ChatStreamAnswer = { type: "answer"; text: string };
+export type ChatStreamPatch = { type: "patch"; diff: string };
+
+export type ChatStreamEvent = 
+  | ChatStreamStart 
+  | ChatStreamChunk 
+  | ChatStreamDone
+  | ChatStreamStatus
+  | ChatStreamSource
+  | ChatStreamProgress
+  | ChatStreamError
+  | ChatStreamAnswer
+  | ChatStreamPatch;

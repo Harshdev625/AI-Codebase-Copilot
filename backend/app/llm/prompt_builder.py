@@ -24,6 +24,7 @@ def build_context_packet(
     query: str,
     snippets: list[dict[str, Any]],
     history: list[dict[str, Any]] | None = None,
+    chat_mode: str = "ASK",
 ) -> tuple[str, list[dict[str, Any]]]:
     history = history or []
     packets: list[str] = []
@@ -41,6 +42,19 @@ def build_context_packet(
         packets.append("\n".join(history_lines))
 
     packets.append(f"Current user question: {query.strip()}")
+
+    if chat_mode.upper() == "PLAN":
+        packets.append(
+            "*** PLAN MODE ENFORCEMENT ***\n"
+            "You are in PLAN mode. You MUST structure your response with the following exact sections:\n"
+            "1. Summary\n"
+            "2. Architecture\n"
+            "3. Affected Files\n"
+            "4. Implementation Steps\n"
+            "5. Risks\n"
+            "6. Testing Strategy\n"
+            "Do not deviate from this template. Do not write a casual response."
+        )
 
     total_chars = sum(len(part) for part in packets)
     for idx, snippet in enumerate(snippets, start=1):

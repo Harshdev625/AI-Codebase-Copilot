@@ -28,6 +28,8 @@ from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
 from app.rag.embeddings.provider import embed_text_cached, get_embedding_provider, validate_embedding_dimension
 from app.services.qdrant_service import QdrantService
+from app.services.cache_service import get_cache_service
+from app.services.indexing_helpers import upsert_file_records, create_snapshot
 from app.core.exceptions import DatabaseException, ExternalServiceError, ValidationException
 from app.core.resilience import retry
 
@@ -56,6 +58,11 @@ class IndexingService:
         self._active_total_files: int | None = None
         self._active_started_at_perf: float | None = None
         self._active_repository_id: str | None = None
+        # Counters accumulated during a single index_repository() call
+        self._files_indexed: int = 0
+        self._files_skipped: int = 0
+        self._chunks_created: int = 0
+        self._index_errors: list[dict] = []
 
     def _is_low_signal_file(self, file_path: Path
                             , repo_root: Path) -> bool:
@@ -183,6 +190,7 @@ class IndexingService:
         repo_path: str | None,
         repo_url: str | None,
         repo_ref: str | None,
+        repository_id: str | None = None,
     ) -> Path:
         logger.info(
             "index_resolve_repo - start repo_id=%s repo_path=%s repo_url=%s repo_ref=%s",
@@ -210,20 +218,62 @@ class IndexingService:
         cache_root.mkdir(parents=True, exist_ok=True)
 
         target = cache_root / self._slugify_repo_id(repo_id)
-        try:
+        meta_file = target / "cache_meta.json"
+        
+        is_valid_cache = False
+        
+        if target.exists() and meta_file.exists():
+            try:
+                with meta_file.open("r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                
+                # Verify URL and Branch
+                if meta.get("repo_url") == repo_url and meta.get("branch") == repo_ref:
+                    logger.info("index_resolve_repo - validating cache ancestry for %s", target)
+                    # To verify ancestry, we fetch first
+                    await self._run_git(["-C", str(target), "fetch", "origin", repo_ref, "--force"], timeout=600)
+                    is_valid_cache = True
+            except Exception as e:
+                logger.warning("index_resolve_repo - cache validation failed %s", e)
+        
+        if not is_valid_cache:
             if target.exists():
                 self._kill_git_processes(target)
                 self._force_delete_directory(target)
 
             logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
-            
-            clone_args = ["clone", "--depth", "1"]
+            clone_args = ["clone", repo_url, str(target)]
+            try:
+                await self._run_git(clone_args, timeout=600)
+            except Exception as exc:
+                detail = self._format_process_error(exc, "Repository clone failed")
+                logger.error("index_clone - failure repo_id=%s detail=%s", repo_id, detail)
+                raise ExternalServiceError(
+                    service_name="Git",
+                    underlying_error=f"Failed to clone repository: {detail}",
+                ) from exc
+
+        # Force state to exact branch
+        try:
             if repo_ref:
-                clone_args.extend(["--branch", repo_ref])
+                await self._run_git(["-C", str(target), "checkout", repo_ref], timeout=120)
+                if is_valid_cache:
+                    # Hard reset to ensure clean state and proper ancestry alignment
+                    await self._run_git(["-C", str(target), "reset", "--hard", f"origin/{repo_ref}"], timeout=120)
             
-            clone_args.extend([repo_url, str(target)])
-            
-            await self._run_git(clone_args, timeout=600)
+            # Clean untracked files
+            await self._run_git(["-C", str(target), "clean", "-fdx"], timeout=120)
+    
+            # Save meta
+            target.mkdir(parents=True, exist_ok=True)
+            with meta_file.open("w", encoding="utf-8") as f:
+                json.dump({
+                    "repository_id": repository_id or repo_id,
+                    "repo_url": repo_url,
+                    "branch": repo_ref,
+                    "last_accessed_at": time.time()
+                }, f)
+                
             logger.info("index_clone - success repo_id=%s target=%s", repo_id, target)
         except Exception as exc:
             detail = self._format_process_error(exc, "Repository preparation failed")
@@ -248,15 +298,8 @@ class IndexingService:
             if not rel_path:
                 continue
             file_path = repo_root / rel_path
-            if not file_path.is_file():
-                continue
-            if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
-                continue
-            if self._is_low_signal_file(file_path, repo_root):
-                continue
-            if file_path.stat().st_size > settings.max_index_file_size_bytes:
-                continue
-            yield file_path
+            if file_path.is_file():
+                yield file_path
 
     def _load_gitignore_spec(self, repo_root: Path) -> PathSpec:
         gitignore_path = repo_root / ".gitignore"
@@ -296,13 +339,7 @@ class IndexingService:
 
             for filename in filenames:
                 file_path = current_dir / filename
-                if self._is_ignored(spec, repo_root, file_path):
-                    continue
-                if file_path.suffix.lower() in self.SUPPORTED_SUFFIXES:
-                    if self._is_low_signal_file(file_path, repo_root):
-                        continue
-                    if file_path.stat().st_size > settings.max_index_file_size_bytes:
-                        continue
+                if not self._is_ignored(spec, repo_root, file_path):
                     yield file_path
 
     def _get_previous_completed_commit(self, repository_id: str) -> str | None:
@@ -386,12 +423,6 @@ class IndexingService:
             if not file_path.exists() or not file_path.is_file():
                 continue
             if self._is_ignored(spec, repo_root, file_path):
-                continue
-            if file_path.suffix.lower() not in self.SUPPORTED_SUFFIXES:
-                continue
-            if self._is_low_signal_file(file_path, repo_root):
-                continue
-            if file_path.stat().st_size > settings.max_index_file_size_bytes:
                 continue
             files.append(file_path)
         return files
@@ -709,6 +740,25 @@ class IndexingService:
         indexing_job_id: str | None = None,
         full_reindex: bool = False,
     ) -> int:
+        
+        # Acquire repository lock to prevent concurrent indexing of the same repo
+        lock_manager = get_cache_service().repository_lock(repository_id or repo_id, lock_timeout=3600)
+        with lock_manager:
+            return await self._index_repository_locked(
+                repo_id, repository_id, commit_sha, repo_path, repo_url, repo_ref, indexing_job_id, full_reindex
+            )
+
+    async def _index_repository_locked(
+        self,
+        repo_id: str,
+        repository_id: str | None,
+        commit_sha: str,
+        repo_path: str | None = None,
+        repo_url: str | None = None,
+        repo_ref: str | None = None,
+        indexing_job_id: str | None = None,
+        full_reindex: bool = False,
+    ) -> int:
         logger.info(
             "index_repository - start repo_id=%s repository_id=%s commit_sha=%s",
             repo_id,
@@ -716,7 +766,13 @@ class IndexingService:
             commit_sha,
         )
         logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
-        root = await self._resolve_repo_root(repo_id, repo_path=repo_path, repo_url=repo_url, repo_ref=repo_ref)
+        root = await self._resolve_repo_root(
+            repo_id, 
+            repo_path=repo_path, 
+            repo_url=repo_url, 
+            repo_ref=repo_ref, 
+            repository_id=repository_id
+        )
         cleanup_cached_repo = bool(repo_url and not repo_path)
         started_at = time.perf_counter()
         self._active_indexing_job_id = indexing_job_id
@@ -789,12 +845,26 @@ class IndexingService:
                     mode_reason = "non-commit indexing request"
 
             total_files = len(file_list)
+            
+            # --- Persist file records and get incremental chunk list ---
+            if repository_id:
+                self._files_indexed, files_to_chunk = await upsert_file_records(
+                    self.session,
+                    repository_id=repository_id,
+                    repo_root=root,
+                    commit_sha=commit_sha,
+                    file_list=file_list,
+                )
+                self._files_skipped = total_files - len(files_to_chunk)
+                file_list = files_to_chunk
+                
             self._active_total_files = total_files
             logger.info(
-                "index_repository - files discovered repo_id=%s mode=%s total_files=%s reason=%s",
+                "index_repository - files discovered repo_id=%s mode=%s total_files=%s chunks_to_process=%s reason=%s",
                 repo_id,
                 indexing_mode,
                 total_files,
+                len(file_list),
                 mode_reason,
             )
             logger.info(
@@ -954,6 +1024,18 @@ class IndexingService:
                 len(chunks),
             )
             logger.info("indexing_success - repo_id=%s repository_id=%s chunks=%s", repo_id, repository_id, len(chunks))
+
+            # --- Create snapshot ---
+            if repository_id:
+                await create_snapshot(
+                    self.session,
+                    repository_id=repository_id,
+                    commit_sha=commit_sha,
+                    files_count=self._files_indexed,
+                    files_skipped=self._files_skipped,
+                    chunks_count=len(chunks),
+                )
+
             return len(chunks)
         except Exception as exc:
             logger.exception(
@@ -964,21 +1046,30 @@ class IndexingService:
             )
             raise
         finally:
-            if cleanup_cached_repo and root.exists():
+            # Respect persistent cache setting: only delete remote clones when
+            # repo_cache_persist is False (e.g. CI environments)
+            should_delete = cleanup_cached_repo and not settings.repo_cache_persist
+            if should_delete and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
             self._active_indexing_job_id = None
             self._active_total_files = None
             self._active_started_at_perf = None
             self._active_repository_id = None
+            self._files_indexed = 0
+            self._files_skipped = 0
+            self._chunks_created = 0
+            self._index_errors = []
             logger.debug("index_repository - cleanup complete repo_id=%s", repo_id)
 
     def _assign_repository_ids_and_chunk_ids(self, repository_id: str, chunks: list[CodeChunk]) -> None:
         for chunk in chunks:
             chunk.repository_id = repository_id
-            content_hash = hashlib.sha256((chunk.content or "").encode("utf-8", errors="ignore")).hexdigest()[:16]
+            full_content_hash = hashlib.sha256((chunk.content or "").encode("utf-8", errors="ignore")).hexdigest()
+            chunk.content_hash = full_content_hash
+            short_hash = full_content_hash[:16]
             raw_key = (
                 f"{repository_id}|{chunk.commit_sha}|{chunk.path}|{chunk.symbol}|{chunk.chunk_type}"
-                f"|{chunk.start_line}|{chunk.end_line}|{content_hash}"
+                f"|{chunk.start_line}|{chunk.end_line}|{short_hash}"
             )
             chunk.id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
@@ -1330,3 +1421,6 @@ class IndexingService:
                     settings.ollama_base_url,
                 )
 
+
+    # NEW: File record + snapshot helpers added in Phase 1
+    _PHASE1_MARKER = True

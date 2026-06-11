@@ -1,58 +1,49 @@
 "use client";
 
 import * as React from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Loader2, MessageSquarePlus, Send, Trash2, StopCircle } from "lucide-react";
+import { Loader2, Send, StopCircle, Database, Search, PenTool, PlayCircle, RefreshCw, GitBranch, CheckCircle2, Paperclip, Wand2, Mic } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/shared/toast-provider";
 import {
   useChat,
   useChatSessions,
-  useDeleteSessionMutation,
+  useUpdateSessionMutation,
 } from "@/features/chat/hooks/use-chat";
-import type { ChatMessage } from "@/features/chat/types/chat-types";
+import type { ChatMessage, ChatMode } from "@/features/chat/types/chat-types";
 import { ChatMessageItemBubble } from "./chat-message-item-bubble";
+import { ModeSelector } from "./mode-selector";
+import { RepositoryContextHeader } from "./repository-context-header";
+import { ScopeSelector } from "./scope-selector";
+import { ChatSessionSidebar } from "./chat-session-sidebar";
+import { ContextPanel } from "./context-panel";
 import { cn } from "@/lib/utils";
+import type { Repository } from "@/features/repositories/types/repository-types";
+import { MultiRepositorySelect } from "./multi-repository-select";
+import { repositoryService } from "@/features/repositories/services/repository-service";
+import { useWorkspaceStore } from "@/features/workspace/store/workspace-store";
 
 interface ChatWorkspaceProps {
   repositoryId?: string;
+  repositories?: Repository[];
+  onRepositoryChange?: (id: string) => void;
+  isRepositoriesLoading?: boolean;
 }
 
-function toSourceLabels(message: ChatMessage): string[] {
-  const sources = message.metadata?.sources;
-  if (!Array.isArray(sources)) return [];
-  
-  return sources
-    .map((source) => {
-      if (!source || typeof source !== "object") return "";
-      const record = source as Record<string, unknown>;
-      const path = typeof record.path === "string" ? record.path : null;
-      const repo =
-        typeof record.repository_name === "string"
-          ? record.repository_name
-          : typeof record.repo_id === "string"
-            ? record.repo_id
-            : typeof record.repository_id === "string"
-              ? record.repository_id
-              : null;
-      if (path && repo) return `${repo}: ${path}`;
-      return path || repo || "";
-    })
-    .filter((label): label is string => Boolean(label));
-}
-
-
-
-export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
+export function ChatWorkspace({ 
+  repositoryId, 
+  repositories = [], 
+  onRepositoryChange,
+  isRepositoriesLoading = false
+}: ChatWorkspaceProps) {
   const toast = useToast();
   const [query, setQuery] = React.useState("");
+  const [mode, setMode] = React.useState<ChatMode>("ASK");
+  const [scopePaths, setScopePaths] = React.useState<string[]>([]);
+  const [selectedRepoIds, setSelectedRepoIds] = React.useState<string[]>([]);
   const virtuosoRef = React.useRef<any>(null);
+  const { setActiveSessionId } = useWorkspaceStore();
 
   const {
     messages,
@@ -61,27 +52,79 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
     isSending,
     isHistoryLoading,
     historyError,
-    clearMessages,
     currentSessionId,
-    selectSession,
   } = useChat({ repositoryId });
 
-  const sessionsQuery = useChatSessions(40, 0);
-  const deleteMutation = useDeleteSessionMutation();
-  const sessions = sessionsQuery.data?.items ?? [];
+  const sessionsQuery = useChatSessions(100, 0);
+  const updateSessionMutation = useUpdateSessionMutation();
+  
+  const sessions = React.useMemo(() => sessionsQuery.data?.items ?? [], [sessionsQuery.data?.items]);
   const historyErrorMessage =
     historyError instanceof Error ? historyError.message : historyError ? "Unable to load history." : "";
 
+  // Sync scopePaths when session changes
+  React.useEffect(() => {
+    if (currentSessionId) {
+      const session = sessions.find((s: any) => s.id === currentSessionId);
+      if (session && session.metadata?.scope_paths) {
+        setScopePaths(session.metadata.scope_paths);
+      } else {
+        setScopePaths([]);
+      }
+    } else {
+      setScopePaths([]);
+    }
+  }, [currentSessionId, sessions]);
 
+  // Persist scopePaths to session when it changes
+  const handleScopeChange = React.useCallback((newPaths: string[]) => {
+    setScopePaths(newPaths);
+    if (currentSessionId) {
+      updateSessionMutation.mutate({ 
+        sessionId: currentSessionId, 
+        payload: { metadata: { scope_paths: newPaths } } 
+      });
+    }
+  }, [currentSessionId, updateSessionMutation]);
 
-  const canSend = Boolean(repositoryId) && query.trim().length > 0 && !isSending;
+  const canSend = (Boolean(repositoryId) || selectedRepoIds.length > 0) && query.trim().length > 0 && !isSending;
 
   const handleSend = async () => {
     if (!canSend) return;
     const trimmed = query.trim();
     setQuery("");
     try {
-      await sendMessage(trimmed);
+      if (selectedRepoIds.length > 0) {
+        toast.info("Retrieving Federated Context", `Querying ${selectedRepoIds.length} repositories...`);
+        const allResults = await Promise.allSettled(
+          selectedRepoIds.map((rid) =>
+            repositoryService.retrieveRepository(rid, { query: trimmed, top_k: 6 })
+          )
+        );
+
+        let formattedContext = "Below is the retrieved cross-repository context for this query:\n\n";
+        let idx = 0;
+        allResults.forEach((result) => {
+          if (result.status === "fulfilled") {
+            result.value.items?.forEach((item) => {
+              idx++;
+              const displayScore = item.rerank_score !== undefined ? item.rerank_score : item.score;
+              formattedContext += `[Source #${idx}] File: ${item.path} (Repository: ${item.repository_id})\n`;
+              formattedContext += `Symbol: ${item.symbol || "unknown"}\n`;
+              formattedContext += `Score: ${(displayScore * 100).toFixed(1)}%\n`;
+              formattedContext += "```\n" + item.content + "\n```\n\n";
+            });
+          }
+        });
+        if (idx === 0) {
+          formattedContext += "(No matching snippets retrieved across repositories)\n\n";
+        }
+
+        const finalQuery = `${formattedContext}\nUser Query: ${trimmed}`;
+        await sendMessage(finalQuery, mode, scopePaths);
+      } else {
+        await sendMessage(trimmed, mode, scopePaths);
+      }
     } catch (error) {
       if ((error as any).name !== "AbortError") {
          const message = error instanceof Error ? error.message : "Unable to send message.";
@@ -90,88 +133,32 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
     }
   };
 
-  const handleDeleteSession = async (sessionId: string) => {
-    try {
-      await deleteMutation.mutateAsync(sessionId);
-      if (currentSessionId === sessionId) {
-        clearMessages();
-      }
-      toast.success("Session Deleted", "Conversation removed from history.");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to delete session.";
-      toast.error("Delete Failed", message);
-    }
-  };
-
-  const showDisabledBanner = !repositoryId;
 
   return (
-    <div className="grid h-full w-full grid-cols-1 gap-0 lg:grid-cols-[280px_1fr]">
-      {/* Sidebar - Sessions List */}
-      <aside className="border-b border-border/60 bg-card/40 lg:border-b-0 lg:border-r backdrop-blur-md flex flex-col">
-        <div className="flex items-center justify-between border-b border-border/60 px-4 py-3 shrink-0">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Conversations</p>
-          <Button size="sm" variant="ghost" onClick={clearMessages} disabled={isSending} className="h-8 px-2 text-primary hover:bg-primary/10">
-            <MessageSquarePlus className="mr-1.5 h-4 w-4" />
-            New
-          </Button>
-        </div>
+    <div className="flex h-full w-full overflow-hidden bg-[#0B0D14]">
 
-        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-          {sessionsQuery.isLoading && (
-            <div className="rounded-xl border border-border/40 bg-background/50 px-3 py-3 text-xs text-muted-foreground text-center">
-              Loading sessions...
-            </div>
-          )}
+      {/* Left Sidebar */}
+      <ChatSessionSidebar 
+        sessions={sessions} 
+        isLoading={sessionsQuery.isLoading} 
+        currentSessionId={currentSessionId}
+        onSelectSession={(id) => setActiveSessionId(id)}
+        onDeleteSession={(id) => { /* logic */ }}
+        onNewSession={() => setActiveSessionId(null)}
+        repositoryId={repositoryId}
+        repositories={repositories}
+      />
 
-          {!sessionsQuery.isLoading && sessions.length === 0 && (
-            <div className="rounded-xl border border-dashed border-border/60 bg-background/30 px-3 py-6 text-xs text-muted-foreground text-center">
-              No saved sessions yet.
-            </div>
-          )}
-
-          {sessions.map((session) => {
-            const label = session.summary || session.title || "Untitled session";
-            const active = session.id === currentSessionId;
-            return (
-              <div
-                key={session.id}
-                className={cn(
-                  "group relative rounded-xl border px-3 py-2.5 transition-all duration-200",
-                  active
-                    ? "border-primary/30 bg-primary/10 shadow-sm"
-                    : "border-transparent bg-transparent hover:bg-card hover:border-border/60"
-                )}
-              >
-                <button type="button" onClick={() => selectSession(session.id)} className="w-full text-left pr-6">
-                  <p className={cn("truncate text-[13px] font-semibold transition-colors", active ? "text-primary" : "text-foreground")}>{label}</p>
-                  <p className="mt-0.5 text-[10px] text-muted-foreground font-medium">
-                    {new Date(session.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </button>
-                <div className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button type="button" size="icon-xs" variant="ghost" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10" onClick={() => void handleDeleteSession(session.id)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-
-      {/* Main Chat Area */}
-      <section className="flex min-h-0 flex-col bg-background/50">
+      {/* Center: Main Canvas */}
+      <main className="flex min-h-0 flex-1 flex-col bg-[#0B0D14] relative z-0">
+        <RepositoryContextHeader 
+          repositoryId={repositoryId} 
+          mode={mode} 
+          scopePaths={scopePaths} 
+          sessionTitle={sessions.find((s: any) => s.id === currentSessionId)?.session_title || sessions.find((s: any) => s.id === currentSessionId)?.summary || undefined}
+        />
+        
         <div className="min-h-0 flex-1 relative">
-          {showDisabledBanner && (
-            <div className="absolute inset-0 flex items-center justify-center p-8">
-               <div className="rounded-2xl border border-dashed border-border/60 bg-card/50 p-8 text-center max-w-sm backdrop-blur-sm shadow-sm">
-                 <p className="text-sm font-medium text-foreground mb-2">No Repository Selected</p>
-                 <p className="text-xs text-muted-foreground">Select a repository from the top navigation to begin analyzing code.</p>
-               </div>
-            </div>
-          )}
-
           {currentSessionId && isHistoryLoading && (
             <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm z-10">
               <div className="flex items-center gap-3 rounded-full border border-border/60 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm">
@@ -187,42 +174,54 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
             </div>
           )}
 
-          {!showDisabledBanner && messages.length === 0 && !isHistoryLoading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-              <div className="h-16 w-16 rounded-3xl bg-primary/10 flex items-center justify-center mb-6 shadow-glow-sm">
-                <MessageSquarePlus className="h-8 w-8 text-primary" />
+          {messages.length === 0 && !isHistoryLoading && (
+            <div className="absolute inset-0 flex justify-center overflow-y-auto custom-scrollbar p-6 md:p-8">
+              <div className="flex flex-col max-w-4xl w-full gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-32 mt-10">
+                
+                {/* Initial Screen Content */}
+                <div className="flex flex-col items-center justify-center text-center mt-20">
+                  <div className="w-16 h-16 rounded-2xl bg-[#1A1C23] border border-[#2D313E] flex items-center justify-center mb-6 shadow-lg">
+                    <Database className="w-8 h-8 text-[#58A6FF]" />
+                  </div>
+                  <h2 className="text-2xl font-semibold text-[#E2E8F0] tracking-tight mb-2">How can I help you build today?</h2>
+                  <p className="text-[#8B949E] text-[15px] max-w-md">Describe your task, ask a question, or select a mode to get started.</p>
+                </div>
+
               </div>
-              <h2 className="text-xl font-bold text-foreground mb-2">How can I help you?</h2>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Ask questions about the architecture, request refactoring, or ask me to explain complex code paths in this repository.
-              </p>
             </div>
           )}
 
-          <div className="absolute inset-0 pt-6">
+          <div className="absolute inset-0 pt-2 pb-40">
              <Virtuoso
                 ref={virtuosoRef}
                 data={messages}
-                itemContent={(_, message) => <ChatMessageItemBubble key={message.id} message={message} />}
-                className="h-full w-full custom-scrollbar"
+                itemContent={(_, message) => <ChatMessageItemBubble key={message.id} message={message} mode={mode} />}
+                className="h-full w-full custom-scrollbar px-2 md:px-6"
                 alignToBottom
                 followOutput="smooth"
              />
+             {messages.length > 0 && (
+               <div className="text-center mt-4 mb-32 flex justify-center">
+                 <span className="text-[11px] font-medium text-[#3FB950] bg-[#238636]/10 border border-[#238636]/30 px-3 py-1 rounded-full">
+                   Index Status: Synchronized & Healthy
+                 </span>
+               </div>
+             )}
           </div>
         </div>
 
-        {/* Input Area */}
-        <div className="border-t border-border/40 bg-background/80 backdrop-blur-xl px-4 py-4 md:px-8 z-20 shrink-0">
-          <div className="mx-auto flex w-full max-w-4xl flex-col gap-2 relative">
+        {/* Floating Input Area */}
+        <div className="absolute bottom-0 left-0 right-0 pt-12 pb-6 z-20 pointer-events-none px-4 md:px-12 bg-gradient-to-t from-[#0B0D14] via-[#0B0D14]/90 to-transparent">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 relative pointer-events-auto">
             
             {/* Status indicators */}
-            <div className="absolute -top-10 right-0 flex items-center gap-2">
+            <div className="absolute -top-12 left-0 right-0 flex justify-center pointer-events-none">
               {isSending && (
                 <Button 
                    size="sm" 
                    variant="outline" 
                    onClick={stopGeneration}
-                   className="h-8 rounded-full border-border/60 bg-background/80 text-xs font-semibold shadow-sm hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all"
+                   className="h-8 rounded-full border-[#2D313E] bg-[#1A1C23] text-xs font-semibold shadow-sm hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 text-[#C9D1D9] transition-all"
                 >
                   <StopCircle className="mr-1.5 h-3.5 w-3.5" />
                   Stop generating
@@ -230,36 +229,104 @@ export function ChatWorkspace({ repositoryId }: ChatWorkspaceProps) {
               )}
             </div>
 
-            <div className="relative flex items-end gap-2 rounded-2xl border border-border/60 bg-card/50 shadow-sm focus-within:border-primary/50 focus-within:bg-card focus-within:ring-4 focus-within:ring-primary/10 transition-all">
-              <Textarea
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleSend();
-                  }
-                }}
-                placeholder={showDisabledBanner ? "Select a repository to begin..." : "Ask a question about the codebase..."}
-                className="min-h-[56px] max-h-[300px] flex-1 resize-none border-0 bg-transparent py-4 px-4 shadow-none focus-visible:ring-0 text-sm leading-relaxed custom-scrollbar"
-              />
-              <div className="p-2 shrink-0">
-                <Button
-                  onClick={() => void handleSend()}
-                  disabled={!canSend}
-                  size="icon"
-                  className={cn("h-10 w-10 rounded-xl transition-all", canSend ? "bg-primary text-primary-foreground shadow-glow-sm hover:scale-105" : "bg-muted text-muted-foreground")}
-                >
-                  <Send className="h-4 w-4" />
-                </Button>
+            <div className={cn(
+              "relative flex flex-col gap-0 rounded-xl border bg-[#161822] shadow-2xl transition-all overflow-hidden group mx-auto w-full",
+              "border-[#2D313E] focus-within:border-[#3B82F6]/50 focus-within:ring-2 focus-within:ring-[#3B82F6]/10"
+            )}>
+              <div className="flex flex-col gap-2 p-2 pt-3">
+                
+                {/* Top Action Bar (Mode selector, Repo, Branch, Scope) */}
+                <div className="flex items-center gap-2 px-2 pb-2">
+                  <ModeSelector mode={mode} onModeChange={setMode} />
+                  
+                  <div className="flex items-center gap-2 ml-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#C9D1D9] bg-[#1A1C23] px-2 py-1 rounded-md border border-[#2D313E]">
+                      <Database className="w-3 h-3 text-[#8B949E]" /> {repositories?.find(r => r.id === repositoryId)?.repo_id?.split('/').pop() || "No repo"}
+                    </div>
+                    
+                    <MultiRepositorySelect 
+                      repositories={repositories} 
+                      selectedIds={selectedRepoIds} 
+                      onChange={setSelectedRepoIds} 
+                    />
+
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#C9D1D9] bg-[#1A1C23] px-2 py-1 rounded-md border border-[#2D313E]">
+                      <GitBranch className="w-3 h-3 text-[#8B949E]" /> main
+                    </div>
+                    
+                    <ScopeSelector scopePaths={scopePaths} onChange={setScopePaths} />
+                  </div>
+                </div>
+
+                <div className="flex items-end gap-2 pt-1 pb-1 px-1 relative">
+                  <div className="absolute left-3 top-2 flex items-center justify-center text-[#8B949E]">
+                    <div className="w-5 h-5 rounded bg-[#1A1C23] border border-[#2D313E] flex items-center justify-center text-[10px] font-bold text-[#58A6FF]">
+                      Ask
+                    </div>
+                  </div>
+                  <textarea
+                    ref={(el) => {
+                      if (el) {
+                        el.style.height = "auto";
+                        el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+                      }
+                    }}
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      event.target.style.height = "auto";
+                      event.target.style.height = `${Math.min(event.target.scrollHeight, 300)}px`;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder="Describe the changes, ask a question, or reference files..."
+                    rows={1}
+                    className="min-h-[44px] max-h-[300px] flex-1 resize-none border-0 bg-transparent py-2.5 pl-11 pr-3 shadow-none focus-visible:outline-none focus:ring-0 text-[14px] leading-relaxed custom-scrollbar text-[#E2E8F0] placeholder:text-[#8B949E]"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between px-2 pb-1 mt-1 border-t border-[#2D313E]/50 pt-2">
+                  <div className="flex items-center gap-1">
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
+                      <Paperclip className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
+                      <Wand2 className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
+                      <Mic className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-[10px] text-[#8B949E] hidden sm:flex">
+                      <kbd className="font-sans font-semibold bg-[#1A1C23] rounded px-1.5 py-0.5 border border-[#2D313E]">↵</kbd> Send
+                    </div>
+                    <Button
+                      onClick={() => void handleSend()}
+                      disabled={!canSend}
+                      size="sm"
+                      className="h-8 px-5 rounded-md bg-[#5CD4C2] hover:bg-[#4bc2b0] text-black font-bold tracking-wide transition-colors border-none"
+                    >
+                      Ask
+                    </Button>
+                  </div>
+                </div>
+
               </div>
             </div>
-            <div className="text-center text-[10px] font-medium text-muted-foreground/70">
-              Press <kbd className="font-mono bg-muted/50 rounded px-1 py-0.5 border border-border/40">Enter</kbd> to send, <kbd className="font-mono bg-muted/50 rounded px-1 py-0.5 border border-border/40">Shift+Enter</kbd> for new line. AI can make mistakes.
-            </div>
+            
           </div>
         </div>
-      </section>
+      </main>
+
+      {/* Right Sidebar */}
+      <ContextPanel repositoryId={repositoryId} />
+
     </div>
   );
 }

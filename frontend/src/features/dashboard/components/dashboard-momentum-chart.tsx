@@ -3,12 +3,10 @@
 import * as React from 'react';
 import { motion } from 'framer-motion';
 import { Activity } from 'lucide-react';
-import { useDashboard } from '../hooks/use-dashboard';
 
 const WEEK_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 export function DashboardMomentumChart() {
-  const { summary } = useDashboard();
 
   const data = React.useMemo(() => {
     const todayQueries = 0;
@@ -31,7 +29,7 @@ export function DashboardMomentumChart() {
   const totalIndexing = data.reduce((s, d) => s + d.indexing, 0);
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/80 p-6 shadow-premium">
+    <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/60 backdrop-blur-xl p-6 shadow-premium">
       {/* Mesh BG */}
       <div className="pointer-events-none absolute inset-0 dot-grid opacity-10" />
       <div className="pointer-events-none absolute right-0 -top-12 h-40 w-40 rounded-full bg-primary/12 blur-[50px]" />
