@@ -4,6 +4,7 @@ import { TestProviders } from "../test-utils";
 
 jest.mock("next/navigation", () => ({
   useParams: () => ({ repositoryId: "repo-1" }),
+  useRouter: () => ({ push: jest.fn() }),
 }));
 
 jest.mock("uuid", () => ({
@@ -38,7 +39,7 @@ describe("ChatMessageItemBubble", () => {
 
     render(<ChatMessageItemBubble message={message} />, { wrapper: TestProviders });
 
-    expect(screen.getByText("TimeMachine")).toBeInTheDocument();
+    expect(screen.getByText("AI Assistant")).toBeInTheDocument();
     expect(screen.getByText("greeting")).toBeInTheDocument();
   });
 });

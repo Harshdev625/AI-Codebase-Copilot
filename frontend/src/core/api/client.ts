@@ -70,20 +70,29 @@ export async function apiClient<T>(endpoint: string, options: RequestOptions = {
 
   const requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
+  const defaultHeaders: Record<string, string> = {
+    Accept: 'application/json',
+    'X-Request-ID': requestId,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  if (!isFormData) {
+    defaultHeaders['Content-Type'] = 'application/json';
+  }
+
   const config: RequestInit = {
     method: body ? 'POST' : 'GET',
     ...customConfig,
     headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'X-Request-ID': requestId,
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...defaultHeaders,
       ...headers,
     },
   };
 
   if (body) {
-    config.body = JSON.stringify(body);
+    config.body = isFormData ? body : JSON.stringify(body);
   }
 
   const url = buildUrl(endpoint, params);
@@ -108,7 +117,13 @@ export async function apiClient<T>(endpoint: string, options: RequestOptions = {
         }
         // Fallback for non-envelope json errors
         if ((data as any).detail) {
-           throw new ApiError(String((data as any).detail), response.status);
+           let errMsg = (data as any).detail;
+           if (Array.isArray(errMsg)) {
+             errMsg = errMsg.map(e => e.msg ? `${e.loc?.slice(-1)[0]}: ${e.msg}` : JSON.stringify(e)).join(', ');
+           } else if (typeof errMsg === 'object') {
+             errMsg = JSON.stringify(errMsg);
+           }
+           throw new ApiError(String(errMsg), response.status, 'VALIDATION_ERROR', (data as any).detail);
         }
       }
       

@@ -112,8 +112,7 @@ class CacheService:
         
         if not self.is_available:
             # Check production vs development fallback
-            is_production = (settings.env == "production" or not settings.debug)
-            if is_production:
+            if settings.is_production_like:
                 runtime_metrics.increment("redis_lock_acquire_error", repository_id=repository_id)
                 raise ExternalServiceError("Redis", "Redis lock is unavailable in production mode.")
                 

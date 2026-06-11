@@ -37,8 +37,7 @@ def test_lock_failure_in_production(mock_redis_client):
     with patch("app.services.cache_service._get_redis_client", return_value=None), \
          patch("app.services.cache_service.settings") as mock_settings:
          
-        mock_settings.env = "production"
-        mock_settings.debug = False
+        mock_settings.is_production_like = True
          
         cache = CacheService()
         assert not cache.is_available
@@ -53,8 +52,7 @@ def test_lock_fallback_in_development():
     with patch("app.services.cache_service._get_redis_client", return_value=None), \
          patch("app.services.cache_service.settings") as mock_settings:
          
-        mock_settings.env = "development"
-        mock_settings.debug = True
+        mock_settings.is_production_like = False
          
         cache = CacheService()
         assert not cache.is_available
@@ -68,8 +66,7 @@ def test_concurrent_lock_queues():
     with patch("app.services.cache_service._get_redis_client", return_value=None), \
          patch("app.services.cache_service.settings") as mock_settings:
          
-        mock_settings.env = "development"
-        mock_settings.debug = True
+        mock_settings.is_production_like = False
          
         cache = CacheService()
         assert not cache.is_available

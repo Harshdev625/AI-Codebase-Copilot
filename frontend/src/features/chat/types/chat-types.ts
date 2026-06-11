@@ -1,4 +1,4 @@
-export type ChatMode = "question" | "refactor" | "debug" | "documentation" | "tool" | "ASK" | "PLAN" | "ACT";
+export type ChatMode = "ASK" | "PLAN" | "ACT";
 
 export type ChatSession = {
   id: string;

@@ -6,6 +6,11 @@ import type {
   IndexRequestPayload,
   IndexResponse,
   RepositoryRecord,
+  RepositorySnapshot,
+  SnapshotUpdateRequest,
+  SnapshotDiffResponse,
+  TreeResponse,
+  RetrievalItem,
 } from "@/features/repositories/types/repository-types";
 
 export const repositoryService = {
@@ -36,6 +41,140 @@ export const repositoryService = {
   getIndexProgress(indexingJobId: string): Promise<IndexProgress> {
     return apiClient<IndexProgress>("/v1/index/progress/" + indexingJobId, {
       method: "GET",
+    });
+  },
+
+  listSnapshots(repositoryId: string): Promise<{ snapshots: RepositorySnapshot[]; total: number }> {
+    return apiClient<{ snapshots: RepositorySnapshot[]; total: number }>(`/v1/repositories/${repositoryId}/snapshots`, {
+      method: "GET",
+    });
+  },
+
+  updateSnapshot(
+    repositoryId: string,
+    snapshotId: string,
+    payload: SnapshotUpdateRequest
+  ): Promise<{ updated: boolean }> {
+    return apiClient<{ updated: boolean }>(`/v1/repositories/${repositoryId}/snapshots/${snapshotId}`, {
+      method: "PATCH",
+      body: payload,
+    });
+  },
+
+  getSnapshotDiff(
+    repositoryId: string,
+    snapshotId: string,
+    compareWith: string
+  ): Promise<SnapshotDiffResponse> {
+    return apiClient<SnapshotDiffResponse>(`/v1/repositories/${repositoryId}/snapshots/${snapshotId}/diff`, {
+      method: "GET",
+      params: { compare_with: compareWith },
+    });
+  },
+
+  getTree(
+    repositoryId: string,
+    path?: string,
+    snapshotId?: string,
+    patchId?: string
+  ): Promise<TreeResponse> {
+    const params: Record<string, string> = {};
+    if (path) params.path = path;
+    if (snapshotId) params.snapshot_id = snapshotId;
+    if (patchId) params.patch_id = patchId;
+
+    return apiClient<TreeResponse>(`/v1/repositories/${repositoryId}/tree`, {
+      method: "GET",
+      params,
+    });
+  },
+
+  getFileContent(
+    repositoryId: string,
+    path: string,
+    commitSha?: string
+  ): Promise<{ path: string; content: string; language: string; size_bytes: number }> {
+    const params: Record<string, string> = { path };
+    if (commitSha) params.commit_sha = commitSha;
+
+    return apiClient<{ path: string; content: string; language: string; size_bytes: number }>(
+      `/v1/repositories/${repositoryId}/file`,
+      {
+        method: "GET",
+        params,
+      }
+    );
+  },
+
+  listIndexingJobs(repositoryId?: string): Promise<any[]> {
+    const params: Record<string, string> = {};
+    if (repositoryId) params.repository_id = repositoryId;
+    return apiClient<any[]>('/v1/indexing-jobs', {
+      method: "GET",
+      params,
+    });
+  },
+
+  retrieveProject(
+    projectId: string,
+    payload: { query: string; repository_ids: string[]; top_k?: number }
+  ): Promise<{ items: RetrievalItem[] }> {
+    return apiClient<{ items: RetrievalItem[] }>(`/v1/projects/${projectId}/retrieve`, {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  retrieveRepository(
+    repositoryId: string,
+    payload: { query: string; top_k?: number }
+  ): Promise<{ items: RetrievalItem[] }> {
+    return apiClient<{ items: RetrievalItem[] }>(`/v1/repositories/${repositoryId}/retrieve`, {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  getContextTokens(repositoryId: string, payload: { scope_paths?: string[]; attached_files?: string[]; retrieval_query?: string }): Promise<{ attached_tokens: number; scope_tokens: number; retrieval_tokens: number; total_tokens: number; repository_total_tokens: number; max_tokens: number }> {
+    return apiClient<{ attached_tokens: number; scope_tokens: number; retrieval_tokens: number; total_tokens: number; repository_total_tokens: number; max_tokens: number }>(`/v1/repositories/${repositoryId}/context-tokens`, {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  getInsights(repositoryId: string): Promise<any> {
+    return apiClient<any>(`/v1/repositories/${repositoryId}/insights`, {
+      method: "GET",
+    });
+  },
+
+  listPatches(repositoryId: string): Promise<any[]> {
+    return apiClient<any[]>(`/v1/repositories/${repositoryId}/patches`, {
+      method: "GET",
+    });
+  },
+
+  getPatch(repositoryId: string, patchId: string): Promise<any> {
+    return apiClient<any>(`/v1/repositories/${repositoryId}/patches/${patchId}`, {
+      method: "GET",
+    });
+  },
+
+  deletePatch(repositoryId: string, patchId: string): Promise<any> {
+    return apiClient<any>(`/v1/repositories/${repositoryId}/patches/${patchId}`, {
+      method: "DELETE",
+    });
+  },
+
+  validatePatch(repositoryId: string, patchId: string): Promise<any> {
+    return apiClient<any>(`/v1/repositories/${repositoryId}/patches/${patchId}/validate`, {
+      method: "POST",
+    });
+  },
+
+  applyPatch(repositoryId: string, patchId: string): Promise<any> {
+    return apiClient<any>(`/v1/repositories/${repositoryId}/patches/${patchId}/apply`, {
+      method: "POST",
     });
   },
 };

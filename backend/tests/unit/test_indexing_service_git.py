@@ -144,5 +144,6 @@ async def test_delete_repository_chunks_for_paths(indexing_service, tmp_path):
     indexing_service.session.commit = MagicMock()
     
     await indexing_service._delete_repository_chunks_for_paths("repo1", repo_root, {"file1.py"})
-    indexing_service.session.execute.assert_called_once()
+    # Two-phase delete: collect IDs, then delete rows
+    assert indexing_service.session.execute.call_count == 2
     indexing_service.session.commit.assert_called_once()

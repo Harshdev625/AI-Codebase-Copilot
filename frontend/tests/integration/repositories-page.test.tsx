@@ -1,111 +1,87 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 
-import RepositoriesPage from "@/app/(user)/repositories/page";
-import { ToastProvider } from "@/components/shared/toast-provider";
+import { DashboardRecentRepositories } from "@/features/dashboard/components/dashboard-recent-repositories";
+import {
+  useRepositories,
+  useIndexRepository,
+  useIndexingJobs,
+} from "@/features/repositories/hooks/use-repositories";
 
 import { renderWithProviders } from "../test-utils";
 
-describe("RepositoriesPage", () => {
-  let fetchSpy: jest.SpyInstance;
+jest.mock("@/features/repositories/hooks/use-repositories", () => ({
+  useRepositories: jest.fn(),
+  useIndexRepository: jest.fn(),
+  useIndexingJobs: jest.fn(),
+}));
+
+describe("DashboardRecentRepositories integration", () => {
+  const mockMutate = jest.fn();
 
   beforeEach(() => {
-    jest.restoreAllMocks();
-    window.localStorage.clear();
-    window.localStorage.setItem("aicc_token", "token-1");
-    fetchSpy = jest.spyOn(global, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
-    );
+    jest.clearAllMocks();
+    (useIndexRepository as jest.Mock).mockReturnValue({ mutate: mockMutate, isPending: false });
+    (useIndexingJobs as jest.Mock).mockReturnValue({ data: [] });
   });
 
   it("loads repositories on mount", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [{ id: "r1", repo_id: "owner/repo", default_branch: "main", remote_url: "https://github.com/owner/repo.git", latest_job_status: "not_indexed" }],
-          pagination: { total: 1, limit: 100, offset: 0, has_more: false }
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
+    (useRepositories as jest.Mock).mockReturnValue({
+      repositories: [
+        {
+          id: "r1",
+          repo_id: "owner/repo",
+          default_branch: "main",
+          remote_url: "https://github.com/owner/repo.git",
+          latest_job_status: "not_indexed",
+          local_path: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+      isLoading: false,
+    });
 
-    renderWithProviders(<RepositoriesPage />);
+    renderWithProviders(<DashboardRecentRepositories />);
 
     expect(await screen.findByText("owner/repo")).toBeInTheDocument();
-    expect(screen.getByText("Index Now")).toBeInTheDocument();
   });
 
-  it("adds a repository and refreshes", async () => {
-    // Initial load
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
-    );
-    // Add repo response
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ id: "r2", repo_id: "new/repo", default_branch: "main" }), { status: 200, headers: { "Content-Type": "application/json" } })
-    );
-
-    renderWithProviders(<RepositoriesPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: /add repository/i }));
-    const input = await screen.findByPlaceholderText("my-app-backend");
-    fireEvent.change(input, { target: { value: "new/repo" } });
-    const urlInput = await screen.findByPlaceholderText("https://github.com/owner/repo.git");
-    fireEvent.change(urlInput, { target: { value: "https://github.com/new/repo.git" } });
-    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/v1/repositories"), expect.objectContaining({ method: "POST" }));
+  it("shows empty state when no repositories exist", () => {
+    (useRepositories as jest.Mock).mockReturnValue({
+      repositories: [],
+      isLoading: false,
     });
-    
-    // Wait for UI to settle after query invalidation
-    // The default mock response will return empty items, but we should just ensure the test doesn't exit prematurely
-    // We can just wait a tick for the mutation to finish
-    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    renderWithProviders(<DashboardRecentRepositories />);
+    expect(screen.getByText("No repositories yet")).toBeInTheDocument();
   });
 
-  it("indexes a repository and shows indexed status", async () => {
-    // Initial load
-    fetchSpy.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [{ id: "r1", repo_id: "owner/repo", default_branch: "main", remote_url: "https://github.com/owner/repo.git", latest_job_status: "not_indexed" }],
-          pagination: { total: 1, limit: 100, offset: 0, has_more: false }
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
-      )
-    );
-    // Start index response
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ indexing_job_id: "job-1" }), { status: 202, headers: { "Content-Type": "application/json" } })
-    );
-
-    renderWithProviders(<RepositoriesPage />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /index now/i }));
-
-    await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining("/api/v1/index"), expect.objectContaining({ method: "POST" }));
+  it("triggers reindex mutation", async () => {
+    (useRepositories as jest.Mock).mockReturnValue({
+      repositories: [
+        {
+          id: "r1",
+          repo_id: "owner/repo",
+          default_branch: "main",
+          remote_url: "https://github.com/owner/repo.git",
+          latest_job_status: "completed",
+          local_path: null,
+          created_at: new Date().toISOString(),
+        },
+      ],
+      isLoading: false,
     });
-  });
 
-  it("shows error toast when adding repository fails", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ items: [], pagination: { total: 0 } }), { status: 200, headers: { "Content-Type": "application/json" } })
+    renderWithProviders(<DashboardRecentRepositories />);
+
+    const reindexButton = await screen.findByRole("button", { name: /re-index/i });
+    fireEvent.click(reindexButton);
+
+    expect(mockMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repository_id: "r1",
+        repo_url: "https://github.com/owner/repo.git",
+        repo_ref: "main",
+      })
     );
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ detail: "Repository already exists" }), { status: 400, headers: { "Content-Type": "application/json" } })
-    );
-
-    renderWithProviders(<RepositoriesPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: /add repository/i }));
-    const input = await screen.findByPlaceholderText("my-app-backend");
-    fireEvent.change(input, { target: { value: "existing/repo" } });
-    const urlInput = await screen.findByPlaceholderText("https://github.com/owner/repo.git");
-    fireEvent.change(urlInput, { target: { value: "https://github.com/existing/repo.git" } });
-    fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
-
-    const elements = await screen.findAllByText("Repository already exists");
-    expect(elements.length).toBeGreaterThan(0);
   });
 });

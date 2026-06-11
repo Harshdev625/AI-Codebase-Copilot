@@ -43,7 +43,7 @@ export function ModeSelector({ mode, onModeChange }: ModeSelectorProps) {
 
   return (
     <div className="flex flex-col items-center justify-center w-full mt-1 mb-2">
-      <div className="relative flex items-center bg-background/50 p-1 rounded-2xl border border-border/40 shadow-sm backdrop-blur-md">
+      <div className="relative flex items-center bg-card/60 p-1 rounded-2xl border border-border/40 shadow-sm backdrop-blur-xl">
         {MODES.map((m) => {
           const isActive = mode === m.id;
           const Icon = m.icon;

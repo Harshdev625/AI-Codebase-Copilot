@@ -37,7 +37,7 @@ export function ScopeSelector({ scopePaths, onChange }: ScopeSelectorProps) {
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-border/40 bg-accent/5 rounded-t-2xl">
+    <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-border/40 bg-card/60 backdrop-blur-md rounded-t-2xl">
       <div className="flex items-center gap-1.5 mr-2 text-muted-foreground/70">
         <FolderTree className="h-3.5 w-3.5" />
         <span className="text-[10px] font-bold uppercase tracking-wider">Scopes:</span>

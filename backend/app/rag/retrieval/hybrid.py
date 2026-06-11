@@ -73,6 +73,7 @@ def _rerank_candidates(
     lexical: list[dict],
     rankings: list[list[str]],
     is_high_level: bool,
+    patch_chunk_ids: set[str] | None = None
 ) -> list[dict]:
     if len(candidates) <= 1:
         return candidates
@@ -100,6 +101,8 @@ def _rerank_candidates(
             overlap_score = overlap / max(len(query_tokens), 1)
 
         docs_boost = 0.08 if is_high_level and _looks_like_docs_path(path) else 0.0
+        is_patch_chunk = item.get("is_patch_chunk") or (patch_chunk_ids and item_id in patch_chunk_ids)
+        patch_boost = 0.15 if is_patch_chunk else 0.0
 
         final_score = (
             0.55 * rrf_norm.get(item_id, 0.0)
@@ -107,6 +110,7 @@ def _rerank_candidates(
             + 0.15 * lexical_norm.get(item_id, 0.0)
             + 0.10 * overlap_score
             + docs_boost
+            + patch_boost
         )
         enriched = dict(item)
         enriched["rerank_score"] = round(final_score, 6)
@@ -126,25 +130,37 @@ def _dense_search_postgres_with_embedding(
     embedding: list[float],
     top_k: int = 20,
     scope_paths: list[str] | None = None,
+    patch_id: str | None = None,
 ) -> list[dict]:
     logger.debug(
-        "retrieval_dense_postgres_embedding - request repository_id=%s top_k=%s",
+        "retrieval_dense_postgres_embedding - request repository_id=%s top_k=%s patch_id=%s",
         repository_id,
         top_k,
+        patch_id,
     )
-    try:
-        validate_embedding_dimension(embedding)
-    except Exception as exc:
-        logger.warning(
-            "retrieval_dense_postgres_embedding - invalid embedding repository_id=%s error=%s",
-            repository_id,
-            exc,
-        )
-        return []
-    vector_literal = _to_vector_literal(embedding)
+    
+    table_name = "patch_chunks" if patch_id else "code_chunks"
+    status_clause = "AND patch_id = :patch_id" if patch_id else "AND status = 'ACTIVE' AND embedding IS NOT NULL"
+    score_expression = "1.0 AS score" if patch_id else "1 - (embedding <=> CAST(:embedding AS vector)) AS score"
+    order_by = "" if patch_id else "ORDER BY embedding <=> CAST(:embedding AS vector)"
+
+    params = {"repository_id": repository_id, "top_k": top_k}
+    if patch_id:
+        params["patch_id"] = patch_id
+    else:
+        try:
+            validate_embedding_dimension(embedding)
+        except Exception as exc:
+            logger.warning(
+                "retrieval_dense_postgres_embedding - invalid embedding repository_id=%s error=%s",
+                repository_id,
+                exc,
+            )
+            return []
+        vector_literal = _to_vector_literal(embedding)
+        params["embedding"] = vector_literal
     
     scope_clause = ""
-    params = {"embedding": vector_literal, "repository_id": repository_id, "top_k": top_k}
     if scope_paths:
         scope_conditions = []
         for i, path in enumerate(scope_paths):
@@ -156,13 +172,12 @@ def _dense_search_postgres_with_embedding(
     stmt = text(
         f"""
         SELECT id, path, symbol, content, repository_id, repo_id,
-               1 - (embedding <=> CAST(:embedding AS vector)) AS score
-        FROM code_chunks
+               {score_expression}
+        FROM {table_name}
         WHERE repository_id = :repository_id
-          AND status = 'ACTIVE'
+          {status_clause}
           {scope_clause}
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:embedding AS vector)
+        {order_by}
         LIMIT :top_k
         """
     )
@@ -172,10 +187,8 @@ def _dense_search_postgres_with_embedding(
     return result
 
 
-
-
-def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None) -> list[dict]:
-    logger.debug("retrieval_dense - request repository_id=%s top_k=%s", repository_id, top_k)
+def dense_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None, patch_id: str | None = None) -> list[dict]:
+    logger.debug("retrieval_dense - request repository_id=%s top_k=%s patch_id=%s", repository_id, top_k, patch_id)
     try:
         embedding = get_embedding_provider().embed_text(query)
         validate_embedding_dimension(embedding)
@@ -185,28 +198,36 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
             repository_id,
             exc,
         )
-        return []  # Ollama unavailable; dense search not possible
+        return []
 
     try:
-        matches = QdrantService().search(vector=embedding, repository_id=repository_id, limit=top_k * 3 if scope_paths else top_k)
+        matches = QdrantService().search(
+            vector=embedding,
+            repository_id=repository_id,
+            limit=top_k * 3 if scope_paths else top_k,
+            patch_id=patch_id
+        )
     except RuntimeError as exc:
         logger.warning(
             "retrieval_dense - qdrant failed; falling back to postgres repository_id=%s error=%s",
             repository_id,
             exc,
         )
-        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths, patch_id=patch_id)
 
     if not matches:
         logger.debug("retrieval_dense - qdrant empty; falling back to postgres repository_id=%s", repository_id)
-        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
+        return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths, patch_id=patch_id)
 
     matched_ids = [str(item.get("id")) for item in matches]
     score_map = {str(item.get("id")): float(item.get("score", 0.0)) for item in matches}
 
     placeholders = ", ".join(f":mid{i}" for i in range(len(matched_ids)))
+    table_name = "patch_chunks" if patch_id else "code_chunks"
+    status_clause = "" if patch_id else "AND status = 'ACTIVE'"
+    
     stmt = text(
-        f"SELECT id, path, symbol, content, repository_id, repo_id FROM code_chunks WHERE id IN ({placeholders}) AND status = 'ACTIVE'"
+        f"SELECT id, path, symbol, content, repository_id, repo_id FROM {table_name} WHERE id IN ({placeholders}) {status_clause}"
     )
     params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
     rows = session.execute(stmt, params).mappings().all()
@@ -218,6 +239,8 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
         if not row:
             continue
         row["score"] = score_map.get(item_id, 0.0)
+        if patch_id:
+            row["is_patch_chunk"] = True
         
         path = str(row.get("path", ""))
         if _is_noisy_path(path):
@@ -231,16 +254,19 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
         return merged[:top_k]
 
     logger.debug("retrieval_dense - qdrant stale ids or filtered out; falling back to postgres repository_id=%s", repository_id)
-    return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths)
+    return _dense_search_postgres_with_embedding(session, repository_id, embedding, top_k=top_k, scope_paths=scope_paths, patch_id=patch_id)
 
 
-def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None) -> list[dict]:
+def lexical_search(session: Session, repository_id: str, query: str, top_k: int = 20, scope_paths: list[str] | None = None, patch_id: str | None = None) -> list[dict]:
     if not query.strip():
         return []
-    logger.debug("retrieval_lexical - request repository_id=%s top_k=%s", repository_id, top_k)
+    logger.debug("retrieval_lexical - request repository_id=%s top_k=%s patch_id=%s", repository_id, top_k, patch_id)
 
     scope_clause = ""
     params = {"query": query, "repository_id": repository_id, "top_k": top_k}
+    if patch_id:
+        params["patch_id"] = patch_id
+        
     if scope_paths:
         scope_conditions = []
         for i, path in enumerate(scope_paths):
@@ -253,14 +279,17 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
     dialect = getattr(getattr(bind, "dialect", None), "name", None)
     is_sqlite = bool(dialect and str(dialect).lower() == "sqlite")
 
+    table_name = "patch_chunks" if patch_id else "code_chunks"
+    status_clause = "AND patch_id = :patch_id" if patch_id else "AND status = 'ACTIVE'"
+
     if is_sqlite:
         stmt = text(
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
                    1.0 AS score
-            FROM code_chunks
+            FROM {table_name}
             WHERE repository_id = :repository_id
-              AND status = 'ACTIVE'
+              {status_clause}
               {scope_clause}
               AND content LIKE :like_query
             LIMIT :top_k
@@ -272,9 +301,9 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
                    ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
-            FROM code_chunks
+            FROM {table_name}
             WHERE repository_id = :repository_id
-              AND status = 'ACTIVE'
+              {status_clause}
               {scope_clause}
               AND to_tsvector('english', content) @@ plainto_tsquery('english', :query)
             ORDER BY score DESC
@@ -287,11 +316,11 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         item = dict(row)
         if _is_noisy_path(str(item.get("path", ""))):
             continue
+        if patch_id:
+            item["is_patch_chunk"] = True
         filtered.append(item)
     logger.debug("retrieval_lexical - response repository_id=%s count=%s", repository_id, len(filtered))
     return filtered
-
-
 
 
 HIGH_LEVEL_QUERY_TOKENS = {
@@ -326,16 +355,48 @@ def _looks_like_docs_path(path: str) -> bool:
     return any(token in lower for token in DOC_PATH_TOKENS)
 
 
-def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None) -> list[dict]:
-    logger.info("retrieval_hybrid - request repository_id=%s top_k=%s", repository_id, top_k)
+def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None, patch_id: str | None = None) -> list[dict]:
+    logger.info("retrieval_hybrid - request repository_id=%s top_k=%s patch_id=%s", repository_id, top_k, patch_id)
     candidate_pool = max(top_k, settings.retrieval_rerank_candidate_pool)
     if scope_paths:
-        candidate_pool = max(candidate_pool, 50)  # Need more candidates to ensure we hit scopes
-    dense = dense_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
-    lexical = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
+        candidate_pool = max(candidate_pool, 50)
 
-    # For "architecture" and similar high-level questions, boost documentation-ish files
-    # so the model sees entrypoints/README/docs, not just arbitrary constructors.
+    excluded_paths = set()
+    if patch_id:
+        rows = session.execute(
+            text("SELECT file_path FROM act_patch_files WHERE patch_id = :pid AND action IN ('MODIFIED', 'DELETED')"),
+            {"pid": patch_id}
+        ).mappings().all()
+        excluded_paths = {r["file_path"] for r in rows}
+
+    dense_base = dense_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
+    lexical_base = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
+
+    if patch_id:
+        dense_base = [item for item in dense_base if item.get("path") not in excluded_paths]
+        lexical_base = [item for item in lexical_base if item.get("path") not in excluded_paths]
+
+        dense_patch = dense_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths, patch_id=patch_id)
+        lexical_patch = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths, patch_id=patch_id)
+
+        dense = [*dense_base, *dense_patch]
+        lexical = [*lexical_base, *lexical_patch]
+
+        dense_ids = [str(item["id"]) for item in dense_base]
+        lexical_ids = [str(item["id"]) for item in lexical_base]
+        patch_dense_ids = [str(item["id"]) for item in dense_patch]
+        patch_lexical_ids = [str(item["id"]) for item in lexical_patch]
+
+        rankings = [dense_ids, lexical_ids, patch_dense_ids, patch_lexical_ids]
+        patch_chunk_ids = {str(item["id"]) for item in dense_patch} | {str(item["id"]) for item in lexical_patch}
+    else:
+        dense = dense_base
+        lexical = lexical_base
+        dense_ids = [str(item["id"]) for item in dense]
+        lexical_ids = [str(item["id"]) for item in lexical]
+        rankings = [dense_ids, lexical_ids]
+        patch_chunk_ids = set()
+
     extra_rankings: list[list[str]] = []
     is_high_level_query = _is_high_level_query(query)
     if is_high_level_query:
@@ -344,9 +405,7 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
         if doc_ids:
             extra_rankings.append(doc_ids)
 
-    dense_ids = [str(item["id"]) for item in dense]
-    lexical_ids = [str(item["id"]) for item in lexical]
-    rankings = [dense_ids, lexical_ids, *extra_rankings]
+    rankings = [*rankings, *extra_rankings]
     merged_ids = reciprocal_rank_fusion(rankings)[:candidate_pool]
 
     items_by_id = {str(item["id"]): item for item in [*dense, *lexical]}
@@ -359,6 +418,7 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
             lexical=lexical,
             rankings=rankings,
             is_high_level=is_high_level_query,
+            patch_chunk_ids=patch_chunk_ids
         )
     else:
         ordered_items = candidate_items
@@ -396,5 +456,67 @@ def _federation_score(item: dict[str, Any], query: str) -> float:
     return base + (0.12 * overlap)
 
 
-def project_federated_retrieve(*args, **kwargs) -> list[dict]:
-    raise RuntimeError("Project-scoped retrieval is not supported in the simplified schema.")
+def project_federated_retrieve(
+    session: Session,
+    *,
+    repository_ids: list[str],
+    query: str,
+    top_k: int = 10,
+) -> list[dict]:
+    logger.info("project_federated_retrieve - repos=%s query=%s", repository_ids, query)
+    all_candidates = {}
+    global_dense_scores = {}
+    global_lexical_scores = {}
+    
+    for repo_id in repository_ids:
+        dense = dense_search(session, repo_id, query, top_k=top_k * 2)
+        lexical = lexical_search(session, repo_id, query, top_k=top_k * 2)
+        
+        for item in [*dense, *lexical]:
+            all_candidates[str(item["id"])] = item
+            
+        # Normalize dense scores for this repo
+        if dense:
+            d_scores = {str(item["id"]): float(item.get("score") or 0.0) for item in dense}
+            min_d = min(d_scores.values())
+            max_d = max(d_scores.values())
+            denom = max_d - min_d
+            for cid, val in d_scores.items():
+                global_dense_scores[cid] = (val - min_d) / denom if denom > 0.0 else 1.0
+                
+        # Normalize lexical scores for this repo
+        if lexical:
+            l_scores = {str(item["id"]): float(item.get("score") or 0.0) for item in lexical}
+            min_l = min(l_scores.values())
+            max_l = max(l_scores.values())
+            denom = max_l - min_l
+            for cid, val in l_scores.items():
+                global_lexical_scores[cid] = (val - min_l) / denom if denom > 0.0 else 1.0
+                
+    # Sort candidates by normalized scores to get rankings for RRF
+    dense_ranking = sorted(global_dense_scores.keys(), key=lambda k: global_dense_scores[k], reverse=True)
+    lexical_ranking = sorted(global_lexical_scores.keys(), key=lambda k: global_lexical_scores[k], reverse=True)
+    
+    rankings = [dense_ranking, lexical_ranking]
+    merged_ids = reciprocal_rank_fusion(rankings)[:top_k * 2]
+    
+    candidate_items = [all_candidates[item_id] for item_id in merged_ids if item_id in all_candidates]
+    
+    # Convert lists of candidate items for dense and lexical into list[dict]
+    dense_list = [all_candidates[cid] for cid in dense_ranking if cid in all_candidates]
+    lexical_list = [all_candidates[cid] for cid in lexical_ranking if cid in all_candidates]
+    
+    if settings.retrieval_rerank_enabled:
+        ordered_items = _rerank_candidates(
+            query=query,
+            candidates=candidate_items,
+            dense=dense_list,
+            lexical=lexical_list,
+            rankings=rankings,
+            is_high_level=_is_high_level_query(query)
+        )
+    else:
+        ordered_items = candidate_items
+        
+    return ordered_items[:top_k]
+

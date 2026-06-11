@@ -202,6 +202,89 @@ class SnapshotFile(Base):
     snapshot: Mapped["RepositorySnapshot"] = relationship("RepositorySnapshot", back_populates="snapshot_files")
 
 
+class ActPatchDraft(Base):
+    __tablename__ = "act_patch_drafts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    base_commit_sha: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="DRAFT")
+    pre_apply_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="SET NULL"), nullable=True
+    )
+    post_apply_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("repository_snapshots.id", ondelete="SET NULL"), nullable=True
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applied_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    applied_commit_sha_before: Mapped[str | None] = mapped_column(String, nullable=True)
+    validation_logs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_accessed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    repository: Mapped["Repository"] = relationship("Repository")
+    patch_files: Mapped[list["ActPatchFile"]] = relationship(
+        "ActPatchFile", back_populates="patch", cascade="all, delete-orphan"
+    )
+    patch_chunks: Mapped[list["PatchChunk"]] = relationship(
+        "PatchChunk", back_populates="patch", cascade="all, delete-orphan"
+    )
+
+
+class ActPatchFile(Base):
+    __tablename__ = "act_patch_files"
+
+    patch_id: Mapped[str] = mapped_column(
+        ForeignKey("act_patch_drafts.id", ondelete="CASCADE"), primary_key=True
+    )
+    file_path: Mapped[str] = mapped_column(String, primary_key=True)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    file_diff: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash_before: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_hash_after: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    patch: Mapped["ActPatchDraft"] = relationship("ActPatchDraft", back_populates="patch_files")
+
+
+class PatchChunk(Base):
+    __tablename__ = "patch_chunks"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    patch_id: Mapped[str] = mapped_column(
+        ForeignKey("act_patch_drafts.id", ondelete="CASCADE"), index=True
+    )
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), index=True
+    )
+    repo_id: Mapped[str] = mapped_column(String, nullable=False)
+    path: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False, default="")
+    language: Mapped[str] = mapped_column(String, nullable=False, default="")
+    chunk_type: Mapped[str] = mapped_column(String, nullable=False, default="generic")
+    start_line: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    end_line: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    qdrant_point_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    patch: Mapped["ActPatchDraft"] = relationship("ActPatchDraft", back_populates="patch_chunks")
+    repository: Mapped["Repository"] = relationship("Repository")
+
+
+
 from sqlalchemy import event
 from sqlalchemy.orm.attributes import get_history
 

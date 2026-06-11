@@ -86,12 +86,14 @@ class ChatSessionResponse(BaseModel):
     created_at: str
     updated_at: str
     last_activity_at: str
+    metadata: dict[str, Any] | None = None
 
 
 class ChatSessionUpdateRequest(StrictRequestModel):
     session_title: str | None = None
     is_pinned: bool | None = None
     is_archived: bool | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -123,6 +125,13 @@ class IndexResponse(BaseModel):
     indexed_chunks: int
     status: Literal["ok"] = "ok"
     indexing_job_id: str | None = None
+
+
+class ContextTokensRequest(StrictRequestModel):
+    scope_paths: list[str] = []
+    attached_files: list[str] = []
+    retrieval_query: str | None = None
+    session_id: str | None = None
 
 
 class AuthRegisterRequest(StrictRequestModel):

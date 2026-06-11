@@ -199,7 +199,7 @@ async def test_cache_invalidation_schema_version_mismatch(indexing_service, tmp_
     cache_dir.mkdir(parents=True)
     meta_file = cache_dir / "cache_meta.json"
     
-    # Schema version is 1, not 2
+    # Schema version is 1, not 2 — cache is still reused when URL/branch match
     with meta_file.open("w", encoding="utf-8") as f:
         json.dump({
             "repository_id": repository_id,
@@ -219,7 +219,7 @@ async def test_cache_invalidation_schema_version_mismatch(indexing_service, tmp_
         mock_proc.stdout = "commit123\n"
         mock_git.return_value = mock_proc
         
-        await indexing_service._resolve_repo_root(
+        root = await indexing_service._resolve_repo_root(
             repo_id=repo_id,
             repo_path=None,
             repo_url=repo_url,
@@ -227,7 +227,8 @@ async def test_cache_invalidation_schema_version_mismatch(indexing_service, tmp_
             repository_id=repository_id
         )
         
-        mock_delete.assert_called_once_with(cache_dir)
+        assert root == cache_dir
+        mock_delete.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_cache_invalidation_indexer_version_mismatch(indexing_service, tmp_path):
@@ -240,7 +241,7 @@ async def test_cache_invalidation_indexer_version_mismatch(indexing_service, tmp
     cache_dir.mkdir(parents=True)
     meta_file = cache_dir / "cache_meta.json"
     
-    # Indexer version is different
+    # Indexer version mismatch alone does not invalidate cache when URL/branch match
     with meta_file.open("w", encoding="utf-8") as f:
         json.dump({
             "repository_id": repository_id,
@@ -260,7 +261,7 @@ async def test_cache_invalidation_indexer_version_mismatch(indexing_service, tmp
         mock_proc.stdout = "commit123\n"
         mock_git.return_value = mock_proc
         
-        await indexing_service._resolve_repo_root(
+        root = await indexing_service._resolve_repo_root(
             repo_id=repo_id,
             repo_path=None,
             repo_url=repo_url,
@@ -268,4 +269,5 @@ async def test_cache_invalidation_indexer_version_mismatch(indexing_service, tmp
             repository_id=repository_id
         )
         
-        mock_delete.assert_called_once_with(cache_dir)
+        assert root == cache_dir
+        mock_delete.assert_not_called()

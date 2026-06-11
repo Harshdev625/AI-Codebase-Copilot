@@ -657,6 +657,71 @@ def get_repository_insights(session: Session, repository_id: str) -> dict[str, A
         "recent_errors": recent_errors
     }
 
+    # 6. Additional exact counts
+    chunk_count = session.execute(
+        text(
+            """
+            SELECT COUNT(*) as count
+            FROM code_chunks
+            WHERE repository_id = :rid
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()["count"] or 0
+
+    snapshot_count = session.execute(
+        text(
+            """
+            SELECT COUNT(*) as count
+            FROM repository_snapshots
+            WHERE repository_id = :rid
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()["count"] or 0
+
+    patch_count = session.execute(
+        text(
+            """
+            SELECT COUNT(*) as count
+            FROM act_patch_drafts
+            WHERE repository_id = :rid
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()["count"] or 0
+
+    active_sessions = session.execute(
+        text(
+            """
+            SELECT COUNT(*) as count
+            FROM chat_sessions
+            WHERE repository_id = :rid AND is_archived = FALSE
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()["count"] or 0
+
+    latest_commit = session.execute(
+        text(
+            """
+            SELECT commit_sha, created_at, finished_at
+            FROM indexing_jobs
+            WHERE repository_id = :rid AND status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ),
+        {"rid": repository_id}
+    ).mappings().first()
+
+    latest_commit_sha = latest_commit["commit_sha"] if latest_commit else None
+    
+    indexing_duration = None
+    if latest_commit and latest_commit["finished_at"] and latest_commit["created_at"]:
+        duration_delta = latest_commit["finished_at"] - latest_commit["created_at"]
+        indexing_duration = int(duration_delta.total_seconds())
+
     return {
         "files_total": files_total,
         "files_indexed": files_indexed,
@@ -664,5 +729,11 @@ def get_repository_insights(session: Session, repository_id: str) -> dict[str, A
         "skip_reason_breakdown": skip_reason_breakdown,
         "language_breakdown": language_breakdown,
         "largest_files": largest_files,
-        "indexing_health": indexing_health
+        "indexing_health": indexing_health,
+        "chunk_count": chunk_count,
+        "snapshot_count": snapshot_count,
+        "patch_count": patch_count,
+        "active_sessions": active_sessions,
+        "latest_commit": latest_commit_sha,
+        "indexing_duration_seconds": indexing_duration
     }

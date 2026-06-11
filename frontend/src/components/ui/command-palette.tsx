@@ -46,15 +46,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       category: 'Navigate',
       action: () => { router.push('/repositories'); onClose(); },
     },
-    {
-      id: 'nav-chat',
-      label: 'Open Chat Workspace',
-      description: 'AI-powered chat with your codebase',
-      icon: <Bot className="h-4 w-4" />,
-      shortcut: 'G C',
-      category: 'Navigate',
-      action: () => { router.push('/chat'); onClose(); },
-    },
   ], [router, onClose]);
 
   const filtered = query.trim()

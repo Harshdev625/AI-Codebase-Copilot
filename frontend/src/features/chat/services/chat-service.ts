@@ -75,10 +75,63 @@ export const chatService = {
     });
   },
 
-  applyPatch(repositoryId: string, diff: string): Promise<{ applied: boolean; message: string }> {
-    return apiClient<{ applied: boolean; message: string }>("/v1/chat/apply-patch", {
-      body: { repository_id: repositoryId, diff },
-    });
+  createPatchDraft(
+    repositoryId: string,
+    payload: {
+      base_commit_sha: string;
+      patch_files: Array<{
+        file_path: string;
+        action: string;
+        file_diff: string;
+        content_hash_before?: string;
+        content_hash_after?: string;
+      }>;
+    }
+  ): Promise<{ patch_id: string; status: string; created_at: string }> {
+    return apiClient<{ patch_id: string; status: string; created_at: string }>(
+      `/v1/repositories/${repositoryId}/patches`,
+      {
+        method: "POST",
+        body: payload,
+      }
+    );
+  },
+
+  validatePatch(
+    repositoryId: string,
+    patchId: string
+  ): Promise<{ patch_id: string; status: string; validation_logs: string }> {
+    return apiClient<{ patch_id: string; status: string; validation_logs: string }>(
+      `/v1/repositories/${repositoryId}/patches/${patchId}/validate`,
+      {
+        method: "POST",
+      }
+    );
+  },
+
+
+  applyPatch(
+    repositoryId: string,
+    patchId: string
+  ): Promise<{ patch_id: string; status: string }> {
+    return apiClient<{ patch_id: string; status: string }>(
+      `/v1/repositories/${repositoryId}/patches/${patchId}/apply`,
+      {
+        method: "POST",
+      }
+    );
+  },
+
+  cancelPatchDraft(
+    repositoryId: string,
+    patchId: string
+  ): Promise<{ deleted: boolean }> {
+    return apiClient<{ deleted: boolean }>(
+      `/v1/repositories/${repositoryId}/patches/${patchId}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
 
   send(payload: ChatRequestPayload): Promise<ChatResponsePayload> {

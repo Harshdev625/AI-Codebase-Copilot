@@ -122,7 +122,7 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
     <div className="hidden lg:flex flex-col gap-4 w-[280px] shrink-0">
 
       {/* Knowledge Base card */}
-      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/80 shadow-premium">
+      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/60 backdrop-blur-xl shadow-premium">
         {/* Gradient header */}
         <div className="relative flex items-center gap-2.5 px-4 py-3.5 border-b border-border/50 bg-gradient-to-r from-primary/10 to-transparent">
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-primary/8 to-transparent" />
@@ -192,7 +192,7 @@ export function ChatContextSidebar({ repositories, selectedId, onSelect, isLoadi
       </div>
 
       {/* Capabilities card */}
-      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/80 shadow-premium flex-1">
+      <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/60 backdrop-blur-xl shadow-premium flex-1">
         <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border/50">
           <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-background/70 border border-border/60">
             <Layers className="h-3.5 w-3.5 text-muted-foreground" />

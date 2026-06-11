@@ -227,40 +227,34 @@ class IndexingService:
                 with meta_file.open("r", encoding="utf-8") as f:
                     meta = json.load(f)
                 
-                # Verify basic details, schema version, and indexer version
-                if (
-                    meta.get("repository_id") == (repository_id or repo_id)
-                    and meta.get("repo_url") == repo_url
-                    and meta.get("branch") == repo_ref
-                    and meta.get("cache_schema_version") == 2
-                    and meta.get("indexer_version") == "1.0.0"
-                ):
+                # Verify URL and Branch
+                if meta.get("repo_url") == repo_url and meta.get("branch") == repo_ref:
                     logger.info("index_resolve_repo - validating cache ancestry for %s", target)
                     # To verify ancestry, we fetch first
-                    if repo_ref:
-                        await self._run_git(["-C", str(target), "fetch", "origin", repo_ref, "--force"], timeout=600)
-                        
-                        # Verify commit ancestry: is the stored commit an ancestor of origin/branch?
-                        stored_commit = meta.get("latest_commit_sha")
-                        if stored_commit and isinstance(stored_commit, str):
-                            await self._run_git(["-C", str(target), "merge-base", "--is-ancestor", stored_commit, f"origin/{repo_ref}"], timeout=120)
-                            is_valid_cache = True
-                    else:
-                        is_valid_cache = True
+                    await self._run_git(["-C", str(target), "fetch", "origin", repo_ref, "--force"], timeout=600)
+                    is_valid_cache = True
             except Exception as e:
                 logger.warning("index_resolve_repo - cache validation failed %s", e)
         
-        try:
-            if not is_valid_cache:
-                if target.exists():
-                    self._kill_git_processes(target)
-                    self._force_delete_directory(target)
+        if not is_valid_cache:
+            if target.exists():
+                self._kill_git_processes(target)
+                self._force_delete_directory(target)
 
-                logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
-                clone_args = ["clone", repo_url, str(target)]
+            logger.info("index_clone - start repo_id=%s repo_url=%s target=%s ref=%s", repo_id, repo_url, target, repo_ref)
+            clone_args = ["clone", repo_url, str(target)]
+            try:
                 await self._run_git(clone_args, timeout=600)
+            except Exception as exc:
+                detail = self._format_process_error(exc, "Repository clone failed")
+                logger.error("index_clone - failure repo_id=%s detail=%s", repo_id, detail)
+                raise ExternalServiceError(
+                    service_name="Git",
+                    underlying_error=f"Failed to clone repository: {detail}",
+                ) from exc
 
-            # Force state to exact branch
+        # Force state to exact branch
+        try:
             if repo_ref:
                 await self._run_git(["-C", str(target), "checkout", repo_ref], timeout=120)
                 if is_valid_cache:
@@ -271,25 +265,12 @@ class IndexingService:
             await self._run_git(["-C", str(target), "clean", "-fdx"], timeout=120)
     
             # Save meta
-            latest_commit_sha = ""
-            try:
-                rev_parse_res = await self._run_git(["-C", str(target), "rev-parse", "HEAD"])
-                if rev_parse_res and hasattr(rev_parse_res, "stdout"):
-                    raw_sha = rev_parse_res.stdout
-                    if isinstance(raw_sha, str):
-                        latest_commit_sha = raw_sha.strip()
-            except Exception:
-                pass
-
             target.mkdir(parents=True, exist_ok=True)
             with meta_file.open("w", encoding="utf-8") as f:
                 json.dump({
                     "repository_id": repository_id or repo_id,
                     "repo_url": repo_url,
                     "branch": repo_ref,
-                    "latest_commit_sha": latest_commit_sha,
-                    "cache_schema_version": 2,
-                    "indexer_version": "1.0.0",
                     "last_accessed_at": time.time()
                 }, f)
                 
@@ -491,26 +472,37 @@ class IndexingService:
                     await asyncio.sleep(wait_time)
 
     async def _delete_all_repository_chunks(self, repository_id: str) -> None:
-        """Mark all active code chunks for a repository as OBSOLETE in the database.
-        Never physically delete them to preserve auditability.
+        """Delete all code chunks for a repository from both Qdrant and PostgreSQL.
+        H4 Fix: Use transactional pattern - Qdrant first with retry, then DB deletion.
+        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
         """
+        # Phase 3 FIX: Ensure collection exists before deletion to avoid 404 errors
+        try:
+            self.qdrant.ensure_collection()
+        except Exception as exc:
+            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
+            # Continue anyway - if collection doesn't exist, there's nothing to delete
+        
+        # H4: Delete from Qdrant FIRST with retry logic
+        # If Qdrant fails, exception is raised and DB deletion never happens
+        await self._delete_qdrant_with_retry(
+            f"repository_purge({repository_id})",
+            self.qdrant.delete_points_by_repository,
+            repository_id,
+        )
+        
+        # H4: Only delete from DB if Qdrant succeeded
         try:
             self.session.execute(
-                text(
-                    """
-                    UPDATE code_chunks
-                    SET status = 'OBSOLETE', obsolete_at = CURRENT_TIMESTAMP
-                    WHERE repository_id = :repository_id AND status = 'ACTIVE'
-                    """
-                ),
+                text("DELETE FROM code_chunks WHERE repository_id = :repository_id"),
                 {"repository_id": repository_id},
             )
             self.session.commit()
-            logger.info("index_obsolete_db_success - repository_id=%s", repository_id)
+            logger.info("index_delete_db_success - repository_id=%s", repository_id)
         except Exception as exc:
             self.session.rollback()
-            logger.error("index_obsolete_db_failed - repository_id=%s error=%s", repository_id, str(exc))
-            raise DatabaseException("Failed to transition repository chunks to OBSOLETE") from exc
+            logger.error("index_delete_db_failed - repository_id=%s error=%s", repository_id, str(exc))
+            raise DatabaseException("Failed to delete repository chunks from database") from exc
 
     async def _delete_repository_chunks_for_paths(
         self,
@@ -518,18 +510,24 @@ class IndexingService:
         repo_root: Path,
         relative_paths: set[str],
     ) -> None:
-        """Mark code chunks for specific paths as OBSOLETE.
-        Never physically delete them to preserve auditability.
+        """Delete code chunks for specific paths in a repository.
+        H4 Fix: Two-phase commit - collect IDs, delete from Qdrant with retry, then from DB.
+        Phase 3 Fix: Ensure Qdrant collection exists before attempting deletion.
         """
         if not relative_paths:
             return
 
+        # Phase 3 FIX: Ensure collection exists before any Qdrant operations
+        try:
+            self.qdrant.ensure_collection()
+        except Exception as exc:
+            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
+            # Continue anyway - if collection doesn't exist, there's nothing to delete
+
         stmt = text(
             """
-            UPDATE code_chunks
-            SET status = 'OBSOLETE', obsolete_at = CURRENT_TIMESTAMP
+            DELETE FROM code_chunks
             WHERE repository_id = :repository_id
-              AND status = 'ACTIVE'
               AND (
                 path = :abs_path
                 OR path = :rel_path
@@ -538,7 +536,63 @@ class IndexingService:
               )
             """
         )
+        query_ids_stmt = text(
+            """
+            SELECT id
+            FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND (
+                path = :abs_path
+                OR path = :rel_path
+                OR path LIKE :unix_suffix
+                OR path LIKE :win_suffix
+              )
+            """
+        )
+        point_ids: set[str] = set()
 
+        try:
+            # H4: PHASE 1 - Collect IDs to delete
+            for rel in sorted(relative_paths):
+                normalized_rel = rel.replace("\\", "/").lstrip("/")
+                if not normalized_rel:
+                    continue
+
+                abs_path = str((repo_root / normalized_rel).resolve())
+                windows_rel = normalized_rel.replace("/", "\\")
+                params = {
+                    "repository_id": repository_id,
+                    "abs_path": abs_path,
+                    "rel_path": normalized_rel,
+                    "unix_suffix": f"%/{normalized_rel}",
+                    "win_suffix": f"%\\{windows_rel}",
+                }
+
+                id_rows = self.session.execute(query_ids_stmt, params).mappings().all()
+                for row in id_rows:
+                    chunk_id = str(row.get("id") or "").strip()
+                    if chunk_id:
+                        point_ids.add(chunk_id)
+
+        except Exception as exc:
+            self.session.rollback()
+            logger.error(
+                "index_delete_collect_ids_failed - repository_id=%s count=%s error=%s",
+                repository_id,
+                len(relative_paths),
+                str(exc),
+            )
+            raise DatabaseException("Failed to collect chunk IDs for deletion") from exc
+
+        # H4: PHASE 2 - Delete from Qdrant FIRST with retry
+        if point_ids:
+            await self._delete_qdrant_with_retry(
+                f"path_purge(repo={repository_id}, count={len(point_ids)})",
+                self.qdrant.delete_points_by_ids,
+                list(point_ids),
+            )
+
+        # H4: PHASE 3 - Delete from DB only if Qdrant succeeded
         try:
             for rel in sorted(relative_paths):
                 normalized_rel = rel.replace("\\", "/").lstrip("/")
@@ -559,19 +613,20 @@ class IndexingService:
 
             self.session.commit()
             logger.info(
-                "index_obsolete_db_success - repository_id=%s path_count=%s",
+                "index_delete_db_success - repository_id=%s path_count=%s point_count=%s",
                 repository_id,
                 len(relative_paths),
+                len(point_ids),
             )
         except Exception as exc:
             self.session.rollback()
             logger.error(
-                "index_obsolete_db_failed - repository_id=%s path_count=%s error=%s",
+                "index_delete_db_failed - repository_id=%s path_count=%s error=%s",
                 repository_id,
                 len(relative_paths),
                 str(exc),
             )
-            raise DatabaseException("Failed to mark chunks as OBSOLETE for specific paths") from exc
+            raise DatabaseException("Failed to delete chunks for specific paths") from exc
 
     async def _update_progress(
         self,

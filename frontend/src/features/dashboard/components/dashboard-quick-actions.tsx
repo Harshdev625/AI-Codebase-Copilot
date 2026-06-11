@@ -76,7 +76,7 @@ export function DashboardQuickActions() {
           onClick={() => router.push(action.href)}
           className={cn(
             'group relative flex items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-300',
-            'bg-card/80 hover:bg-card hover:-translate-y-0.5',
+            'bg-card/60 backdrop-blur-xl hover:bg-card/80 hover:-translate-y-0.5',
             action.borderColor,
             action.glow,
             'animate-fade-up'

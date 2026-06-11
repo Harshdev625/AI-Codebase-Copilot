@@ -8,6 +8,8 @@ export const adminKeys = {
   users: ["admin", "users"] as const,
   repositories: ["admin", "repositories"] as const,
   indexing: ["admin", "indexing"] as const,
+  telemetry: ["admin", "telemetry"] as const,
+  recentActivity: ["admin", "recentActivity"] as const,
 };
 
 export function useAdminDashboard() {
@@ -45,11 +47,23 @@ export function useAdminDashboard() {
     },
   });
 
+  const telemetryQuery = useQuery({
+    queryKey: adminKeys.telemetry,
+    queryFn: () => adminService.telemetry(),
+  });
+
+  const recentActivityQuery = useQuery({
+    queryKey: adminKeys.recentActivity,
+    queryFn: () => adminService.recentActivity(),
+  });
+
   return {
     metricsQuery,
     healthQuery,
     usersQuery,
     repositoriesQuery,
     indexingQuery,
+    telemetryQuery,
+    recentActivityQuery,
   };
 }

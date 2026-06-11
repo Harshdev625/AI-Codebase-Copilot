@@ -106,27 +106,20 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
 
   return (
     <div className={cn(
-      'relative flex gap-4 transition-all duration-300 group my-1',
-      isDocumentMode ? 'py-8 px-6 rounded-xl mx-0 shadow-lg border border-border bg-card/60' : 'py-7 px-5 rounded-3xl mx-2',
-      !isDocumentMode && isAssistant
-        ? 'bg-card border border-primary/12 shadow-[0_4px_24px_-8px] shadow-primary/8 animate-fade-in'
-        : !isDocumentMode ? 'bg-transparent hover:bg-accent/20 border border-transparent hover:border-border' : ''
+      'relative flex gap-3 transition-all duration-300 group py-4 border-b border-border/40 last:border-0',
+      isDocumentMode ? 'px-6 mx-0 bg-card/60 backdrop-blur-md rounded-2xl border border-border/40 shadow-sm my-2' : 'px-4 mx-0',
+      !isDocumentMode && isAssistant ? 'animate-fade-in' : ''
     )}>
-      {/* Gradient left border for AI messages */}
-      {!isDocumentMode && isAssistant && (
-        <div className="absolute left-0 top-4 bottom-4 w-0.5 rounded-r-full bg-gradient-to-b from-primary/60 via-primary/40 to-transparent" />
-      )}
-
       {/* Avatar */}
       {!isDocumentMode && (
-        <div className="flex flex-col items-center gap-2 px-1 shrink-0 pt-0.5">
+        <div className="flex flex-col items-center shrink-0 pt-0.5">
           <div className={cn(
-            'flex h-9 w-9 items-center justify-center rounded-2xl border transition-all duration-300',
+            'flex h-6 w-6 items-center justify-center rounded-md border transition-all duration-300',
             isAssistant
-              ? 'bg-primary/30 border-primary/20 text-primary shadow-[0_0_16px_-4px] shadow-primary/40 group-hover:shadow-[0_0_24px_-4px] group-hover:shadow-primary/60 group-hover:scale-105'
-              : 'bg-accent/40 border-border/50 text-muted-foreground group-hover:bg-accent/60'
+              ? 'bg-primary/20 border-primary/30 text-primary shadow-sm'
+              : 'bg-muted border-border text-muted-foreground'
           )}>
-            {isAssistant ? <Bot className="h-5 w-5" /> : <UserRound className="h-5 w-5" />}
+            {isAssistant ? <Bot className="h-3.5 w-3.5" /> : <UserRound className="h-3 w-3" />}
           </div>
         </div>
       )}
@@ -134,14 +127,14 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
       {/* Content column */}
       <div className="flex-1 min-w-0 pr-3">
         {/* Header */}
-        <div className="flex items-center gap-3 mb-3">
+        <div className="flex items-center gap-2 mb-1.5">
           <span className={cn(
-            'text-[10px] font-bold uppercase tracking-[0.15em]',
-            isAssistant ? 'text-primary' : 'text-muted-foreground'
+            'text-[12px] font-semibold',
+            isAssistant ? 'text-foreground' : 'text-foreground'
           )}>
-            {isAssistant ? 'TimeMachine' : 'You'}
+            {isAssistant ? 'AI Assistant' : 'You'}
           </span>
-          <span className="text-[9px] font-medium text-muted-foreground/60">
+          <span className="text-[10px] text-muted-foreground/60">
             {message.created_at ? formatTime(message.created_at) : 'Just now'}
           </span>
           {isAssistant && intent && (
@@ -220,6 +213,22 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
             <div className="whitespace-pre-wrap">{message.content}</div>
           )}
         </div>
+
+        {!isAssistant && Array.isArray(metadata.scope_paths) && metadata.scope_paths.length > 0 && (
+          <div className="mt-4 mb-2">
+            <div className="flex items-center gap-2 mb-2 px-1">
+              <FileCode className="h-3 w-3 text-muted-foreground" />
+              <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Manual Context</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {metadata.scope_paths.map((path: string, idx: number) => (
+                <div key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-accent/20 border border-border/50 rounded-md text-[11px] text-foreground/80 font-mono">
+                  <span className="truncate max-w-[200px]">{path.split('/').pop()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {isAssistant && normalSources.length > 0 && (
           <SourceExplorerV2 sources={normalSources as any} />

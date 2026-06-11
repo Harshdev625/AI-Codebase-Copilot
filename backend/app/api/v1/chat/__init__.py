@@ -51,7 +51,13 @@ def list_sessions(
     if is_archived is not None:
         query = query.filter(ChatSession.is_archived == is_archived)
     if search:
-        query = query.filter(ChatSession.session_title.ilike(f"%{search}%"))
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                ChatSession.session_title.ilike(f"%{search}%"),
+                ChatSession.summary.ilike(f"%{search}%"),
+            )
+        )
 
     total = query.count()
     rows = (
@@ -73,6 +79,7 @@ def list_sessions(
             created_at=str(r.created_at),
             updated_at=str(r.updated_at),
             last_activity_at=str(r.last_activity_at),
+            metadata=r.session_metadata or {},
         ) for r in rows
     ]
     return paginated_success_response(
@@ -80,6 +87,38 @@ def list_sessions(
         total=total,
         limit=pagination.limit,
         offset=pagination.offset,
+    )
+
+
+@router.get("/sessions/{session_id}")
+def get_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Returns a specific chat session."""
+    r = (
+        session.query(ChatSession)
+        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .first()
+    )
+    if not r:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return success_response(
+        ChatSessionResponse(
+            id=str(r.id),
+            repository_id=str(r.repository_id) if r.repository_id else None,
+            session_title=str(r.session_title) if r.session_title else None,
+            session_mode=str(r.session_mode),
+            is_pinned=bool(r.is_pinned),
+            is_archived=bool(r.is_archived),
+            summary=str(r.summary) if r.summary else None,
+            created_at=str(r.created_at),
+            updated_at=str(r.updated_at),
+            last_activity_at=str(r.last_activity_at),
+            metadata=r.session_metadata or {},
+        ).model_dump()
     )
 
 
@@ -105,6 +144,11 @@ def update_session(
         chat_session.is_pinned = req.is_pinned
     if req.is_archived is not None:
         chat_session.is_archived = req.is_archived
+    if req.metadata is not None:
+        # Merge metadata
+        current_meta = dict(chat_session.session_metadata) if chat_session.session_metadata else {}
+        current_meta.update(req.metadata)
+        chat_session.session_metadata = current_meta
 
     session.commit()
     session.refresh(chat_session)
@@ -112,7 +156,8 @@ def update_session(
         "id": chat_session.id,
         "session_title": chat_session.session_title,
         "is_pinned": chat_session.is_pinned,
-        "is_archived": chat_session.is_archived
+        "is_archived": chat_session.is_archived,
+        "metadata": chat_session.session_metadata
     })
 
 

@@ -2,10 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/pyproject.toml /app/pyproject.toml
 RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 
 COPY backend /app
 
 EXPOSE 8000
+
+# Default: run the API server. Override CMD to "python run_worker.py" for the worker container.
 CMD ["python", "run.py"]

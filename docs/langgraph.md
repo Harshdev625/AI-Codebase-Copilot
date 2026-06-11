@@ -1,87 +1,96 @@
-# LangGraph Workflow
+# LangGraph Agent Workflow
 
-This document describes the LangGraph-based agent workflow used by the backend. The implementation lives in `backend/app/graph/workflow.py` and node implementations are in `backend/app/graph/nodes/`.
+The multi-step AI pipeline is orchestrated with **LangGraph**. Source files:
 
-## High-level mermaid diagram
+- `backend/app/graph/workflow.py` — graph compilation and routing
+- `backend/app/graph/state.py` — `CopilotState` typed dict
+- `backend/app/graph/nodes/` — node implementations
+
+`QueryService` invokes the compiled graph when processing chat requests.
+
+---
+
+## Workflow diagram
+
+The live graph is linear with one conditional branch after reasoning:
 
 ```mermaid
 flowchart TD
-  planner[Planner Node]
-  planner -->|intent=tool| tool_execution[Tool Execution Node]
-  planner -->|intent!=tool| retrieval[Retrieval Node]
+  planner[planner]
+  retrieval[retrieval]
+  reasoning[reasoning]
+  tool_execution[tool_execution]
+  answer[answer]
 
-  retrieval -->|intent=debug| debugger[Debugger Node]
-  retrieval -->|intent=refactor| refactor[Refactor Advisor]
-  retrieval -->|intent=docs| documentation[Documentation Node]
-  retrieval -->|otherwise| code_understanding[Code Understanding Node]
-
-  tool_execution --> code_understanding
-
-  code_understanding -->|intent=debug| verifier[Verifier Node]
-  code_understanding -->|intent=refactor| patch_gen[Patch Generation Node]
-  code_understanding -->|intent=docs| verifier
-  code_understanding -->|otherwise| verifier
-
-  debugger --> verifier
-  documentation --> verifier
-  refactor --> patch_gen
-  patch_gen --> verifier
-  verifier --> answer[Answer Node]
+  planner --> retrieval
+  retrieval --> reasoning
+  reasoning -->|intent=tool or git/run query| tool_execution
+  reasoning -->|otherwise| answer
+  tool_execution --> answer
   answer --> END((END))
 ```
 
-## Nodes (summary)
+---
 
-- `planner` (app/graph/nodes/planner.py)
-  - Inspects the user `query` and sets an `intent` in state: one of `search`, `debug`, `refactor`, `docs`, or `tool`.
-  - Minimal rule-based intent detection.
+## Node reference
 
-- `retrieval` (app/graph/nodes/retrieval.py)
-  - Runs `hybrid_retrieve(...)` to fetch top documents from the retrieval layer (vector + lexical hybrid).
-  - Stores results in `retrieved_context`.
+| Node | File | Responsibility |
+|---|---|---|
+| **planner** | `nodes/planner.py` | Rule-based intent classification: `search`, `debug`, `refactor`, `docs`, `tool`, `patch_generation` |
+| **retrieval** | `nodes/retrieval.py` | Hybrid RAG (`hybrid_retrieve`); patch-aware overlay when `patch_id` is set |
+| **reasoning** | `nodes/reasoning.py` | Builds analysis, confidence score, and scratchpad from retrieved chunks |
+| **tool_execution** | `nodes/tool_execution.py` | Safe git/terminal tools when intent is `tool` or query matches run/git patterns |
+| **answer** | `nodes/answer.py` | Formats final assistant output, sources, and patch proposals |
 
-- `tool_execution` (app/graph/nodes/tool_execution.py)
-  - Executes safe tools where appropriate (`git_status`, `run_command`), guarded by `app.tools.safety.is_command_allowed`.
-  - Returns `tool_results` which are available to later nodes.
+Routing after `reasoning` is defined in `route_after_reasoning()`:
 
-- `code_understanding` (app/graph/nodes/code_understanding.py)
-  - Uses retrieved context and invokes LLM providers to analyze or synthesize explanations.
+- Routes to **tool_execution** when `intent == "tool"` or the query looks like a shell/git command
+- Otherwise routes directly to **answer**
+- **tool_execution** always feeds into **answer**
 
-- `debugger`, `refactor_advisor`, `documentation`, `patch_generation`
-  - Specialized nodes that perform targeted tasks such as producing refactor plans or patches, generating docs, or building patches.
+---
 
-- `verifier` (app/graph/nodes/verifier.py)
-  - Validates outputs, checks confidence, and may trigger additional refinement.
+## State schema (`CopilotState`)
 
-- `answer` (app/graph/nodes/answer.py)
-  - Formats the final assistant response (`answer`, `confidence`, `sources`) and marks the flow as ended.
+Defined in `backend/app/graph/state.py`:
 
-## State shape (`CopilotState`)
+| Field | Type | Description |
+|---|---|---|
+| `repository_id` | `str` | Target repository UUID |
+| `repo_id` | `str` | Human-readable repo identifier |
+| `project_id` | `str` | Reserved; projects API is disabled (410) |
+| `query` | `str` | User prompt |
+| `intent` | enum | `search`, `debug`, `refactor`, `docs`, `tool`, `patch_generation` |
+| `retrieved_context` | `list[dict]` | Chunks from hybrid search |
+| `retrieval_strategy` | `str` | Strategy label for diagnostics |
+| `plan` / `analysis` | `str` | Intermediate reasoning scratchpads |
+| `refactor_plan` / `documentation` | `str` | Intent-specific outputs |
+| `patch` / `patch_proposal` | `str` / `dict` | Generated patch content |
+| `tool_results` | `list[dict]` | Audited tool execution results |
+| `verification` | `dict` | Confidence and validation metadata |
+| `confidence` | `float` | 0–1 retrieval confidence heuristic |
+| `run_trace` | `list[dict]` | Per-node diagnostic timestamps |
+| `answer` | `str` | Final formatted response |
+| `session` | `Any` | SQLAlchemy session (internal) |
 
-See `backend/app/graph/state.py`. Key fields include:
+---
 
-- `repo_id` (str): repository identifier
-- `query` (str): user question
-- `intent` (Literal): detected intent
-- `retrieved_context` (list[dict]): retrieved docs and snippets
-- `plan`, `analysis`, `refactor_plan`, `documentation`, `patch`, `answer` (str)
-- `tool_results` (list[dict]): outputs from tool execution
-- `run_trace` (list[dict]): trace of node execution for diagnostics
-- `verification` (dict): verification results and confidence
+## Patch-aware retrieval
 
-## How this ties to services
+When ACT mode supplies a `patch_id`, the retrieval node queries both base indexed chunks and ephemeral patch chunks. Overlays exclude deleted files and merge modified file contents so the LLM sees the proposed state.
 
-- Retrieval uses `app.rag.retrieval.hybrid` which combines vector-store results with lexical heuristics.
-- LLM calls are routed through the provider adapters (e.g., Ollama provider in `app/rag/embeddings` and model router in `app/llm`).
-- Tool invocations use `app.tools` helpers; all executed commands must pass `is_command_allowed`.
+See `backend/app/rag/retrieval/hybrid.py` and `backend/tests/unit/test_act_retrieval.py`.
 
-## Extending the workflow
+---
 
-- Add a new node in `backend/app/graph/nodes/` exposing a `node(state) -> state` function.
-- Register the node in `build_graph()` in `workflow.py` and add edges/conditional routing.
-- Update `CopilotState` (typed dict) to include any new state fields required by the node.
+## Testing
 
-## Troubleshooting
+Unit tests cover individual nodes and retrieval integration:
 
-- If flows behave unexpectedly, enable debug logging and inspect `run_trace` attached to the response (agent-run diagnostics).
-- Ensure retrieval returns meaningful context (indexing must have run and vector DB available).
+- `tests/unit/test_planner.py`
+- `tests/unit/test_reasoning_node.py`
+- `tests/unit/test_tool_execution_node.py`
+- `tests/unit/test_act_retrieval.py`
+- `tests/unit/test_hybrid_retrieval.py`
+
+There is no stochastic eval suite for end-to-end graph quality; manual chat verification is recommended after prompt or routing changes.

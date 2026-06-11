@@ -164,8 +164,8 @@ def test_hybrid_utilities_and_dense_paths(monkeypatch: pytest.MonkeyPatch) -> No
     assert out[0]["id"] == "1"
 
     class Qdrant:
-        def search(self, vector: list[float], repository_id: str, limit: int):
-            _ = (vector, repository_id, limit)
+        def search(self, vector: list[float], repository_id: str, limit: int, patch_id: str | None = None):
+            _ = (vector, repository_id, limit, patch_id)
             return [{"id": "1", "score": 0.8}]
 
     monkeypatch.setattr(hybrid, "QdrantService", lambda: Qdrant())

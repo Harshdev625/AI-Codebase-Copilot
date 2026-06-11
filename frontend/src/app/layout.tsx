@@ -21,6 +21,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("http://localhost:3000"),
   title: "AI Codebase Copilot",
   description: "Modern AI workspace for repository intelligence and code conversations",
 };

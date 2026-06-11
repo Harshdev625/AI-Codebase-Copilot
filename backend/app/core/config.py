@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     log_format: str = "text"  # "text" or "json" (PHASE 2: structured logging)
     production_enforce_secure_secrets: bool = True
 
-    cors_allow_origins: str = "http://localhost:3000"
+    cors_allow_origins: str = "http://localhost:3000"  # env: CORS_ALLOW_ORIGINS
     cors_allow_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     cors_allow_headers: str = "Authorization,Content-Type,X-Request-Id"
 
@@ -171,32 +171,52 @@ class Settings(BaseSettings):
         return str(self.app_env).strip().lower() in {"production", "staging"}
 
     def validate_runtime_configuration(self) -> None:
-        """H3 FIX: Comprehensive configuration validation."""
+        """Comprehensive startup configuration validation."""
         from urllib.parse import urlparse
         import logging
-        
+
         logger_local = logging.getLogger(__name__)
-        
+
+        # Always warn on obviously-weak JWT secret regardless of environment.
+        weak_markers = {"change-me-in-production", "mypassword", "password", "changeme", "default", "secret", ""}
+        jwt_normalized = str(self.jwt_secret_key or "").strip().lower()
+        if jwt_normalized in weak_markers or len(str(self.jwt_secret_key or "")) < 32:
+            if self.is_production_like:
+                raise RuntimeError(
+                    "JWT_SECRET_KEY is weak or too short. "
+                    "Set a random 64-char secret in your .env file before deploying."
+                )
+            logger_local.warning(
+                "config_validation - JWT_SECRET_KEY is weak (length=%d). "
+                "Set a strong secret before deploying to production.",
+                len(str(self.jwt_secret_key or "")),
+            )
+
         if not self.production_enforce_secure_secrets or not self.is_production_like:
-            logger_local.debug("config_validation - skipped (not production-like)")
+            logger_local.debug("config_validation - skipped deep checks (not production-like)")
             return
 
-        # Check for weak secrets in production
+        # Deep production checks
         insecure_values = {
-            "jwt_secret_key": self.jwt_secret_key,
             "postgres_password": self.postgres_password,
         }
-        weak_markers = {"change-me-in-production", "mypassword", "password", "changeme", "default"}
-
+        pg_weak = {"mypassword", "password", "changeme", "default", "postgres", ""}
         weak_fields = []
         for key, value in insecure_values.items():
             normalized = str(value or "").strip().lower()
-            if not normalized or normalized in weak_markers:
+            if normalized in pg_weak:
                 weak_fields.append(key)
 
         if weak_fields:
             joined = ", ".join(sorted(weak_fields))
             raise RuntimeError(f"Unsafe production configuration: {joined}")
+
+        # Validate CORS is not still pointing at localhost in production
+        if "localhost" in self.cors_allow_origins and "localhost" not in (self.app_host or ""):
+            logger_local.warning(
+                "config_validation - CORS_ALLOW_ORIGINS still set to localhost. "
+                "Update CORS_ALLOW_ORIGINS in .env to your production domain."
+            )
         
         # H3: Validate external service URLs
         try:

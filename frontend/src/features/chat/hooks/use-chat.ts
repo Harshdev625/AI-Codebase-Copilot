@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { chatService } from "@/features/chat/services/chat-service";
 import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source } from "@/features/chat/types/chat-types";
+import { useStudioStore } from "@/features/studio/store/studio-store";
 
 export const chatKeys = {
   sessions: (repositoryId?: string) => ["chat", "sessions", repositoryId] as const,
@@ -17,10 +18,54 @@ export function useChatSessions(limit = 20, offset = 0, repositoryId?: string, s
   });
 }
 
-export function useApplyPatchMutation() {
+export function useCreatePatchMutation() {
   return useMutation({
-    mutationFn: ({ repositoryId, diff }: { repositoryId: string; diff: string }) =>
-      chatService.applyPatch(repositoryId, diff),
+    mutationFn: ({
+      repositoryId,
+      payload,
+    }: {
+      repositoryId: string;
+      payload: {
+        base_commit_sha: string;
+        patch_files: Array<{
+          file_path: string;
+          action: string;
+          file_diff: string;
+          content_hash_before?: string;
+          content_hash_after?: string;
+        }>;
+      };
+    }) => chatService.createPatchDraft(repositoryId, payload),
+  });
+}
+
+export function useValidatePatchMutation() {
+  return useMutation({
+    mutationFn: ({ repositoryId, patchId }: { repositoryId: string; patchId: string }) =>
+      chatService.validatePatch(repositoryId, patchId),
+  });
+}
+
+export function useApplyPatchMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repositoryId, patchId }: { repositoryId: string; patchId: string }) =>
+      chatService.applyPatch(repositoryId, patchId),
+    onSuccess: (_, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ["repositories"] });
+      void queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
+  });
+}
+
+export function useCancelPatchMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repositoryId, patchId }: { repositoryId: string; patchId: string }) =>
+      chatService.cancelPatchDraft(repositoryId, patchId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["chat"] });
+    },
   });
 }
 
@@ -47,7 +92,7 @@ export function useUpdateSessionMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean } }) => 
+    mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean; metadata?: Record<string, any> } }) => 
       chatService.updateSession(sessionId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
@@ -55,12 +100,9 @@ export function useUpdateSessionMutation() {
   });
 }
 
-type UseChatOptions = {
-  repositoryId?: string;
-};
 
-export function useChat({ repositoryId }: UseChatOptions) {
-  const [currentSessionId, setCurrentSessionId] = React.useState<string | null>(null);
+export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
+  const { activeSessionId: currentSessionId, setActiveSessionId: setCurrentSessionId } = useStudioStore();
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
   const abortControllerRef = React.useRef<AbortController | null>(null);
@@ -70,6 +112,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
 
   React.useEffect(() => {
     if (!currentSessionId) {
+      setMessages([]);
       return;
     }
     const items = messagesQuery.data?.items;
@@ -84,7 +127,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
     }
     setCurrentSessionId(null);
     setMessages([]);
-  }, []);
+  }, [setCurrentSessionId]);
 
   const selectSession = React.useCallback((sessionId: string) => {
     if (abortControllerRef.current) {
@@ -92,7 +135,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
     }
     setCurrentSessionId(sessionId);
     setMessages([]);
-  }, []);
+  }, [setCurrentSessionId]);
 
   const stopGeneration = React.useCallback(() => {
     if (abortControllerRef.current) {
@@ -153,6 +196,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
                 localSessionId = event.session_id;
                 setCurrentSessionId(event.session_id);
                 void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+                void queryClient.invalidateQueries({ queryKey: ["admin", "metrics"] });
               }
             } else if ((event.type === 'chunk' && event.delta) || (event.type === 'answer' && event.text)) {
               const deltaStr = event.type === 'chunk' ? event.delta : event.text;
@@ -239,7 +283,7 @@ export function useChat({ repositoryId }: UseChatOptions) {
         }
       }
     },
-    [repositoryId, currentSessionId, queryClient]
+    [repositoryId, currentSessionId, queryClient, isSending, setCurrentSessionId]
   );
 
   return {

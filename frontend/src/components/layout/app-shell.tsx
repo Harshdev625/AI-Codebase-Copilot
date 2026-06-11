@@ -10,7 +10,7 @@ interface AppShellProps {
   title: string;
   children: React.ReactNode;
   /** fullBleed — no padding wrapper, used for Chat full-viewport layout */
-  variant?: "default" | "fullBleed";
+  variant?: "default" | "fullBleed" | "workspace";
 }
 
 export function AppShell({ title, children, variant = "default" }: AppShellProps): React.JSX.Element {
@@ -23,22 +23,22 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
   }, [logout, router]);
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background transition-colors duration-300">
-      {/* Animated background gradient orbs */}
-      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-        <div className="absolute -right-1/4 -top-1/4 h-96 md:h-[520px] lg:h-[720px] w-96 md:w-[520px] lg:w-[720px] rounded-full bg-primary/8 blur-[90px] md:blur-[130px] lg:blur-[160px] transition-all duration-300" />
-        <div className="absolute -left-1/4 bottom-0 h-80 md:h-[420px] lg:h-[520px] w-80 md:w-[420px] lg:w-[520px] rounded-full bg-[hsl(var(--glow)/0.1)] blur-[90px] md:blur-[120px] lg:blur-[140px] transition-all duration-300" />
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-background transition-colors duration-300">
+      {/* Animated background gradient orbs - modern mix-blend-screen effect */}
+      <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden mix-blend-screen dark:mix-blend-normal opacity-70 dark:opacity-100">
+        <div className="absolute -right-1/4 -top-1/4 h-[400px] md:h-[600px] lg:h-[800px] w-[400px] md:w-[600px] lg:w-[800px] rounded-full bg-primary/10 blur-[90px] md:blur-[130px] lg:blur-[180px] transition-all duration-1000 ease-in-out" />
+        <div className="absolute -left-1/4 bottom-0 h-[300px] md:h-[500px] lg:h-[600px] w-[300px] md:w-[500px] lg:w-[600px] rounded-full bg-[hsl(var(--cyan)/0.12)] blur-[90px] md:blur-[120px] lg:blur-[150px] transition-all duration-1000 ease-in-out" />
       </div>
 
       {/* Main content area */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
         {/* Top Navigation */}
-        <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />
+        {variant !== "workspace" && <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />}
 
         {/* Page content */}
-        <main className={cn("flex-1 overflow-auto scroll-smooth", variant === "default" && "p-0")}>
+        <main className={cn("flex-1 overflow-auto scroll-smooth custom-scrollbar", variant === "default" && "p-0")}>
           {variant === "default" ? (
-            <div className="flex min-h-full flex-col p-6 md:p-8 max-w-7xl mx-auto w-full">
+            <div className="flex min-h-full flex-col p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full">
               {children}
             </div>
           ) : (

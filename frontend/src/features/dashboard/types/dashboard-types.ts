@@ -5,17 +5,7 @@ export type DashboardMetrics = {
   indexed_chunks_count?: number;
 };
 
-export type DashboardUsage = {
-  [key: string]: unknown;
-};
 
-export type RecentRepository = {
-  id: string;
-  repo_id: string;
-  default_branch: string;
-  created_at: string;
-  latest_index_status?: string | null;
-};
 
 export type DashboardSummary = {
   user: {
@@ -27,5 +17,4 @@ export type DashboardSummary = {
     is_active: boolean;
   };
   metrics: DashboardMetrics;
-  recent_repositories: RecentRepository[];
 };

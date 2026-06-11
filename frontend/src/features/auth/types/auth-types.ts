@@ -1,33 +1,30 @@
-﻿export type UserRole = "USER" | "ADMIN" | string;
+export type UserRole = "USER" | "ADMIN";
 
-export type LoginPayload = {
+export interface LoginPayload {
   email: string;
   password: string;
-};
+}
 
-export type RegisterPayload = {
-  email: string;
-  password: string;
-  full_name?: string | null;
-};
-
-export type AdminRegisterPayload = {
+export interface RegisterPayload {
   email: string;
   password: string;
   full_name?: string | null;
+}
+
+export interface AdminRegisterPayload extends RegisterPayload {
   admin_secret_key: string;
-};
+}
 
-export type AuthTokenResponse = {
+export interface AuthTokenResponse {
   access_token: string;
   token_type: "bearer";
-};
+}
 
-export type UserProfile = {
+export interface UserProfile {
   id: string;
   email: string;
   full_name: string | null;
   role: UserRole;
   token_scopes: string[];
   is_active: boolean;
-};
+}

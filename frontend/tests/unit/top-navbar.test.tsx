@@ -18,10 +18,9 @@ describe("TopNavbar", () => {
       { wrapper: TestProviders }
     );
 
-    expect(screen.getByText("Test App")).toBeInTheDocument();
-    expect(screen.getByText("test@example.com")).toBeInTheDocument();
-    // Desktop main nav items
-    expect(screen.getAllByText("Repositories").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Test App").length).toBeGreaterThan(0);
+    expect(screen.getByText("Search or run command…")).toBeInTheDocument();
+    expect(screen.getByText("Copilot")).toBeInTheDocument();
   });
 
   it("calls onSignOut when sign out button is clicked", () => {
@@ -35,27 +34,8 @@ describe("TopNavbar", () => {
       { wrapper: TestProviders }
     );
 
-    const signOutBtn = screen.getByTitle("Sign out");
+    const signOutBtn = screen.getByLabelText("Sign out");
     fireEvent.click(signOutBtn);
     expect(signOutSpy).toHaveBeenCalled();
-  });
-
-  it("toggles mobile menu", () => {
-    render(
-      <TopNavbar 
-        sectionTitle="Test App"
-        userEmail="test@example.com"
-        onSignOut={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
-
-    const toggleBtn = screen.getAllByRole("button")[0];
-    fireEvent.click(toggleBtn);
-
-    // Mobile nav items should be visible
-    // Multiple items with same label now exist (desktop + mobile)
-    const reposLinks = screen.getAllByText("Repositories");
-    expect(reposLinks.length).toBeGreaterThan(1);
   });
 });

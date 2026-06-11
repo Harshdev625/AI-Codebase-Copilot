@@ -26,7 +26,7 @@ async def test_delete_repository_chunks_for_paths_db_exception(indexing_service,
     # Mock session.execute to raise Exception
     indexing_service.session.execute.side_effect = Exception("DB error")
     
-    with pytest.raises(DatabaseException, match="Failed to mark chunks as OBSOLETE for specific paths"):
+    with pytest.raises(DatabaseException, match="Failed to collect chunk IDs for deletion"):
         await indexing_service._delete_repository_chunks_for_paths("test-repo", repo_root, {"file1.txt"})
         
     indexing_service.session.rollback.assert_called_once()

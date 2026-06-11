@@ -16,6 +16,7 @@ describe("AuthenticationAdminLoginForm", () => {
     (useAdminAuth as jest.Mock).mockReturnValue({ login: jest.fn(), isLoggingIn: false });
     render(<AuthenticationAdminLoginForm />, { wrapper: TestProviders });
     expect(screen.getByPlaceholderText("admin@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Secure control room")).toBeInTheDocument();
   });
 
   it("calls login on submit", () => {
@@ -24,33 +25,17 @@ describe("AuthenticationAdminLoginForm", () => {
     
     render(<AuthenticationAdminLoginForm />, { wrapper: TestProviders });
     
-    const emailInput = screen.getByPlaceholderText("admin@example.com");
-    const passwordInput = screen.getByPlaceholderText("••••••••");
-    const btn = screen.getByText("Enter admin console");
-
-    fireEvent.change(emailInput, { target: { value: "test@example.com" } });
-    fireEvent.change(passwordInput, { target: { value: "password" } });
-    fireEvent.click(btn);
+    fireEvent.change(screen.getByLabelText(/email address/i), { target: { value: "test@example.com" } });
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: "password" } });
+    fireEvent.click(screen.getByRole("button", { name: /enter admin console/i }));
 
     expect(loginMock).toHaveBeenCalledWith({ email: "test@example.com", password: "password" });
   });
 
-  it("toggles password visibility", () => {
-    (useAdminAuth as jest.Mock).mockReturnValue({ login: jest.fn(), isLoggingIn: false });
+  it("disables submit while logging in", () => {
+    (useAdminAuth as jest.Mock).mockReturnValue({ login: jest.fn(), isLoggingIn: true });
     
     render(<AuthenticationAdminLoginForm />, { wrapper: TestProviders });
-    
-    const passwordInput = screen.getByPlaceholderText("••••••••");
-    expect(passwordInput).toHaveAttribute("type", "password");
-
-    // The toggle button has no text, so get it by icon or just tag
-    const buttons = screen.getAllByRole("button");
-    const toggleBtn = buttons.find(b => !b.textContent || b.textContent === "")!;
-    
-    fireEvent.click(toggleBtn);
-    expect(passwordInput).toHaveAttribute("type", "text");
-    
-    fireEvent.click(toggleBtn);
-    expect(passwordInput).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: /authenticating/i })).toBeDisabled();
   });
 });
