@@ -27,8 +27,8 @@ describe("AuthenticationAdminRegisterForm", () => {
     fireEvent.change(screen.getByPlaceholderText("Admin Name"), { target: { value: "Admin" } });
     fireEvent.change(screen.getByPlaceholderText("admin@example.com"), { target: { value: "test@example.com" } });
     fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password" } });
-    fireEvent.change(screen.getByPlaceholderText("Paste secret key from .env"), { target: { value: "secret" } });
-    fireEvent.click(screen.getByRole("button", { name: /create admin access/i }));
+    fireEvent.change(screen.getByPlaceholderText(/ADMIN_REGISTRATION_SECRET_KEY/i), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: /create admin account/i }));
 
     expect(registerMock).toHaveBeenCalledWith({
       email: "test@example.com",
@@ -42,6 +42,6 @@ describe("AuthenticationAdminRegisterForm", () => {
     (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: true });
     
     render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
-    expect(screen.getByRole("button", { name: /creating access/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /creating admin/i })).toBeDisabled();
   });
 });

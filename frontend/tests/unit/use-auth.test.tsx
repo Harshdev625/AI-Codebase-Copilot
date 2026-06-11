@@ -1,5 +1,5 @@
 import { renderHook, waitFor } from "@testing-library/react";
-import { useAuth, useLoginMutation, useRegisterMutation, useMeQuery, useLogoutAction } from "@/features/auth/hooks/use-auth";
+import { useAuth, useMeQuery, useLogout } from "@/features/auth/hooks/use-auth";
 import { authService } from "@/features/auth/services/auth-service";
 import { useAuthStore } from "@/store/auth-store";
 import { TestProviders } from "../test-utils";
@@ -54,7 +54,7 @@ describe("use-auth hook", () => {
     expect(state.token).toBe("token-123");
     expect(state.isAuthenticated).toBe(true);
     
-    expect(mockReplace).toHaveBeenCalledWith("/studio");
+    expect(mockReplace).toHaveBeenCalledWith("/dashboard");
   });
 
   it("handles login mutation and redirects to admin dashboard (ADMIN role)", async () => {
@@ -82,7 +82,7 @@ describe("use-auth hook", () => {
     result.current.register({ email: "new@example.com", password: "pwd", full_name: "New" });
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/login");
+      expect(mockReplace).toHaveBeenCalledWith("/login?registered=1");
     });
     
     expect(authService.register).toHaveBeenCalledWith({ email: "new@example.com", password: "pwd", full_name: "New" });
@@ -103,16 +103,35 @@ describe("use-auth hook", () => {
     expect(result.current.data).toEqual(mockUser);
   });
 
-  it("handles logout action", () => {
-    useAuthStore.setState({ user: { id: "1" } as any, token: "token", isAuthenticated: true, hydrated: true });
-    
-    const { result } = renderHook(() => useLogoutAction(), { wrapper: TestProviders });
-    
-    result.current(); // trigger logout
-    
+  it("handles user logout and redirects to login", () => {
+    useAuthStore.setState({
+      user: { id: "1", role: "USER" } as any,
+      token: "token",
+      isAuthenticated: true,
+      hydrated: true,
+    });
+
+    const { result } = renderHook(() => useLogout(), { wrapper: TestProviders });
+    result.current("user");
+
     const state = useAuthStore.getState();
     expect(state.user).toBeNull();
     expect(state.token).toBeNull();
     expect(state.isAuthenticated).toBe(false);
+    expect(mockReplace).toHaveBeenCalledWith("/login");
+  });
+
+  it("handles admin logout and redirects to admin login", () => {
+    useAuthStore.setState({
+      user: { id: "2", role: "ADMIN" } as any,
+      token: "token",
+      isAuthenticated: true,
+      hydrated: true,
+    });
+
+    const { result } = renderHook(() => useLogout(), { wrapper: TestProviders });
+    result.current("admin");
+
+    expect(mockReplace).toHaveBeenCalledWith("/admin/login");
   });
 });

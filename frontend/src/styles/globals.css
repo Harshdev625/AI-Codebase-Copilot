@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @plugin "tailwindcss-animate";
+
+@custom-variant dark (&:where(.dark, .dark *));
 @theme {
   /* ── Spacing Scale ─────────────────────────────────────── */
   --spacing-1:  0.25rem;
@@ -49,10 +51,10 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 
-  /* ── Typography ────────────────────────────────────────── */
-  --font-sans: var(--font-space-grotesk), sans-serif;
-  --font-display: var(--font-fraunces), serif;
-  --font-mono: var(--font-plex-mono), monospace;
+  /* ── Typography (aligned with app/layout.tsx font variables) ── */
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
 
   /* ── Named animations ──────────────────────────────────── */
   --animate-fade-up:      fade-up 350ms cubic-bezier(0.2, 0.8, 0.2, 1) both;

@@ -57,10 +57,27 @@ frontend/
 
 | Role | Default destination |
 |---|---|
-| User | `/studio` (or `/dashboard` from nav) |
+| User | `/dashboard` |
 | Admin | `/admin/dashboard` |
 
 Legacy routes `/chat` and `/repositories` were removed; chat and repository management live inside `/studio`.
+
+### Authentication UI
+
+| Route | Component |
+|---|---|
+| `/login` | `AuthForm mode="login"` |
+| `/register` | `AuthForm mode="register"` |
+| `/admin/login` | `AuthForm mode="admin-login"` |
+| `/admin/register` | `AuthForm mode="admin-register"` |
+
+All auth pages share [`AuthLayout`](frontend/src/features/auth/components/auth-layout.tsx) — centered `max-w-6xl` grid (features left, form right on `lg+`), mobile form-first with hamburger drawer for features, `ThemeToggle`, and a real footer (no fake status stream).
+
+Consolidated auth components: `auth-layout.tsx`, `auth-marketing.tsx`, `auth-form.tsx`, `auth-footer.tsx`, `auth-motion.ts`, `password-strength.tsx`. Copy lives in `content/auth-copy.ts`; validation in `utils/auth-validation.ts`.
+
+**Toast policy:** API errors only via toast; client validation is inline. Register success redirects to login with `?registered=1` and shows one info toast on the login page.
+
+**Logout:** use `useLogout()` from `use-auth.ts`. Redirects to `/login` for users and `/admin/login` for admins (based on role or caller context).
 
 ---
 

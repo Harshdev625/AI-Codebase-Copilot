@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { TopNavbar } from "@/components/layout/top-navbar";
+import { useLogout } from "@/features/auth/hooks/use-auth";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -14,13 +15,13 @@ interface AppShellProps {
 }
 
 export function AppShell({ title, children, variant = "default" }: AppShellProps): React.JSX.Element {
-  const { user, logout } = useAuthStore();
-  const router = useRouter();
+  const { user } = useAuthStore();
+  const pathname = usePathname();
+  const logout = useLogout();
 
   const signOut = React.useCallback(() => {
-    logout();
-    router.push("/login");
-  }, [logout, router]);
+    logout(pathname.startsWith("/admin") ? "admin" : "user");
+  }, [logout, pathname]);
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background transition-colors duration-300">

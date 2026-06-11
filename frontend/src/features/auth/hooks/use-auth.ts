@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
@@ -29,7 +30,7 @@ export function useAuth() {
         if (role === "ADMIN") {
           router.replace("/admin/dashboard");
         } else {
-          router.replace("/studio");
+          router.replace("/dashboard");
         }
       },
     });
@@ -38,7 +39,7 @@ export function useAuth() {
   const register = (payload: RegisterPayload) => {
     registerMutation.mutate(payload, {
       onSuccess: () => {
-        router.replace("/login");
+        router.replace("/login?registered=1");
       },
     });
   };
@@ -87,7 +88,7 @@ export function useRegisterMutation() {
     mutationFn: (payload: RegisterPayload) => authService.register(payload),
     onError: (error) => {
       toast.error("Registration Failed", toApiError(error));
-    }
+    },
   });
 }
 
@@ -104,12 +105,27 @@ export function useMeQuery() {
   });
 }
 
-export function useLogoutAction() {
-  const logout = useAuthStore((state) => state.logout);
+export type LogoutContext = "admin" | "user";
+
+export function useLogout() {
+  const router = useRouter();
+  const logoutStore = useAuthStore((state) => state.logout);
   const queryClient = useQueryClient();
 
-  return () => {
-    logout();
-    void queryClient.clear();
-  };
+  return React.useCallback(
+    (context?: LogoutContext) => {
+      const role = useAuthStore.getState().user?.role;
+      logoutStore();
+      void queryClient.clear();
+      const toAdmin = role === "ADMIN" || context === "admin";
+      router.replace(toAdmin ? "/admin/login" : "/login");
+    },
+    [router, logoutStore, queryClient]
+  );
+}
+
+/** @deprecated Use useLogout instead */
+export function useLogoutAction() {
+  const logout = useLogout();
+  return logout;
 }

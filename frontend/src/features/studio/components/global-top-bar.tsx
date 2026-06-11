@@ -4,20 +4,18 @@ import * as React from "react";
 import { Search, User, Settings, LogOut, ChevronDown, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/store/auth-store";
-import { useRouter } from "next/navigation";
+import { useLogout } from "@/features/auth/hooks/use-auth";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 export function GlobalTopBar() {
-  const router = useRouter();
   const user = useAuthStore((state) => state.user);
-  const logout = useAuthStore((state) => state.logout);
+  const logout = useLogout();
   const [profileOpen, setProfileOpen] = React.useState(false);
   const profileRef = React.useRef<HTMLDivElement>(null);
 
   const handleLogout = () => {
-    logout();
-    router.push("/login");
+    logout("user");
   };
 
   // Close profile dropdown when clicking outside

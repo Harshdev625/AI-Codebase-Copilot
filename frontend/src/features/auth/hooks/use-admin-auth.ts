@@ -24,7 +24,7 @@ export function useAdminAuth() {
   const register = (payload: AdminRegisterPayload) => {
     registerMutation.mutate(payload, {
       onSuccess: () => {
-        router.replace("/admin/login");
+        router.replace("/admin/login?registered=1");
       },
     });
   };
