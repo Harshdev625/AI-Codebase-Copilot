@@ -53,6 +53,7 @@ export function useIndexRepository() {
     mutationFn: (payload: IndexRequestPayload) => repositoryService.startIndex(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin'] });
       toast.info('Indexing Started', 'The repository is being processed.');
     },
     onError: (error) => {

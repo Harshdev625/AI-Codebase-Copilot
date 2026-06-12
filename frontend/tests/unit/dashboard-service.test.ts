@@ -11,13 +11,25 @@ describe('dashboardService', () => {
   });
 
   it('calls getSummary API', async () => {
-    const mockResponse = { total_users: 10, total_repositories: 5 };
+    const mockResponse = { metrics: { repositories_count: 5 } };
     (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
 
     const result = await dashboardService.getSummary();
     expect(result).toEqual(mockResponse);
     expect(apiClient).toHaveBeenCalledWith('/v1/dashboard/me', {
       method: 'GET',
+    });
+  });
+
+  it('calls getActivity API', async () => {
+    const mockResponse = { days: [] };
+    (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
+
+    const result = await dashboardService.getActivity(7);
+    expect(result).toEqual(mockResponse);
+    expect(apiClient).toHaveBeenCalledWith('/v1/dashboard/activity', {
+      method: 'GET',
+      params: { days: 7 },
     });
   });
 });

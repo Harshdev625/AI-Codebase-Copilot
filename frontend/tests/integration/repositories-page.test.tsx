@@ -13,6 +13,7 @@ jest.mock("@/features/repositories/hooks/use-repositories", () => ({
   useRepositories: jest.fn(),
   useIndexRepository: jest.fn(),
   useIndexingJobs: jest.fn(),
+  useRepositoryInsights: jest.fn(() => ({ data: null })),
 }));
 
 describe("DashboardRecentRepositories integration", () => {

@@ -36,7 +36,8 @@ frontend/
 │   ├── features/
 │   │   ├── auth/                   # Login/register forms, hooks, service
 │   │   ├── chat/                   # Messages, context panel, patches, hooks
-│   │   ├── dashboard/              # Stats grid, repository list, quick actions
+│   │   ├── dashboard/              # User dashboard components
+│   │   ├── admin/                  # Admin dashboard components + hooks
 │   │   ├── explorer/               # File explorer dialog, lazy tree node
 │   │   ├── repositories/           # Repository service, hooks, snapshot components
 │   │   └── studio/                 # Copilot Studio shell, store, and panels
@@ -170,12 +171,61 @@ Convention: all keys are arrays. Top-level key matches the resource noun.
 | Component | Location | Description |
 |---|---|---|
 | `CopilotStudioShell` | `features/studio/components/` | Root studio layout orchestrator |
-| `GlobalTopBar` | `features/studio/components/` | Studio top bar with logo, search, profile |
+| `GlobalTopBar` | `features/studio/components/` | Codebase top bar (`h-14 lg:h-16`), search, profile |
 | `StudioNavRail` | `features/studio/components/` | 48px icon rail on the left |
 | `StudioSecondaryPanel` | `features/studio/components/` | Panel router (explorer/search/snapshots/patches/tasks/settings) |
 | `StudioCanvas` | `features/studio/components/` | Canvas router (chat/editor/diff/patch-review) |
 | `StudioSessionSidebar` | `features/studio/components/` | Session list with rename, pin, archive |
 | `StudioExplorerPanel` | `features/studio/components/` | File tree with snapshot selector for historical browsing |
+
+### Dashboard (`/dashboard`)
+
+User landing page after login. Glass/bento styling aligned with auth pages.
+
+| Component | Location | Description |
+|---|---|---|
+| `DashboardStatsGrid` | `features/dashboard/components/` | Four stat cards from `GET /v1/dashboard/me` with contextual subtitles |
+| `DashboardQuickActions` | `features/dashboard/components/` | 2×2 bento grid: chat, add repo, semantic search, open codebase |
+| `DashboardContinueCard` | `features/dashboard/components/` | Resume last session/repo shortcut in hero |
+| `DashboardActivityRow` | `features/dashboard/components/` | Recent sessions, weekly activity chart, indexing status |
+| `DashboardMomentumChart` | `features/dashboard/components/` | `GET /v1/dashboard/activity?days=7` bar chart |
+| `DashboardRepoSpotlight` | `features/dashboard/components/` | Primary repo health panel (files, chunks, last indexed) |
+| `DashboardRecentRepositories` | `features/dashboard/components/` | Repository table with commit SHA, language hint, failed tooltip |
+| `DashboardAddRepository` | `features/dashboard/components/` | Add-repo dialog (also triggered from quick actions) |
+| `DashboardSection` | `features/dashboard/components/` | Shared section title + description wrapper |
+
+**API:** `GET /v1/dashboard/me` returns `metrics`, `indexing_summary`, `recent_sessions`, enriched `recent_repositories`. `GET /v1/dashboard/activity` returns daily session/index buckets.
+
+**Layout (xl+):** hero with continue card → stats (7/12) + quick actions (5/12) → activity (8/12) + repo spotlight (4/12) → repositories table. `AppShell` uses `max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px]`.
+
+### Admin dashboard (`/admin/dashboard`)
+
+Thin page orchestrator; UI lives in `features/admin/components/`.
+
+| Component | Description |
+|---|---|
+| `AdminDashboardHeader` | Title, refresh |
+| `AdminTabBar` | Overview / Repositories / Users (horizontal scroll on mobile) |
+| `AdminMetricsGrid` | Seven tiles including `users_count` |
+| `AdminTelemetryPanel` | Queue health, P95 latency, retrieval hit rates |
+| `AdminHealthList` | Service health statuses |
+| `AdminRepositoriesPanel` | Repo list + reindex; job history (no arbitrary slice cap) |
+| `AdminUsersTable` | User table with pagination + Manage dialog |
+| `AdminUserActionsDialog` | Role, activate/deactivate, delete |
+| `AdminRecentJobsStrip` | Recent indexing jobs row on overview (2xl) |
+
+Re-index via `useIndexRepository` invalidates both `['repositories']` and `['admin']` queries. Telemetry hit rates show sample size; zero samples display "Collecting samples…".
+
+### Navigation bars
+
+Shared tokens in `components/layout/nav-tokens.ts` and CSS variables `--spacing-nav-height` / `--spacing-nav-height-lg`:
+
+| Bar | Height | Notes |
+|---|---|---|
+| `TopNavbar` | `h-14 lg:h-16` (56px → 64px) | User + admin variants; on `/dashboard` breadcrumbs are `Dashboard / {title}` (no Codebase crumb) |
+| `GlobalTopBar` | `h-14 lg:h-16` | Studio/codebase shell; matches TopNavbar scale |
+
+`AppShell` passes `variant="admin"` on `/admin/*` routes.
 
 ### Studio panels (`features/studio/panels/`)
 

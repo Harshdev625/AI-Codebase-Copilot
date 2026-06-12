@@ -70,14 +70,14 @@ export const adminService = {
   health: async (): Promise<ServiceHealth[]> => {
     return apiClient<ServiceHealth[]>("/v1/admin/service-health", { method: "GET" });
   },
-  users: async (): Promise<PaginatedData<AdminUser>> => {
-    return apiClient<PaginatedData<AdminUser>>("/v1/admin/users", { method: "GET" });
+  users: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<AdminUser>> => {
+    return apiClient<PaginatedData<AdminUser>>("/v1/admin/users", { method: "GET", params });
   },
-  repositories: async (): Promise<PaginatedData<Repository>> => {
-    return apiClient<PaginatedData<Repository>>("/v1/admin/repositories", { method: "GET" });
+  repositories: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<Repository>> => {
+    return apiClient<PaginatedData<Repository>>("/v1/admin/repositories", { method: "GET", params });
   },
-  indexingStatus: async (): Promise<PaginatedData<IndexingJob>> => {
-    return apiClient<PaginatedData<IndexingJob>>("/v1/admin/indexing-status", { method: "GET" });
+  indexingStatus: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<IndexingJob>> => {
+    return apiClient<PaginatedData<IndexingJob>>("/v1/admin/indexing-status", { method: "GET", params });
   },
   updateUserRole: async (userId: string, role: "USER" | "ADMIN"): Promise<AdminUser> => {
     return apiClient<AdminUser>(`/v1/admin/users/${userId}/role`, {

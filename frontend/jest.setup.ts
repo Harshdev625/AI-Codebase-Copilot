@@ -6,6 +6,20 @@ Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
 	value: jest.fn(),
 });
 
+Object.defineProperty(window, "matchMedia", {
+	writable: true,
+	value: jest.fn().mockImplementation((query: string) => ({
+		matches: false,
+		media: query,
+		onchange: null,
+		addListener: jest.fn(),
+		removeListener: jest.fn(),
+		addEventListener: jest.fn(),
+		removeEventListener: jest.fn(),
+		dispatchEvent: jest.fn(),
+	})),
+});
+
 // ---------------------------------------------------------------------------
 // Global fetch mock — tests should use jest.spyOn(global, 'fetch') or
 // mockImplementation at the service level. This just ensures fetch exists.

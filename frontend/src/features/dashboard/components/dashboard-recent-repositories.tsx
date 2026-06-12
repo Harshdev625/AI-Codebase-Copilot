@@ -7,7 +7,9 @@ import {
   useRepositories,
   useIndexRepository,
   useIndexingJobs,
+  useRepositoryInsights,
 } from '@/features/repositories/hooks/use-repositories';
+import type { DashboardRecentRepository } from '@/features/dashboard/types/dashboard-types';
 import { repositoryService } from '@/features/repositories/services/repository-service';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -119,10 +121,31 @@ function ActiveTaskCard({ jobId, fallbackJob }: { jobId: string, fallbackJob: an
 
 /* ── Main component ────────────────────────────────────── */
 
-export function DashboardRecentRepositories() {
+interface DashboardRecentRepositoriesProps {
+  summaryRepos?: DashboardRecentRepository[];
+}
+
+export function DashboardRecentRepositories({ summaryRepos }: DashboardRecentRepositoriesProps) {
   const { repositories, isLoading } = useRepositories(100, 0);
   const router = useRouter();
   const indexMutation = useIndexRepository();
+
+  const enrichedById = React.useMemo(() => {
+    const map = new Map<string, DashboardRecentRepository>();
+    for (const r of summaryRepos ?? []) {
+      map.set(r.id, r);
+    }
+    return map;
+  }, [summaryRepos]);
+
+  const primaryRepoId = repositories?.[0]?.id ?? summaryRepos?.[0]?.id ?? '';
+  const { data: primaryInsights } = useRepositoryInsights(primaryRepoId);
+  const topLanguage = React.useMemo(() => {
+    const breakdown = primaryInsights?.language_breakdown as Record<string, number> | undefined;
+    if (!breakdown) return null;
+    const sorted = Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] ?? null;
+  }, [primaryInsights]);
 
   // Get all indexing jobs to map repo → active job for progress polling
   const { data: allJobs } = useIndexingJobs();
@@ -199,12 +222,15 @@ export function DashboardRecentRepositories() {
   return (
     <div className="rounded-3xl border border-border/60 bg-card/60 backdrop-blur-xl overflow-hidden shadow-premium animate-fade-up">
       {/* Desktop header row */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_72px_72px_120px_160px] gap-3 px-5 py-3 border-b border-border/40 bg-background/40">
+      <div className="hidden lg:grid grid-cols-[1fr_120px_100px_72px_72px_100px_120px_160px] gap-3 px-5 py-3 border-b border-border/40 bg-background/40">
         <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
           Repository
         </span>
         <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
           Status
+        </span>
+        <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground">
+          Commit
         </span>
         <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground text-right">
           Files
@@ -222,26 +248,31 @@ export function DashboardRecentRepositories() {
 
       {/* Repository rows */}
       {repos.map((repo, i) => {
+        const summary = enrichedById.get(repo.id);
         const indexing = isIndexingStatus(repo.latest_job_status);
         const activeJob = activeJobByRepo.get(repo.id) ?? null;
         const filesCount =
-          (repo.latest_job_stats?.total_files as number) ||
-          (repo.latest_index_stats?.total_files as number) ||
-          0;
+          summary?.indexed_files_count ??
+          ((repo.latest_job_stats?.total_files as number) ||
+            (repo.latest_index_stats?.total_files as number) ||
+            0);
         const chunksCount =
-          repo.latest_indexed_chunks ||
-          (repo.latest_job_stats?.indexed_chunks as number) ||
-          (repo.latest_job_stats?.stored_chunks as number) ||
-          0;
-        
+          summary?.indexed_chunks_count ??
+          (repo.latest_indexed_chunks ||
+            (repo.latest_job_stats?.indexed_chunks as number) ||
+            (repo.latest_job_stats?.stored_chunks as number) ||
+            0);
+        const commitSha = summary?.last_commit_sha;
+        const failedMessage = summary?.latest_job_message;
         const isNew = !repo.latest_job_status;
         const statusCfg = getStatus(repo.latest_job_status);
+        const isPrimary = repo.id === primaryRepoId;
 
         return (
           <div key={repo.id} className={cn(i !== 0 && 'border-t border-border/40')}>
             <div
               className={cn(
-                'group grid grid-cols-1 md:grid-cols-[1fr_140px_72px_72px_120px_160px] gap-3 items-center px-5 py-4 transition-all duration-200',
+                'group grid grid-cols-1 lg:grid-cols-[1fr_120px_100px_72px_72px_100px_120px_160px] gap-3 items-center px-5 py-4 transition-all duration-200',
                 'hover:bg-primary/[0.03]',
               )}
             >
@@ -258,6 +289,7 @@ export function DashboardRecentRepositories() {
                     <GitBranch className="h-2.5 w-2.5 text-muted-foreground" />
                     <span className="text-[10px] text-muted-foreground">
                       {repo.default_branch}
+                      {isPrimary && topLanguage ? ` · ${topLanguage}` : ''}
                     </span>
                   </div>
                 </div>
@@ -265,12 +297,22 @@ export function DashboardRecentRepositories() {
 
               {/* Status */}
               <div>
-                <div className={cn('flex items-center gap-1.5', statusCfg.colorClass)}>
+                <div
+                  className={cn('flex items-center gap-1.5', statusCfg.colorClass)}
+                  title={statusCfg.label === 'FAILED' && failedMessage ? failedMessage : undefined}
+                >
                   {statusCfg.icon}
                   <span className="text-[9px] font-bold uppercase tracking-[0.2em]">
                     {statusCfg.label}
                   </span>
                 </div>
+              </div>
+
+              {/* Commit */}
+              <div className="hidden lg:block">
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {commitSha ? commitSha.slice(0, 8) : '—'}
+                </span>
               </div>
 
               {/* Files */}
@@ -296,11 +338,13 @@ export function DashboardRecentRepositories() {
               {/* Last Indexed */}
               <div>
                 <span className="text-[10px] text-muted-foreground">
-                  {repo.updated_at
-                    ? formatDate(repo.updated_at)
-                    : repo.created_at
-                      ? formatDate(repo.created_at)
-                      : '—'}
+                  {summary?.last_indexed_at
+                    ? formatDate(summary.last_indexed_at)
+                    : repo.updated_at
+                      ? formatDate(repo.updated_at)
+                      : repo.created_at
+                        ? formatDate(repo.created_at)
+                        : '—'}
                 </span>
               </div>
 

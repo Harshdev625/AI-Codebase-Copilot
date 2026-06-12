@@ -34,12 +34,19 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
       {/* Main content area */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
         {/* Top Navigation */}
-        {variant !== "studio" && <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />}
+        {variant !== "studio" && (
+          <TopNavbar
+            sectionTitle={title}
+            userEmail={user?.email}
+            onSignOut={signOut}
+            variant={pathname.startsWith("/admin") ? "admin" : "user"}
+          />
+        )}
 
         {/* Page content */}
         <main className={cn("flex-1 overflow-auto scroll-smooth custom-scrollbar", variant === "default" && "p-0")}>
           {variant === "default" ? (
-            <div className="flex min-h-full flex-col p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full">
+            <div className="flex min-h-full flex-col p-4 sm:p-6 md:p-8 w-full mx-auto max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px]">
               {children}
             </div>
           ) : (

@@ -16,8 +16,20 @@ import { Loader2, Plus, FolderGit2 } from 'lucide-react';
 import { useToast } from '@/components/shared/toast-provider';
 import { useQueryClient } from '@tanstack/react-query';
 
-export function DashboardAddRepository() {
-  const [open, setOpen] = React.useState(false);
+interface DashboardAddRepositoryProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  triggerRef?: React.Ref<HTMLButtonElement>;
+}
+
+export function DashboardAddRepository({
+  open: controlledOpen,
+  onOpenChange,
+  triggerRef,
+}: DashboardAddRepositoryProps = {}) {
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [repoId, setRepoId] = React.useState('');
   const [remoteUrl, setRemoteUrl] = React.useState('');
   const [localPath, setLocalPath] = React.useState('');
@@ -67,7 +79,7 @@ export function DashboardAddRepository() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button id="add-repository-btn" className="gap-2 shadow-glow-sm">
+        <Button ref={triggerRef} id="add-repository-btn" className="gap-2 shadow-glow-sm">
           <Plus className="h-4 w-4" />
           Add Repository
         </Button>

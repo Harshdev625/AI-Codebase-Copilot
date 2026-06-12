@@ -45,6 +45,10 @@
   --color-glow:                hsl(var(--glow));
   --color-cyan:                hsl(var(--cyan));
 
+  /* ── Navigation chrome ─────────────────────────────────── */
+  --spacing-nav-height: 3.5rem;
+  --spacing-nav-height-lg: 4rem;
+
   /* ── Radius ────────────────────────────────────────────── */
   --radius-xl: calc(var(--radius) + 4px);
   --radius-lg: var(--radius);

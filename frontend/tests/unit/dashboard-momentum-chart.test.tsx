@@ -1,10 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import { DashboardMomentumChart } from "@/features/dashboard/components/dashboard-momentum-chart";
-import { useDashboard } from "@/features/dashboard/hooks/use-dashboard";
+import { useDashboardActivity } from "@/features/dashboard/hooks/use-dashboard";
 import { TestProviders } from "../test-utils";
 
 jest.mock("@/features/dashboard/hooks/use-dashboard", () => ({
-  useDashboard: jest.fn(),
+  useDashboardActivity: jest.fn(),
 }));
 
 jest.mock("framer-motion", () => ({
@@ -20,16 +20,21 @@ describe("DashboardMomentumChart", () => {
   });
 
   it("renders chart with zero state", () => {
-    (useDashboard as jest.Mock).mockReturnValue({
-      summary: {},
+    (useDashboardActivity as jest.Mock).mockReturnValue({
+      isLoading: false,
+      data: {
+        days: Array.from({ length: 7 }, (_, i) => ({
+          date: `2026-06-0${i + 1}`,
+          sessions: 0,
+          indexing_jobs_completed: 0,
+        })),
+      },
     });
 
     render(<DashboardMomentumChart />, { wrapper: TestProviders });
 
     expect(screen.getByText("Weekly Activity")).toBeInTheDocument();
-    expect(screen.getByText("Total Queries (7d)")).toBeInTheDocument();
-    
-    // Total should be 0 based on dummy component logic which currently hardcodes 0
-    expect(screen.getAllByText("0").length).toBeGreaterThan(0);
+    expect(screen.getByText("Sessions (7d)")).toBeInTheDocument();
+    expect(screen.getByText("No activity recorded this week")).toBeInTheDocument();
   });
 });

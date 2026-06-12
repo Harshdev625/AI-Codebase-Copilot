@@ -20,25 +20,36 @@ describe("DashboardQuickActions", () => {
 
     expect(screen.getByText("Start AI Chat")).toBeInTheDocument();
     expect(screen.getByText("Add Repository")).toBeInTheDocument();
-    expect(screen.getByText("Search Code")).toBeInTheDocument();
-    expect(screen.getByText("Re-Index Repos")).toBeInTheDocument();
+    expect(screen.getByText("Semantic Search")).toBeInTheDocument();
+    expect(screen.getByText("Open Codebase")).toBeInTheDocument();
   });
 
-  it("navigates to chat when Start AI Chat is clicked", () => {
+  it("navigates to studio when Start AI Chat is clicked", () => {
     render(<DashboardQuickActions />, { wrapper: TestProviders });
 
     const chatBtn = screen.getByText("Start AI Chat").closest("button");
     fireEvent.click(chatBtn!);
-    
+
     expect(mockPush).toHaveBeenCalledWith("/studio");
   });
 
-  it("navigates to repositories when Add Repository is clicked", () => {
-    render(<DashboardQuickActions />, { wrapper: TestProviders });
+  it("calls onAddRepository when Add Repository is clicked", () => {
+    const onAddRepository = jest.fn();
+    render(<DashboardQuickActions onAddRepository={onAddRepository} />, { wrapper: TestProviders });
 
     const reposBtn = screen.getByText("Add Repository").closest("button");
     fireEvent.click(reposBtn!);
-    
-    expect(mockPush).toHaveBeenCalledWith("/dashboard");
+
+    expect(onAddRepository).toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it("navigates to studio search panel when Semantic Search is clicked", () => {
+    render(<DashboardQuickActions />, { wrapper: TestProviders });
+
+    const searchBtn = screen.getByText("Semantic Search").closest("button");
+    fireEvent.click(searchBtn!);
+
+    expect(mockPush).toHaveBeenCalledWith("/studio?panel=search");
   });
 });
