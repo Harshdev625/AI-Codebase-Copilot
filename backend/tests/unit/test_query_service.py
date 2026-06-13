@@ -287,6 +287,25 @@ async def test_record_agent_run_with_session(query_service, mock_session):
 
 
 @pytest.mark.asyncio
+async def test_record_agent_run_persists_sources_and_source_index(query_service, mock_session):
+    import json
+
+    sources = [{"path": "src/auth.py", "score": 0.9}]
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="what is auth?",
+        answer="Auth is in auth.py",
+        source_index=sources,
+    )
+    assistant_call = mock_session.execute.call_args_list[-1]
+    params = assistant_call.args[1] if len(assistant_call.args) > 1 else assistant_call.kwargs
+    metadata_raw = params["metadata"]
+    metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+    assert metadata["source_index"] == sources
+    assert metadata["sources"] == sources
+
+
+@pytest.mark.asyncio
 async def test_record_agent_run_db_failure(query_service, mock_session):
     mock_session.execute.side_effect = Exception("DB Error")
     with pytest.raises(DatabaseException, match="Failed to record agent run"):

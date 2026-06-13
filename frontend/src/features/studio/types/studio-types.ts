@@ -1,18 +1,35 @@
 /**
- * Canonical type definitions for Unified Copilot Studio (Phase 1+).
- * Shared across store, components, and URL sync hook.
+ * Canonical type definitions for Studio V2 workbench.
  */
 
-/** Primary canvas rendering mode. Chat is the default (Phase 1); others activate in later phases. */
-export type CanvasMode = "chat" | "editor" | "diff" | "patch-review";
+export type EditorTabKind = "welcome" | "file" | "patch";
 
-/** Which secondary panel is visible in the studio left-sidebar. */
-export type SecondaryPanel =
+export interface EditorTab {
+  id: string;
+  kind: EditorTabKind;
+  title: string;
+  filePath?: string;
+  initialLine?: number;
+  commitSha?: string;
+  patchId?: string;
+}
+
+/** Activity bar sidebar views. */
+export type PrimarySidebar =
+  | "sessions"
   | "explorer"
   | "search"
   | "snapshots"
-  | "settings"
-  | "sessions"
-  | "tasks"
   | "patches"
-  | null;
+  | "tasks";
+
+/** @deprecated V1 canvas router — kept for URL compat during migration */
+export type CanvasMode = "chat" | "editor" | "diff" | "patch-review";
+
+export type MobileStudioTab = "editor" | "files" | "ai";
+
+export type StudioDensity = "comfortable" | "compact";
+
+export const WELCOME_TAB_ID = "welcome";
+
+export const MAX_EDITOR_TABS = 15;

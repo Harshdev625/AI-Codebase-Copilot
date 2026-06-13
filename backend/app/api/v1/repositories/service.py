@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.repository_cache import normalize_repo_path, repository_cache_dir
 from app.db.database import SessionLocal
 from app.queues.indexing_queue import enqueue_indexing_job
 from app.services.indexing_service import IndexingService
@@ -179,7 +180,7 @@ def queue_repository_indexing(
 ) -> dict[str, str]:
     repository_db_id = str(repository_row["id"])
     effective_repo_id = str(repository_row.get("repo_id") or repository_row["id"])
-    effective_repo_path = repo_path or repository_row.get("local_path")
+    effective_repo_path = normalize_repo_path(repo_path or repository_row.get("local_path"))
     effective_repo_url = repo_url or repository_row.get("remote_url")
     effective_repo_ref = repo_ref or repository_row.get("default_branch") or "main"
     normalized_commit = str(commit_sha or "local-working-copy").strip()[:80] or "local-working-copy"
@@ -494,8 +495,10 @@ def get_index_job_progress(session: Session, *, indexing_job_id: str, user_id: s
     if not isinstance(stats, dict):
         stats = {}
 
+    started_at = row.get("started_at")
     return {
         "indexing_job_id": str(row.get("id")),
+        "repository_id": str(row.get("repository_id") or ""),
         "job_status": str(row.get("status") or "pending"),
         "message": str(row.get("message") or "Indexing in progress..."),
         "stats": stats,
@@ -504,6 +507,9 @@ def get_index_job_progress(session: Session, *, indexing_job_id: str, user_id: s
         "percentage": int(stats.get("percentage") or 0),
         "current_file": stats.get("current_file"),
         "eta_seconds": stats.get("eta_seconds"),
+        "stage_timings": stats.get("stage_timings") or {},
+        "current_stage": stats.get("current_stage"),
+        "started_at": started_at.isoformat() if started_at else None,
     }
 
 

@@ -4,10 +4,13 @@ import { v4 as uuidv4 } from "uuid";
 
 import { chatService } from "@/features/chat/services/chat-service";
 import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source } from "@/features/chat/types/chat-types";
+import { normalizeChatMessage, normalizeMessageMetadata } from "@/features/chat/utils/chat-message-utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
+import { useStudioWorkbenchSessionOptional } from "@/features/studio/context/studio-workbench-context";
 
 export const chatKeys = {
   sessions: (repositoryId?: string) => ["chat", "sessions", repositoryId] as const,
+  session: (sessionId: string) => ["chat", "session", sessionId] as const,
   messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
 };
 
@@ -15,6 +18,14 @@ export function useChatSessions(limit = 20, offset = 0, repositoryId?: string, s
   return useQuery({
     queryKey: [...chatKeys.sessions(repositoryId), limit, offset, search, isArchived],
     queryFn: () => chatService.listSessions(limit, offset, repositoryId, search, isArchived),
+  });
+}
+
+export function useChatSession(sessionId: string | null) {
+  return useQuery({
+    queryKey: sessionId ? chatKeys.session(sessionId) : ["chat", "session", "empty"],
+    queryFn: () => chatService.getSession(sessionId as string),
+    enabled: Boolean(sessionId),
   });
 }
 
@@ -94,15 +105,20 @@ export function useUpdateSessionMutation() {
   return useMutation({
     mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean; metadata?: Record<string, any> } }) => 
       chatService.updateSession(sessionId, payload),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+      void queryClient.invalidateQueries({ queryKey: chatKeys.session(variables.sessionId) });
     },
   });
 }
 
 
 export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
-  const { activeSessionId: currentSessionId, setActiveSessionId: setCurrentSessionId } = useStudioStore();
+  const workbench = useStudioWorkbenchSessionOptional();
+  const storeSessionId = useStudioStore((s) => s.activeSessionId);
+  const setStoreSessionId = useStudioStore((s) => s.setActiveSessionId);
+  const currentSessionId = workbench?.activeSessionId ?? storeSessionId;
+  const setCurrentSessionId = workbench?.setActiveSessionId ?? setStoreSessionId;
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
   const abortControllerRef = React.useRef<AbortController | null>(null);
@@ -113,17 +129,25 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   React.useEffect(() => {
     if (!currentSessionId) {
       setMessages([]);
+    }
+  }, [currentSessionId]);
+
+  React.useEffect(() => {
+    if (!currentSessionId) {
       return;
     }
     const items = messagesQuery.data?.items;
-    if (Array.isArray(items) && !isSending) {
-      setMessages(items);
+    if (!Array.isArray(items) || items.length === 0 || isSending) {
+      return;
     }
+    setMessages(items.map((item) => normalizeChatMessage(item)));
   }, [currentSessionId, messagesQuery.data?.items, isSending]);
 
   const clearMessages = React.useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsSending(false);
     }
     setCurrentSessionId(null);
     setMessages([]);
@@ -132,6 +156,8 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   const selectSession = React.useCallback((sessionId: string) => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsSending(false);
     }
     setCurrentSessionId(sessionId);
     setMessages([]);
@@ -146,20 +172,26 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   }, []);
 
   const sendMessage = React.useCallback(
-    async (content: string, mode: ChatMode = "ASK", scopePaths?: string[]) => {
+    async (
+      content: string,
+      mode: ChatMode = "ASK",
+      scopePaths?: string[],
+      options?: { displayContent?: string },
+    ) => {
       if (isSending) return;
       if (!content.trim()) return;
 
       const userMessageId = uuidv4();
       const assistantMessageId = uuidv4();
       let localSessionId = currentSessionId;
+      const visibleContent = options?.displayContent?.trim() || content;
 
       const newUserMessage: ChatMessage = {
         id: userMessageId,
         role: "user",
-        content,
+        content: visibleContent,
         created_at: new Date().toISOString(),
-        metadata: {},
+        metadata: scopePaths?.length ? { scope_paths: scopePaths } : {},
       };
 
       const placeholderAssistantMessage: ChatMessage = {
@@ -196,6 +228,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                 localSessionId = event.session_id;
                 setCurrentSessionId(event.session_id);
                 void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+                void queryClient.invalidateQueries({ queryKey: chatKeys.session(event.session_id) });
                 void queryClient.invalidateQueries({ queryKey: ["admin", "metrics"] });
               }
             } else if ((event.type === 'chunk' && event.delta) || (event.type === 'answer' && event.text)) {
@@ -222,7 +255,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
               setMessages((prev) => 
                 prev.map((msg) => {
                   if (msg.id === assistantMessageId) {
-                    const sources = (msg.metadata.sources as any[]) || [];
+                    const sources = (msg.metadata.sources as Source[]) || [];
                     return { ...msg, metadata: { ...msg.metadata, sources: [...sources, event.source] } };
                   }
                   return msg;
@@ -239,17 +272,14 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                 })
               );
             } else if (event.type === 'done' && event.sources) {
-              // H6 FIX: Ensure patch_proposal is also stored in frontend metadata
               setMessages((prev) => 
                 prev.map((msg) => {
                   if (msg.id === assistantMessageId) {
-                    const newMetadata = { ...msg.metadata, sources: event.sources };
-                    if (event.proposal) {
-                      newMetadata.sources = [
-                        ...(newMetadata.sources || []),
-                        { kind: 'patch_proposal', proposal: event.proposal } as Source
-                      ];
-                    }
+                    const newMetadata = normalizeMessageMetadata({
+                      ...msg.metadata,
+                      sources: event.sources,
+                      ...(event.proposal ? { patch_proposal: event.proposal } : {}),
+                    });
                     return { ...msg, metadata: newMetadata };
                   }
                   return msg;
@@ -276,7 +306,6 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
           setIsSending(false);
-          // Invalidate messages list to ensure backend sync
           if (localSessionId) {
             void queryClient.invalidateQueries({ queryKey: chatKeys.messages(localSessionId) });
           }
@@ -291,7 +320,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
     sendMessage,
     stopGeneration,
     isSending,
-    isHistoryLoading: Boolean(currentSessionId) && messagesQuery.isFetching,
+    isHistoryLoading: Boolean(currentSessionId) && messagesQuery.isLoading && messages.length === 0,
     historyError: messagesQuery.isError ? messagesQuery.error : null,
     clearMessages,
     currentSessionId,

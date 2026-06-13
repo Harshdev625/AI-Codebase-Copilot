@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { FolderGit2, Layers3, Activity, MessageSquare } from 'lucide-react';
 import { motion, useSpring, useTransform } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { DASHBOARD_EYEBROW, DASHBOARD_METRIC_VALUE } from '@/components/layout/nav-tokens';
 
 interface StatCardProps {
   label: string;
@@ -46,7 +47,7 @@ function StatCard({ label, value, suffix, subtitle, icon, gradient, glow, glowSo
       />
 
       <div className="relative flex items-center justify-between">
-        <span className="text-[9px] font-semibold uppercase tracking-[0.25em] text-muted-foreground transition-colors group-hover:text-foreground/70 lg:text-[10px]">
+        <span className={cn(DASHBOARD_EYEBROW, 'transition-colors group-hover:text-foreground/70')}>
           {label}
         </span>
         <div
@@ -61,10 +62,10 @@ function StatCard({ label, value, suffix, subtitle, icon, gradient, glow, glowSo
 
       <div className="relative">
         <div className="flex items-baseline gap-2">
-          <motion.span className="text-3xl font-semibold tracking-tight tabular-nums font-mono text-foreground lg:text-4xl">
+          <motion.span className={cn(DASHBOARD_METRIC_VALUE, 'font-mono')}>
             {displayValue}
           </motion.span>
-          <span className="text-[9px] font-semibold uppercase tracking-widest text-muted-foreground lg:text-[10px]">
+          <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground xl:text-sm">
             {suffix}
           </span>
         </div>
@@ -195,7 +196,7 @@ export function DashboardStatsGrid() {
               summary?.indexing_summary,
               metrics.last_activity_at
             )}
-            icon={cfg.icon(`h-4 w-4 ${cfg.iconClass}`)}
+            icon={cfg.icon(`h-5 w-5 xl:h-6 xl:w-6 ${cfg.iconClass}`)}
             gradient={cfg.gradient}
             glow={cfg.glow}
             glowSoft={cfg.glowSoft}

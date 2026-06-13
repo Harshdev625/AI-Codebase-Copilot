@@ -23,7 +23,7 @@ import {
   useContextTokens,
   useRepositories,
 } from "@/features/repositories/hooks/use-repositories";
-import { useChatSessions } from "@/features/chat/hooks/use-chat";
+import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
 import {
   useContextEntries,
   useRemoveContextEntryMutation,
@@ -309,9 +309,7 @@ export function ContextPanel({ repositoryId }: ContextPanelProps) {
   const selectedRepository = repositories.find((r) => r.id === repoId);
   const { data: insights, isLoading: insightsLoading } = useRepositoryInsights(repoId);
 
-  const { data: sessionData } = useChatSessions(100, 0);
-  const activeSession = sessionData?.items?.find((s: any) => s.id === activeSessionId);
-  const scopePaths: string[] = activeSession?.metadata?.scope_paths ?? [];
+  const { scopePaths } = useSessionScope(activeSessionId);
 
   // Derived values from real data
   const repoName     = selectedRepository?.repo_id || repoId || "NO REPOSITORY";

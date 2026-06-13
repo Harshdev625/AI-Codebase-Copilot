@@ -687,3 +687,45 @@ select {
     }
   }
 }
+
+/* Scrollbar utilities (used across studio + dashboard) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Studio V2 workbench chrome */
+.studio-workbench {
+  --studio-bg: #0b0d14;
+  --studio-surface: #13151a;
+  --studio-border: #1e212b;
+  --studio-accent: #58a6ff;
+  --studio-text: #c9d1d9;
+  --studio-muted: #8b949e;
+  --studio-nav-btn: 2.5rem;
+  --studio-nav-icon: 18px;
+}
+@media (min-width: 1280px) {
+  .studio-workbench {
+    --studio-nav-btn: 2.75rem;
+    --studio-nav-icon: 20px;
+  }
+}
+.studio-chrome-bg {
+  background-color: var(--studio-bg);
+}

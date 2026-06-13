@@ -7,16 +7,24 @@ import { useAuthStore } from "@/store/auth-store";
 import { useLogout } from "@/features/auth/hooks/use-auth";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
-import { NAV_BAR_CLASS } from "@/components/layout/nav-tokens";
+import { useStudioStore } from "@/features/studio/store/studio-store";
+
+/** Studio title bar — fixed 48px (no xl growth). */
+const STUDIO_TITLE_BAR_CLASS = "h-12";
 
 export function GlobalTopBar() {
   const user = useAuthStore((state) => state.user);
   const logout = useLogout();
+  const { setSettingsOpen } = useStudioStore();
   const [profileOpen, setProfileOpen] = React.useState(false);
   const profileRef = React.useRef<HTMLDivElement>(null);
 
   const handleLogout = () => {
     logout("user");
+  };
+
+  const openCommandPalette = () => {
+    window.dispatchEvent(new CustomEvent("studio:open-command-palette"));
   };
 
   React.useEffect(() => {
@@ -40,7 +48,7 @@ export function GlobalTopBar() {
     <div
       className={cn(
         "flex shrink-0 select-none items-center justify-between border-b border-[#1E212B] bg-[#0F1117] px-3 sm:px-4 lg:px-6",
-        NAV_BAR_CLASS
+        STUDIO_TITLE_BAR_CLASS
       )}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -62,8 +70,10 @@ export function GlobalTopBar() {
         </span>
       </div>
 
-      <div className="mx-3 flex-1 max-w-sm sm:mx-6">
+      <div className="mx-3 max-w-sm flex-1 sm:mx-6">
         <button
+          type="button"
+          onClick={openCommandPalette}
           className={cn(
             "flex w-full items-center gap-2 rounded-lg px-3",
             "h-8 lg:h-9",
@@ -87,6 +97,7 @@ export function GlobalTopBar() {
           size="icon"
           className="h-8 w-8 rounded-md text-[#8B949E] hover:bg-[#1F242D] hover:text-[#C9D1D9] lg:h-9 lg:w-9"
           title="Settings"
+          onClick={() => setSettingsOpen(true)}
         >
           <Settings className="h-4 w-4 lg:h-[18px] lg:w-[18px]" />
         </Button>

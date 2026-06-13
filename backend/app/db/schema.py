@@ -22,12 +22,14 @@ def ensure_app_schema() -> None:
 
 def reset_app_schema() -> None:
     logger.warning("schema_reset - start")
+    dialect_name = engine.dialect.name
     with engine.begin() as connection:
-        # Drop and recreate schema to remove any orphaned objects and constraints.
-        if connection.dialect.name == "postgresql":
+        if dialect_name == "postgresql":
             connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             connection.execute(text("CREATE SCHEMA public"))
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        else:
+            Base.metadata.drop_all(bind=connection)
         Base.metadata.create_all(bind=connection)
-    logger.warning("schema_reset - completed")
+    logger.warning("schema_reset - completed dialect=%s", dialect_name)
 

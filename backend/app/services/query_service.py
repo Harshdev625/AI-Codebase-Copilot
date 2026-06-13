@@ -587,11 +587,13 @@ class QueryService:
         if not session_id:
             return
         try:
+            source_index = kwargs.get("source_index", []) or []
             metadata = {
                 "intent": kwargs.get("intent"),
                 "repository_id": kwargs.get("repository_id"),
                 "repo_id": kwargs.get("repo_id"),
-                "source_index": kwargs.get("source_index", []),
+                "source_index": source_index,
+                "sources": source_index,
                 "stats": kwargs.get("stats", {}),
                 "patch_proposal": kwargs.get("patch_proposal"),
             }

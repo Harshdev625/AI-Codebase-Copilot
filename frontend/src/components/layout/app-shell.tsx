@@ -6,6 +6,7 @@ import { TopNavbar } from "@/components/layout/top-navbar";
 import { useLogout } from "@/features/auth/hooks/use-auth";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
+import { DASHBOARD_CONTAINER_CLASS } from "./nav-tokens";
 
 interface AppShellProps {
   title: string;
@@ -44,9 +45,9 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
         )}
 
         {/* Page content */}
-        <main className={cn("flex-1 overflow-auto scroll-smooth custom-scrollbar", variant === "default" && "p-0")}>
+        <main className={cn("flex-1 scroll-smooth custom-scrollbar", variant === "default" && "p-0", variant === "studio" && "overflow-hidden")}>
           {variant === "default" ? (
-            <div className="flex min-h-full flex-col p-4 sm:p-6 md:p-8 w-full mx-auto max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px]">
+            <div className={cn("flex min-h-full flex-col", DASHBOARD_CONTAINER_CLASS)}>
               {children}
             </div>
           ) : (

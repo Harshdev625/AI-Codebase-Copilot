@@ -34,7 +34,8 @@ describe("DashboardMomentumChart", () => {
     render(<DashboardMomentumChart />, { wrapper: TestProviders });
 
     expect(screen.getByText("Weekly Activity")).toBeInTheDocument();
-    expect(screen.getByText("Sessions (7d)")).toBeInTheDocument();
-    expect(screen.getByText("No activity recorded this week")).toBeInTheDocument();
+    expect(screen.getByText("Sessions")).toBeInTheDocument();
+    expect(screen.getAllByText("Last 7 days").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("No activity in the last 7 days")).toBeInTheDocument();
   });
 });

@@ -1,87 +1,132 @@
-import * as React from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
-import { useStudioStore } from '../store/studio-store';
-import type { CanvasMode, SecondaryPanel } from '../types/studio-types';
+import * as React from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useStudioStore } from "../store/studio-store";
+import type { PrimarySidebar } from "../types/studio-types";
 
 /**
- * Bidirectional synchronization between URL query params and Studio store.
- * Phase 1: Syncs repository_id, session_id, view (canvas mode), and panel.
+ * URL → store on mount; store → URL on explicit navigation (debounced).
  */
 export function useStudioUrlSync() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  
+
   const {
     selectedRepositoryId,
     activeSessionId,
-    canvasMode,
-    secondaryPanel,
+    primarySidebar,
+    aiPanelOpen,
     setSelectedRepositoryId,
     setActiveSessionId,
-    setCanvasMode,
-    setSecondaryPanel,
+    focusSidebar,
+    setAiPanelOpen,
+    openFileTab,
+    openPatchTab,
   } = useStudioStore();
 
-  // Sync from URL to store on mount and param changes
+  const hydratedRef = React.useRef(false);
+
   React.useEffect(() => {
-    const repositoryId = searchParams.get('repository_id');
-    const sessionId = searchParams.get('session_id');
-    const view = searchParams.get('view') as CanvasMode | null;
-    const panel = searchParams.get('panel') as SecondaryPanel | null;
+    const repositoryId = searchParams.get("repository_id");
+    const sessionId = searchParams.get("session_id");
+    const panel = searchParams.get("panel") as PrimarySidebar | null;
+    const aiOpen = searchParams.get("ai") === "open";
+    const file = searchParams.get("file");
+    const patchId = searchParams.get("patch_id");
 
     if (repositoryId && repositoryId !== selectedRepositoryId) {
       setSelectedRepositoryId(repositoryId);
     }
     if (sessionId && sessionId !== activeSessionId) {
       setActiveSessionId(sessionId);
+      focusSidebar("sessions");
+    } else if (!sessionId && activeSessionId && !hydratedRef.current) {
+      /* keep persisted session */
     }
-    if (view && view !== canvasMode) {
-      setCanvasMode(view);
+    if (panel && panel !== "explorer") {
+      focusSidebar(panel);
+    } else if (panel === "explorer" && (file || patchId)) {
+      focusSidebar("explorer");
     }
-    if (panel && panel !== secondaryPanel) {
-      setSecondaryPanel(panel);
+    if (aiOpen) {
+      focusSidebar("sessions");
     }
-  }, [searchParams]);
+    if (file) {
+      const lineRaw = searchParams.get("line");
+      const line = lineRaw ? parseInt(lineRaw, 10) : undefined;
+      openFileTab(file, Number.isFinite(line) ? line : undefined);
+      focusSidebar("explorer");
+    }
+    if (patchId) {
+      openPatchTab(patchId);
+      focusSidebar("explorer");
+    }
 
-  // Sync from store to URL when state changes (debounced)
+    hydratedRef.current = true;
+  }, [
+    searchParams,
+    selectedRepositoryId,
+    activeSessionId,
+    primarySidebar,
+    aiPanelOpen,
+    setSelectedRepositoryId,
+    setActiveSessionId,
+    focusSidebar,
+    setAiPanelOpen,
+    openFileTab,
+    openPatchTab,
+  ]);
+
   const updateUrl = React.useCallback(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    
-    if (selectedRepositoryId) {
-      params.set('repository_id', selectedRepositoryId);
-    } else {
-      params.delete('repository_id');
-    }
-    
-    if (activeSessionId) {
-      params.set('session_id', activeSessionId);
-    } else {
-      params.delete('session_id');
-    }
-    
-    if (canvasMode && canvasMode !== 'chat') {
-      params.set('view', canvasMode);
-    } else {
-      params.delete('view');
-    }
-    
-    if (secondaryPanel) {
-      params.set('panel', secondaryPanel);
-    } else {
-      params.delete('panel');
-    }
-    
-    const newUrl = `/studio?${params.toString()}`;
-    router.replace(newUrl);
-  }, [selectedRepositoryId, activeSessionId, canvasMode, secondaryPanel, searchParams, router]);
+    if (!hydratedRef.current) return;
 
-  // Debounce URL updates to avoid excessive navigation
+    const params = new URLSearchParams();
+
+    if (selectedRepositoryId) {
+      params.set("repository_id", selectedRepositoryId);
+    }
+    if (activeSessionId) {
+      params.set("session_id", activeSessionId);
+    }
+    const activeTab = useStudioStore.getState().editorTabs.find(
+      (t) => t.id === useStudioStore.getState().activeTabId,
+    );
+    const hasOpenFile = activeTab?.kind === "file" && activeTab.filePath;
+    const hasOpenPatch = activeTab?.kind === "patch" && activeTab.patchId;
+
+    if (primarySidebar && primarySidebar !== "sessions") {
+      if (primarySidebar !== "explorer" || hasOpenFile || hasOpenPatch) {
+        params.set("panel", primarySidebar);
+      }
+    }
+    if (primarySidebar === "sessions" || aiPanelOpen) {
+      params.set("ai", "open");
+    }
+
+    if (hasOpenFile && activeTab?.filePath) {
+      params.set("file", activeTab.filePath);
+      if (activeTab.initialLine) {
+        params.set("line", String(activeTab.initialLine));
+      }
+    }
+    if (hasOpenPatch && activeTab?.patchId) {
+      params.set("patch_id", activeTab.patchId);
+    }
+
+    const query = params.toString();
+    const newUrl = query ? `/studio?${query}` : "/studio";
+    const currentPath =
+      typeof window !== "undefined"
+        ? `${window.location.pathname}${window.location.search}`
+        : "";
+
+    if (newUrl === currentPath) return;
+    router.replace(newUrl);
+  }, [selectedRepositoryId, activeSessionId, primarySidebar, aiPanelOpen, router]);
+
   React.useEffect(() => {
     const timeoutId = setTimeout(updateUrl, 300);
     return () => clearTimeout(timeoutId);
   }, [updateUrl]);
 
-  return {
-    syncToUrl: updateUrl,
-  };
+  return { syncToUrl: updateUrl };
 }

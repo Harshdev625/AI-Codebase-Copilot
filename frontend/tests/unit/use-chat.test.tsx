@@ -20,6 +20,7 @@ jest.mock("uuid", () => ({
 jest.mock("@/features/chat/services/chat-service", () => ({
   chatService: {
     listSessions: jest.fn(),
+    getSession: jest.fn(),
     listMessages: jest.fn(),
     deleteSession: jest.fn(),
     stream: jest.fn(),

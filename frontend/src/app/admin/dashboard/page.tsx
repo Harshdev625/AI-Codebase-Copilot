@@ -78,7 +78,7 @@ export default function AdminDashboardPage() {
         {activeTab === 'overview' && (
           <>
             <section className="space-y-3">
-              <h2 className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground lg:text-xs">
+              <h2 className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground xl:text-sm">
                 Platform Metrics
               </h2>
               <AdminMetricsGrid
@@ -88,14 +88,14 @@ export default function AdminDashboardPage() {
                 onRetry={handleRefresh}
               />
             </section>
-            <section className="grid grid-cols-1 gap-4 2xl:grid-cols-12">
+            <section className="grid grid-cols-1 gap-4 xl:grid-cols-12">
               <AdminTelemetryPanel
                 telemetry={telemetryQuery.data}
                 isLoading={telemetryQuery.isLoading}
                 lastRefreshedAt={telemetryQuery.dataUpdatedAt}
                 onFailedJobsClick={() => setActiveTab('repositories')}
               />
-              <div className="2xl:col-span-4">
+              <div className="xl:col-span-4">
                 <AdminHealthList health={healthQuery.data ?? []} isLoading={healthQuery.isLoading} />
               </div>
             </section>

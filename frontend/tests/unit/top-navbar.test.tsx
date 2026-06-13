@@ -4,6 +4,7 @@ import { TestProviders } from "../test-utils";
 
 jest.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
+  useRouter: () => ({ push: jest.fn() }),
 }));
 
 describe("TopNavbar", () => {
@@ -37,6 +38,24 @@ describe("TopNavbar", () => {
 
     expect(screen.getByText("Admin")).toBeInTheDocument();
     expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
+  });
+
+  it("dispatches command palette event when search is clicked", () => {
+    const dispatchSpy = jest.spyOn(window, "dispatchEvent");
+    render(
+      <TopNavbar
+        sectionTitle="Test App"
+        userEmail="test@example.com"
+        onSignOut={jest.fn()}
+      />,
+      { wrapper: TestProviders }
+    );
+
+    fireEvent.click(screen.getByLabelText("Open command palette"));
+    expect(dispatchSpy).toHaveBeenCalled();
+    const event = dispatchSpy.mock.calls[0][0] as Event;
+    expect(event.type).toBe("studio:open-command-palette");
+    dispatchSpy.mockRestore();
   });
 
   it("calls onSignOut when sign out button is clicked", () => {

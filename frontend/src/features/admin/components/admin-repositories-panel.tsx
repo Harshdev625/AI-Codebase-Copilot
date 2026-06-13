@@ -26,11 +26,11 @@ export function AdminRepositoriesPanel({
   isReindexing,
 }: AdminRepositoriesPanelProps) {
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-[1.2fr_1fr]">
       <div className="flex flex-col rounded-2xl border border-border/40 bg-card/60 p-6 shadow-2xl backdrop-blur-xl">
         <div className="mb-5 flex items-center gap-2">
           <Database className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground lg:text-base">Repository Operations</h2>
+          <h2 className="text-sm font-semibold text-foreground lg:text-base xl:text-lg">Repository Operations</h2>
         </div>
         {isLoadingRepos ? (
           <Skeleton className="h-40 w-full" />
@@ -56,14 +56,14 @@ export function AdminRepositoriesPanel({
                             ? 'warning'
                             : 'muted'
                     }
-                    className="text-[10px]"
+                    className="text-xs"
                   >
                     {repo.latest_job_status || 'idle'}
                   </Badge>
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 border-border/40 bg-transparent text-[11px] text-foreground hover:bg-muted"
+                    className="h-8 border-border/40 bg-transparent text-xs text-foreground hover:bg-muted"
                     onClick={() => onReindex(repo.id)}
                     disabled={isReindexing}
                   >
@@ -84,7 +84,7 @@ export function AdminRepositoriesPanel({
       <div className="flex flex-col rounded-2xl border border-border/40 bg-card/60 p-6 shadow-2xl backdrop-blur-xl">
         <div className="mb-5 flex items-center gap-2">
           <Clock className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground lg:text-base">Indexing Job History</h2>
+          <h2 className="text-sm font-semibold text-foreground lg:text-base xl:text-lg">Indexing Job History</h2>
         </div>
         {isLoadingJobs ? (
           <Skeleton className="h-40 w-full" />
@@ -101,7 +101,7 @@ export function AdminRepositoriesPanel({
                   <div className="flex items-start justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="mb-1 flex items-center gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground xl:text-sm">
                           ID: {job.id.substring(0, 8)}
                         </span>
                         {job.status === 'failed' && <AlertTriangle className="h-3 w-3 text-destructive" />}
@@ -112,17 +112,17 @@ export function AdminRepositoriesPanel({
                       variant={
                         job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning'
                       }
-                      className="ml-2 shrink-0 text-[10px]"
+                      className="ml-2 shrink-0 text-xs"
                     >
                       {job.status}
                     </Badge>
                   </div>
                   {(job.message || job.status === 'failed') && (
-                    <div className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-border/20 bg-background/50 p-2.5 font-mono text-[10px] text-muted-foreground">
+                    <div className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg border border-border/20 bg-background/50 p-2.5 font-mono text-xs text-muted-foreground">
                       {job.message || 'Job execution failed unexpectedly.'}
                     </div>
                   )}
-                  <div className="mt-1 text-right text-[10px] font-medium text-muted-foreground">
+                  <div className="mt-1 text-right text-xs font-medium text-muted-foreground xl:text-sm">
                     {formatDate(job.created_at)}
                   </div>
                 </div>

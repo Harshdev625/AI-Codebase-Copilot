@@ -18,7 +18,6 @@ const customJestConfig = {
     "!**/*.d.ts",
     "!**/src/app/layout.tsx",
     "!src/components/ui/**/*.{ts,tsx}",
-    "!src/features/studio/**",
     "!src/features/explorer/**",
     "!src/features/repositories/components/**",
     "!src/features/repositories/hooks/**",

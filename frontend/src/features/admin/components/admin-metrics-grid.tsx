@@ -11,6 +11,7 @@ import {
   Users,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DASHBOARD_EYEBROW } from '@/components/layout/nav-tokens';
 import type { SystemMetrics } from '@/features/admin/services/admin-service';
 
 function MetricCard({
@@ -25,20 +26,18 @@ function MetricCard({
   icon: React.ReactNode;
 }) {
   return (
-    <div className="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-border/40 bg-card/60 p-4 shadow-2xl backdrop-blur-xl transition-all hover:border-primary/50">
+    <div className="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-border/40 bg-card/60 p-4 shadow-2xl backdrop-blur-xl transition-all hover:border-primary/50 xl:p-5">
       <div className="absolute inset-x-0 -bottom-px h-px w-full bg-gradient-to-r from-transparent via-primary/50 to-transparent opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
       <div className="flex items-center justify-between">
-        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground lg:text-xs">
-          {label}
-        </p>
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary shadow-[0_0_15px_rgba(var(--primary),0.15)] transition-transform duration-500 group-hover:scale-110">
+        <p className={DASHBOARD_EYEBROW}>{label}</p>
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary shadow-[0_0_15px_rgba(var(--primary),0.15)] transition-transform duration-500 group-hover:scale-110 xl:h-10 xl:w-10">
           {icon}
         </div>
       </div>
-      <div className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-foreground lg:text-3xl">
+      <div className="mt-3 text-2xl font-semibold tabular-nums tracking-tight text-foreground lg:text-3xl xl:text-4xl">
         {value}
       </div>
-      {subtitle && <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>}
+      {subtitle && <p className="mt-1 text-xs text-muted-foreground xl:text-sm">{subtitle}</p>}
     </div>
   );
 }
@@ -74,27 +73,27 @@ export function AdminMetricsGrid({ metrics, isLoading, isError, onRetry }: Admin
   const snapshots = metrics?.snapshot_count ?? 0;
 
   const items = [
-    { label: 'Users', value: metrics?.users_count ?? 0, icon: <Users className="h-4 w-4" /> },
-    { label: 'Repositories', value: metrics?.repositories_count ?? 0, icon: <Database className="h-4 w-4" /> },
+    { label: 'Users', value: metrics?.users_count ?? 0, icon: <Users className="h-4 w-4 xl:h-5 xl:w-5" /> },
+    { label: 'Repositories', value: metrics?.repositories_count ?? 0, icon: <Database className="h-4 w-4 xl:h-5 xl:w-5" /> },
     {
       label: 'Indexed Files',
       value: files,
       subtitle: chunks > 0 ? `${(chunks / Math.max(files, 1)).toFixed(1)} chunks/file` : undefined,
-      icon: <FileText className="h-4 w-4" />,
+      icon: <FileText className="h-4 w-4 xl:h-5 xl:w-5" />,
     },
-    { label: 'Chunks', value: chunks, icon: <Activity className="h-4 w-4" /> },
-    { label: 'Sessions', value: metrics?.active_sessions ?? 0, icon: <MessageSquare className="h-4 w-4" /> },
+    { label: 'Chunks', value: chunks, icon: <Activity className="h-4 w-4 xl:h-5 xl:w-5" /> },
+    { label: 'Sessions', value: metrics?.active_sessions ?? 0, icon: <MessageSquare className="h-4 w-4 xl:h-5 xl:w-5" /> },
     {
       label: 'Patches',
       value: patches,
       subtitle: snapshots > 0 ? `${patches} patches · ${snapshots} snapshots` : undefined,
-      icon: <GitPullRequestDraft className="h-4 w-4" />,
+      icon: <GitPullRequestDraft className="h-4 w-4 xl:h-5 xl:w-5" />,
     },
-    { label: 'Snapshots', value: snapshots, icon: <Camera className="h-4 w-4" /> },
+    { label: 'Snapshots', value: snapshots, icon: <Camera className="h-4 w-4 xl:h-5 xl:w-5" /> },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-7">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-7">
       {items.map((item) => (
         <MetricCard key={item.label} {...item} />
       ))}

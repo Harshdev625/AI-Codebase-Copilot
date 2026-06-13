@@ -42,7 +42,7 @@ export function AdminUsersTable() {
         <div className="mb-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Users className="h-4 w-4 text-primary" />
-            <h2 className="text-sm font-semibold text-foreground lg:text-base">Access & User Management</h2>
+            <h2 className="text-sm font-semibold text-foreground lg:text-base xl:text-lg">Access & User Management</h2>
           </div>
           {total > 0 && (
             <span className="text-xs text-muted-foreground">
@@ -53,7 +53,7 @@ export function AdminUsersTable() {
 
         <div className="hidden overflow-x-auto rounded-xl border border-border/40 bg-muted/20 md:block">
           <table className="w-full text-left text-sm text-foreground/80">
-            <thead className="border-b border-border/40 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+            <thead className="border-b border-border/40 bg-muted/40 text-xs font-bold uppercase tracking-widest text-muted-foreground xl:text-sm">
               <tr>
                 <th className="px-6 py-4 font-medium">User Details</th>
                 <th className="px-6 py-4 font-medium">Role</th>
@@ -69,7 +69,7 @@ export function AdminUsersTable() {
                     <div className="mt-0.5 text-xs text-muted-foreground">{user.email}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'} className="text-[10px]">
+                    <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'} className="text-xs">
                       {user.role}
                     </Badge>
                   </td>
@@ -110,7 +110,7 @@ export function AdminUsersTable() {
               <div className="font-medium text-foreground">{user.full_name || 'Anonymous User'}</div>
               <div className="text-xs text-muted-foreground">{user.email}</div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'} className="text-[10px]">
+                <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'} className="text-xs">
                   {user.role}
                 </Badge>
                 <span className="text-xs text-muted-foreground">{user.is_active ? 'Active' : 'Disabled'}</span>

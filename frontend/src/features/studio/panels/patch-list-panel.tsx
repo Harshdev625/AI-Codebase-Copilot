@@ -1,7 +1,7 @@
 import React from 'react';
 import { useStudioStore } from '@/features/studio/store/studio-store';
-import { usePatches, useDeletePatchMutation, useApplyPatchMutation, useValidatePatchMutation } from '@/features/repositories/hooks/use-repositories';
-import { GitPullRequestDraft, Trash2, PlayCircle, CheckCircle2, XCircle, AlertCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { usePatches, useDeletePatchMutation } from '@/features/repositories/hooks/use-repositories';
+import { GitPullRequestDraft, Trash2, PlayCircle, CheckCircle2, XCircle, RefreshCw, Loader2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ interface PatchListPanelProps {
 }
 
 export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
-  const { selectedRepositoryId, setActivePatchId, setCanvasMode } = useStudioStore();
+  const { selectedRepositoryId, openPatchTab } = useStudioStore();
   const { data: patches, isLoading } = usePatches(selectedRepositoryId || '');
 
   if (!selectedRepositoryId) {
@@ -54,8 +54,7 @@ export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
             if (onPatchClick) {
               onPatchClick(patch.id);
             } else {
-              setActivePatchId(patch.id);
-              setCanvasMode('patch-review');
+              openPatchTab(patch.id);
             }
           }}
         />

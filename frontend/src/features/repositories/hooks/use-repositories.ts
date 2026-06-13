@@ -4,6 +4,7 @@ import { repositoryService } from '../services/repository-service';
 import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/core/api/errors';
 import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
+import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 
 
 export function useRepositories(limit = 100, offset = 0) {
@@ -12,8 +13,8 @@ export function useRepositories(limit = 100, offset = 0) {
     queryFn: () => repositoryService.listRepositories(limit, offset),
     staleTime: 20_000,
     refetchInterval: (query) => {
-      const isAnyRunning = query.state.data?.items.some(
-        (r) => r.latest_job_status === 'running' || r.latest_job_status === 'in_progress' || r.latest_job_status === 'pending'
+      const isAnyRunning = query.state.data?.items.some((r) =>
+        isActiveIndexingStatus(r.latest_job_status),
       );
       return isAnyRunning ? 3000 : false;
     },
@@ -51,9 +52,30 @@ export function useIndexRepository() {
 
   return useMutation({
     mutationFn: (payload: IndexRequestPayload) => repositoryService.startIndex(payload),
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
+      void queryClient.invalidateQueries({ queryKey: ['indexing-jobs'] });
       void queryClient.invalidateQueries({ queryKey: ['admin'] });
+
+      const jobId = data.indexing_job_id;
+      const repositoryId = variables.repository_id;
+      if (jobId && repositoryId) {
+        const optimisticJob = {
+          id: jobId,
+          repository_id: repositoryId,
+          status: 'pending',
+          message: 'Queued for indexing…',
+          stats: { percentage: 0, current_stage: 'queued' },
+          started_at: null,
+          trigger_type: 'manual',
+        };
+        queryClient.setQueryData(['indexing-jobs', undefined], (old: unknown) => {
+          const jobs = Array.isArray(old) ? old : [];
+          if (jobs.some((job: { id?: string }) => job.id === jobId)) return jobs;
+          return [optimisticJob, ...jobs];
+        });
+      }
+
       toast.info('Indexing Started', 'The repository is being processed.');
     },
     onError: (error) => {
@@ -148,18 +170,22 @@ export function useIndexingJobs(repositoryId?: string) {
     queryKey: ['indexing-jobs', repositoryId],
     queryFn: () => repositoryService.listIndexingJobs(repositoryId),
     refetchInterval: (query) => {
-      const isAnyRunning = query.state.data?.some(
-        (job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress'
+      const isAnyRunning = query.state.data?.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
       );
-      return isAnyRunning ? 2000 : false;
+      return isAnyRunning ? 3000 : false;
     },
   });
 
   const prevData = React.useRef(query.data);
   React.useEffect(() => {
     if (prevData.current && query.data) {
-      const prevRunning = prevData.current.some((job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress');
-      const nowRunning = query.data.some((job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress');
+      const prevRunning = prevData.current.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
+      );
+      const nowRunning = query.data.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
+      );
       if (prevRunning && !nowRunning && repositoryId) {
         void queryClient.invalidateQueries({ queryKey: ['repositories', repositoryId, 'insights'] });
       }

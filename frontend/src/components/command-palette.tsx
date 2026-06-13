@@ -1,13 +1,22 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useStudioStore } from "@/features/studio/store/studio-store";
-import { Command, Search, Database, MessageSquarePlus, History, Camera, GitPullRequestDraft, ArrowRight } from "lucide-react";
+import { Command, Search, Database, MessageSquarePlus, Camera, GitPullRequestDraft, ArrowRight, Sparkles, ListTodo } from "lucide-react";
+
+function navigateToStudio(router: ReturnType<typeof useRouter>, action: () => void) {
+  action();
+  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/studio")) {
+    router.push("/studio");
+  }
+}
 
 export function CommandPalette() {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const router = useRouter();
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -16,31 +25,44 @@ export function CommandPalette() {
         setIsOpen((open) => !open);
       }
     };
+    const handleOpenEvent = () => setIsOpen(true);
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("studio:open-command-palette", handleOpenEvent);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("studio:open-command-palette", handleOpenEvent);
+    };
   }, []);
 
   const runCommand = (command: () => void) => {
     setIsOpen(false);
     command();
-    setTimeout(() => setQuery(""), 150); // clear after animation
+    setTimeout(() => setQuery(""), 150);
+  };
+
+  const goStudio = (action: () => void) => {
+    runCommand(() => navigateToStudio(router, action));
   };
 
   const groups = [
     {
       heading: "Navigation",
       items: [
-        { icon: <Database className="w-4 h-4 text-primary" />, label: "Open Explorer (Repositories & Files)", action: () => runCommand(() => useStudioStore.getState().setSecondaryPanel('explorer')) },
-        { icon: <History className="w-4 h-4 text-primary" />, label: "Open Sessions", action: () => runCommand(() => useStudioStore.getState().setSecondaryPanel(null)) },
-        { icon: <GitPullRequestDraft className="w-4 h-4 text-primary" />, label: "Open Patches", action: () => runCommand(() => useStudioStore.getState().setSecondaryPanel('patches')) },
-        { icon: <Camera className="w-4 h-4 text-primary" />, label: "Open Snapshots", action: () => runCommand(() => useStudioStore.getState().setSecondaryPanel('snapshots')) },
-        { icon: <Search className="w-4 h-4 text-primary" />, label: "Search Files...", action: () => runCommand(() => useStudioStore.getState().setSecondaryPanel('search')) },
+        { icon: <Database className="w-4 h-4 text-primary" />, label: "Open Explorer", action: () => goStudio(() => useStudioStore.getState().focusSidebar("explorer")) },
+        { icon: <Search className="w-4 h-4 text-primary" />, label: "Search Files", action: () => goStudio(() => useStudioStore.getState().focusSidebar("search")) },
+        { icon: <GitPullRequestDraft className="w-4 h-4 text-primary" />, label: "Open Patches", action: () => goStudio(() => useStudioStore.getState().focusSidebar("patches")) },
+        { icon: <Camera className="w-4 h-4 text-primary" />, label: "Open Snapshots", action: () => goStudio(() => useStudioStore.getState().focusSidebar("snapshots")) },
+        { icon: <ListTodo className="w-4 h-4 text-primary" />, label: "Background Tasks", action: () => goStudio(() => useStudioStore.getState().focusSidebar("tasks")) },
+        { icon: <Sparkles className="w-4 h-4 text-ai" />, label: "Open AI Assistant", action: () => goStudio(() => useStudioStore.getState().focusSidebar("sessions")) },
       ]
     },
     {
-      heading: "New Session",
+      heading: "Session",
       items: [
-        { icon: <MessageSquarePlus className="w-4 h-4 text-ai" />, label: "New Chat Session", action: () => runCommand(() => useStudioStore.getState().setActiveSessionId(null)) },
+        { icon: <MessageSquarePlus className="w-4 h-4 text-ai" />, label: "New Chat Session", action: () => goStudio(() => {
+          useStudioStore.getState().setActiveSessionId(null);
+          useStudioStore.getState().setAiPanelOpen(true);
+        }) },
       ]
     }
   ];
@@ -53,7 +75,6 @@ export function CommandPalette() {
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogContent className="max-w-2xl p-0 overflow-hidden bg-card/95 backdrop-blur-2xl border-border/40 shadow-2xl gap-0 rounded-2xl sm:rounded-3xl" showCloseButton={false}>
-        {/* Hidden title/description for accessibility compliance */}
         <div className="sr-only">
             <DialogTitle>Command Palette</DialogTitle>
             <DialogDescription>Search for commands and quick actions</DialogDescription>

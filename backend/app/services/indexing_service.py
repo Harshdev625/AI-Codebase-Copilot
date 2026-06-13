@@ -21,8 +21,9 @@ from pathspec.patterns import GitWildMatchPattern
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db.utils import is_sqlite_session, get_jsonb_cast_sql
 from app.core.config import settings
+from app.db.utils import is_sqlite_session, get_jsonb_cast_sql
+from app.services.repository_cache import normalize_repo_path, repo_cache_root, repository_cache_dir
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
@@ -63,6 +64,53 @@ class IndexingService:
         self._files_skipped: int = 0
         self._chunks_created: int = 0
         self._index_errors: list[dict] = []
+        self._stage_timings: dict[str, dict[str, float | int | str | None]] = {}
+        self._current_stage: str | None = None
+        self._stage_started_at: float | None = None
+
+    def _reset_stage_timings(self) -> None:
+        self._stage_timings = {}
+        self._current_stage = None
+        self._stage_started_at = None
+
+    def _transition_stage(self, stage: str | None) -> None:
+        if not stage:
+            return
+        if stage == self._current_stage:
+            return
+        now_perf = time.perf_counter()
+        now_epoch = time.time()
+        if self._current_stage and self._stage_started_at is not None:
+            elapsed = round(now_perf - self._stage_started_at, 2)
+            prev = self._stage_timings.setdefault(self._current_stage, {})
+            prev["duration_seconds"] = round(float(prev.get("duration_seconds") or 0) + elapsed, 2)
+            prev["completed_at"] = now_epoch
+        entry = self._stage_timings.setdefault(stage, {})
+        if "started_at" not in entry:
+            entry["started_at"] = now_epoch
+        entry.setdefault("duration_seconds", 0)
+        self._current_stage = stage
+        self._stage_started_at = now_perf
+
+    def _finalize_stage_timings(self) -> None:
+        if self._current_stage and self._stage_started_at is not None:
+            now_perf = time.perf_counter()
+            now_epoch = time.time()
+            elapsed = round(now_perf - self._stage_started_at, 2)
+            entry = self._stage_timings.setdefault(self._current_stage, {})
+            entry["duration_seconds"] = round(float(entry.get("duration_seconds") or 0) + elapsed, 2)
+            entry["completed_at"] = now_epoch
+        self._current_stage = None
+        self._stage_started_at = None
+
+    def _invalidate_remote_repo_cache(self, repo_id: str) -> None:
+        """Remove cloned repo workspace so the next resolve performs a fresh clone."""
+        target = repository_cache_dir(repo_id)
+        if not target.exists():
+            return
+        self._kill_git_processes(target)
+        self._force_delete_directory(target)
+        logger.info("index_cache_invalidate - wiped remote cache repo_id=%s path=%s", repo_id, target)
 
     def _is_low_signal_file(self, file_path: Path
                             , repo_root: Path) -> bool:
@@ -100,7 +148,39 @@ class IndexingService:
             shutil.rmtree(target, onerror=self._on_rm_error)
 
     def _cache_root(self) -> Path:
-        return Path(settings.repo_cache_path).resolve()
+        return repo_cache_root()
+
+    def _persist_repository_cache_path(self, repository_id: str, cache_path: Path) -> None:
+        """Store clone location so file explorer / ACT can find files after indexing."""
+        resolved = str(cache_path.resolve())
+        updated_at_sql = "CURRENT_TIMESTAMP" if is_sqlite_session(self.session) else "NOW()"
+        try:
+            self.session.execute(
+                text(
+                    f"""
+                    UPDATE repositories
+                    SET local_path = :local_path,
+                        updated_at = {updated_at_sql}
+                    WHERE id = :repository_id
+                      AND (local_path IS NULL OR TRIM(local_path) = '')
+                    """
+                ),
+                {"local_path": resolved, "repository_id": repository_id},
+            )
+            self.session.commit()
+            logger.info(
+                "index_cache_persist - linked repository_id=%s cache_path=%s",
+                repository_id,
+                resolved,
+            )
+        except Exception as exc:
+            logger.warning(
+                "index_cache_persist - failed repository_id=%s path=%s error=%s",
+                repository_id,
+                resolved,
+                exc,
+            )
+            self.session.rollback()
 
     async def _delete_dir_with_retry(self, target: Path, max_retries: int = 5, delay: float = 1.0) -> None:
         """Force delete a directory with retries and permission handling."""
@@ -200,11 +280,13 @@ class IndexingService:
             repo_ref,
         )
         if repo_path:
-            root = Path(repo_path)
-            if not root.exists():
-                raise ValidationException(f"Repository path does not exist: {repo_path}")
-            logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
-            return root
+            normalized_path = normalize_repo_path(str(repo_path))
+            if normalized_path:
+                root = Path(normalized_path)
+                if not root.exists():
+                    raise ValidationException(f"Repository path does not exist: {normalized_path}")
+                logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
+                return root
 
         if not repo_url:
             raise ValidationException("Provide either repo_path or repo_url")
@@ -217,7 +299,7 @@ class IndexingService:
         cache_root = self._cache_root()
         cache_root.mkdir(parents=True, exist_ok=True)
 
-        target = cache_root / self._slugify_repo_id(repo_id)
+        target = repository_cache_dir(repo_id)
         meta_file = target / "cache_meta.json"
         
         is_valid_cache = False
@@ -650,13 +732,17 @@ class IndexingService:
         """
         if not indexing_job_id:
             return
-            
+
+        if stage:
+            self._transition_stage(stage)
+
         # Stage-based percentage calculation
         stage_percentages = {
             "discovery": (0, 5),
             "parsing": (5, 50),
             "embedding": (50, 80),
-            "storage": (50, 95), # Embedding and storage occur in the same batch loop
+            "storage": (50, 95),
+            "finalize": (95, 100),
             "graph": (95, 100),
         }
         
@@ -684,11 +770,12 @@ class IndexingService:
             "total_files": total,
             "processed_files": current,
             "percentage": percentage,
-            "current_stage": stage or "unknown",
+            "current_stage": stage or self._current_stage or "unknown",
             "current_file": current_file,
             "eta_seconds": eta_seconds,
             "avg_seconds_per_file": round(avg_seconds_per_file, 4) if avg_seconds_per_file is not None else None,
             "updated_at_epoch": time.time(),
+            "stage_timings": dict(self._stage_timings),
         }
         if extra_stats:
             try:
@@ -765,15 +852,20 @@ class IndexingService:
             repository_id,
             commit_sha,
         )
-        logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
+        logger.info("indexing_start - repo_id=%s repository_id=%s full_reindex=%s", repo_id, repository_id, full_reindex)
+        self._reset_stage_timings()
+        effective_repo_url = repo_url
+        effective_repo_path = normalize_repo_path(repo_path)
+        if full_reindex and effective_repo_url and not effective_repo_path:
+            self._invalidate_remote_repo_cache(repo_id)
         root = await self._resolve_repo_root(
             repo_id, 
-            repo_path=repo_path, 
-            repo_url=repo_url, 
+            repo_path=effective_repo_path, 
+            repo_url=effective_repo_url, 
             repo_ref=repo_ref, 
             repository_id=repository_id
         )
-        cleanup_cached_repo = bool(repo_url and not repo_path)
+        cleanup_cached_repo = bool(effective_repo_url and not effective_repo_path)
         started_at = time.perf_counter()
         self._active_indexing_job_id = indexing_job_id
         self._active_started_at_perf = started_at
@@ -1002,9 +1094,9 @@ class IndexingService:
                 total_files,
                 f"Storing {len(chunks)} chunks...",
                 elapsed_seconds=time.perf_counter() - started_at,
+                stage="storage",
                 extra_stats={
-                    "stage": "storing",
-                    "mode": indexing_mode,
+                    "indexing_mode": indexing_mode,
                     "total_chunks": len(chunks),
                     "stored_chunks": 0,
                 },
@@ -1027,6 +1119,18 @@ class IndexingService:
 
             # --- Create snapshot ---
             if repository_id:
+                await self._update_progress(
+                    indexing_job_id,
+                    total_files,
+                    total_files,
+                    "Creating repository snapshot...",
+                    elapsed_seconds=time.perf_counter() - started_at,
+                    stage="finalize",
+                    extra_stats={
+                        "total_chunks": len(chunks),
+                        "stored_chunks": len(chunks),
+                    },
+                )
                 await create_snapshot(
                     self.session,
                     repository_id=repository_id,
@@ -1034,6 +1138,31 @@ class IndexingService:
                     files_count=self._files_indexed,
                     files_skipped=self._files_skipped,
                     chunks_count=len(chunks),
+                )
+
+            self._finalize_stage_timings()
+            await self._update_progress(
+                indexing_job_id,
+                total_files,
+                total_files,
+                f"Indexing complete ({len(chunks)} chunks)",
+                elapsed_seconds=time.perf_counter() - started_at,
+                stage="finalize",
+                extra_stats={
+                    "percentage": 100,
+                    "total_chunks": len(chunks),
+                    "stored_chunks": len(chunks),
+                    "stage_timings": dict(self._stage_timings),
+                },
+            )
+
+            if cleanup_cached_repo and settings.repo_cache_persist and repository_id:
+                self._persist_repository_cache_path(repository_id, root)
+                logger.info(
+                    "index_cache_kept - repo_id=%s cache_path=%s persist=%s",
+                    repo_id,
+                    root,
+                    settings.repo_cache_persist,
                 )
 
             return len(chunks)
@@ -1046,11 +1175,12 @@ class IndexingService:
             )
             raise
         finally:
-            # Respect persistent cache setting: only delete remote clones when
-            # repo_cache_persist is False (e.g. CI environments)
+            # Keep cloned repos on disk after indexing (REPO_CACHE_PERSIST=true) for
+            # file explorer, patches, and diffs. Full re-index wipes cache at job start.
             should_delete = cleanup_cached_repo and not settings.repo_cache_persist
             if should_delete and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
+                logger.info("index_cache_cleanup - removed ephemeral clone repo_id=%s", repo_id)
             self._active_indexing_job_id = None
             self._active_total_files = None
             self._active_started_at_perf = None

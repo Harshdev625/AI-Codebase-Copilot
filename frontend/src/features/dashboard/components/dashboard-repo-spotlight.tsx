@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatDate } from '@/lib/utils';
 import { useIndexRepository } from '@/features/repositories/hooks/use-repositories';
+import { DASHBOARD_EYEBROW } from '@/components/layout/nav-tokens';
 import type { DashboardRecentRepository } from '@/features/dashboard/types/dashboard-types';
 
 interface DashboardRepoSpotlightProps {
@@ -33,9 +34,9 @@ export function DashboardRepoSpotlight({ repository }: DashboardRepoSpotlightPro
     <div className="flex h-full flex-col rounded-3xl border border-border/60 bg-card/60 p-6 shadow-premium backdrop-blur-xl">
       <div className="mb-4 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-muted-foreground">Primary repository</p>
-          <h3 className="mt-1 truncate text-base font-semibold text-foreground lg:text-lg">{repository.repo_id}</h3>
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <p className={DASHBOARD_EYEBROW}>Primary repository</p>
+          <h3 className="mt-1 truncate text-lg font-semibold text-foreground xl:text-xl">{repository.repo_id}</h3>
+          <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground xl:text-sm">
             <GitBranch className="h-3 w-3" />
             {repository.default_branch}
           </div>
@@ -47,13 +48,13 @@ export function DashboardRepoSpotlight({ repository }: DashboardRepoSpotlightPro
 
       <dl className="grid grid-cols-2 gap-3 text-sm">
         <div className="rounded-xl border border-border/40 bg-muted/20 p-3">
-          <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Files</dt>
+          <dt className="text-xs uppercase tracking-wider text-muted-foreground xl:text-sm">Files</dt>
           <dd className="mt-1 font-mono text-lg font-semibold tabular-nums">
             {(repository.indexed_files_count ?? 0).toLocaleString()}
           </dd>
         </div>
         <div className="rounded-xl border border-border/40 bg-muted/20 p-3">
-          <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">Chunks</dt>
+          <dt className="text-xs uppercase tracking-wider text-muted-foreground xl:text-sm">Chunks</dt>
           <dd className="mt-1 font-mono text-lg font-semibold tabular-nums">
             {(repository.indexed_chunks_count ?? 0).toLocaleString()}
           </dd>

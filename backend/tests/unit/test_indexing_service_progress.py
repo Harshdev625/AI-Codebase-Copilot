@@ -42,6 +42,60 @@ async def test_update_progress_with_job(indexing_service):
     assert params["message"] == "test"
     assert stats_payload["current_file"] == "file1.py"
     assert stats_payload["eta_seconds"] == 9
+    assert "stage_timings" in stats_payload
+    assert "parsing" in stats_payload["stage_timings"]
+
+@pytest.mark.asyncio
+async def test_update_progress_stage_timings_transition(indexing_service):
+    mock_execute = MagicMock()
+    indexing_service.session.execute = mock_execute
+    indexing_service.session.commit = MagicMock()
+
+    await indexing_service._update_progress(
+        indexing_job_id="job1",
+        current=0,
+        total=10,
+        stage="discovery",
+    )
+    await indexing_service._update_progress(
+        indexing_job_id="job1",
+        current=1,
+        total=10,
+        stage="parsing",
+    )
+
+    args, kwargs = mock_execute.call_args
+    params = kwargs.get("params") or args[1]
+    import json
+    stats_payload = json.loads(params["stats"])
+    assert stats_payload["current_stage"] == "parsing"
+    assert "discovery" in stats_payload["stage_timings"]
+    assert "parsing" in stats_payload["stage_timings"]
+    assert stats_payload["stage_timings"]["discovery"].get("duration_seconds", 0) >= 0
+
+def test_invalidate_remote_repo_cache(indexing_service, tmp_path):
+    cache_dir = tmp_path / "my-repo"
+    cache_dir.mkdir()
+    (cache_dir / "README.md").write_text("hello", encoding="utf-8")
+
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir):
+        indexing_service._invalidate_remote_repo_cache("my-repo")
+
+    assert not cache_dir.exists()
+
+@pytest.mark.asyncio
+async def test_transition_stage_same_stage_does_not_accumulate(indexing_service):
+    indexing_service._transition_stage("parsing")
+    first_started = indexing_service._stage_started_at
+    indexing_service._stage_timings["parsing"]["duration_seconds"] = 0
+
+    import asyncio
+    await asyncio.sleep(0.05)
+    indexing_service._transition_stage("parsing")
+
+    assert indexing_service._current_stage == "parsing"
+    assert indexing_service._stage_started_at == first_started
+    assert indexing_service._stage_timings["parsing"]["duration_seconds"] == 0
 
 @pytest.mark.asyncio
 async def test_update_progress_fallback(indexing_service):

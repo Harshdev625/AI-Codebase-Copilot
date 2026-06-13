@@ -19,13 +19,27 @@ export function StatusBar() {
   const progress = latestJob?.stats?.percentage || 0;
   const eta = latestJob?.stats?.eta_seconds;
 
+  const systemStatus = !selectedRepository
+    ? 'Ready'
+    : isRunning
+      ? 'Indexing'
+      : latestJob?.status === 'failed'
+        ? 'Failed'
+        : 'Ready';
+
   return (
-    <div className="h-7 w-full bg-primary text-primary-foreground flex items-center px-3 text-[11px] font-medium justify-between z-20 select-none overflow-hidden">
+    <div className="h-7 w-full bg-[#13151A] text-[#C9D1D9] border-t border-[#1E212B] flex items-center px-3 text-[11px] font-medium justify-between z-20 select-none overflow-hidden">
       {/* Left side */}
       <div className="flex items-center gap-3 min-w-0">
         <div className="flex items-center gap-1 shrink-0" title="System status">
-          <Activity className="w-3 h-3 opacity-70" />
-          <span className="hidden sm:inline-block">Ready</span>
+          <Activity className={cn("w-3 h-3 opacity-70", isRunning && "animate-pulse")} />
+          <span className={cn(
+            "hidden sm:inline-block capitalize",
+            systemStatus === 'Failed' && 'text-red-200',
+            systemStatus === 'Indexing' && 'text-yellow-100',
+          )}>
+            {systemStatus}
+          </span>
         </div>
         {selectedRepository && (
           <>

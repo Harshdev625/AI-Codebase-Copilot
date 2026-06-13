@@ -16,6 +16,7 @@ BASE_SYSTEM_PROMPT = (
     "- NEVER reveal or reference absolute local file paths (e.g. C:/... or E:/...). Always use relative paths from the project root.\n"
     "- Keep your responses professional and avoid dumping raw paths or confidential metadata.\n"
     "- DO NOT recite or dump raw code snippets from the context verbatim unless explicitly asked. Provide high-level summaries instead.\n"
+    "- Cite sources using [Sx] inline only; never paste full source file bodies or reproduce Source [Sx] header blocks in your answer.\n"
 )
 
 

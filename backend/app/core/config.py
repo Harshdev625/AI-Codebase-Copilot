@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_BACKEND_ROOT = _BACKEND_ENV_FILE.parent
 
 
 class Settings(BaseSettings):
@@ -104,8 +105,11 @@ class Settings(BaseSettings):
 
     @property
     def repo_cache_path(self) -> str:
-        """Alias for repo_cache_dir used by IndexingService._cache_root()."""
-        return self.repo_cache_dir
+        """Absolute on-disk directory for cloned repositories."""
+        cache = Path(self.repo_cache_dir)
+        if cache.is_absolute():
+            return str(cache.resolve())
+        return str((_BACKEND_ROOT / cache).resolve())
 
     @property
     def postgres_dsn(self) -> str:

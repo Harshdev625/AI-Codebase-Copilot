@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { format } from "date-fns";
 import {
   MessageSquare,
@@ -285,6 +286,7 @@ export function StudioSessionSidebar({
   onRenameSession,
   onTogglePin,
   onArchiveSession,
+  repositoryId,
   repositories = [],
 }: StudioSessionSidebarProps) {
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -324,7 +326,7 @@ export function StudioSessionSidebar({
   );
 
   return (
-    <aside className="w-[260px] shrink-0 h-full flex flex-col bg-[#13151A] border-r border-[#1E212B]">
+    <aside className="flex h-full w-full shrink-0 flex-col bg-[#13151A] border-r border-[#1E212B]">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3 shrink-0">
         <span className="text-[#8B949E] text-[10px] font-bold tracking-widest uppercase">Sessions</span>
@@ -352,6 +354,15 @@ export function StudioSessionSidebar({
         </div>
       </div>
 
+      {!repositoryId && (
+        <div className="mx-3 mb-3 rounded-lg border border-[#2D313E] bg-[#1A1C23] px-3 py-2.5 text-center">
+          <p className="text-[11px] text-[#8B949E]">No repository selected.</p>
+          <Link href="/dashboard" className="mt-1 inline-block text-[11px] font-medium text-[#58A6FF] hover:underline">
+            Add repository on dashboard →
+          </Link>
+        </div>
+      )}
+
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-3 pb-4 custom-scrollbar">
         {isLoading && (
@@ -362,7 +373,7 @@ export function StudioSessionSidebar({
           </div>
         )}
 
-        {!isLoading && sessions.length === 0 && (
+        {!isLoading && sessions.length === 0 && !currentSessionId && (
           <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
             <MessageSquare className="w-6 h-6 text-[#8B949E]/40" />
             <p className="text-[#8B949E] text-[12px]">No sessions yet.</p>

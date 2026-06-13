@@ -3,18 +3,21 @@
 import * as React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Bot, UserRound, Copy, Check, FileCode } from 'lucide-react';
+import { Bot, UserRound, Copy, Check, ChevronDown, FileCode } from 'lucide-react';
 import { ChatMessage } from '@/features/chat/types/chat-types';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { CodeBlock } from '@/components/ui/code-block';
 import { PatchDiffViewer } from './patch-diff-viewer';
-import { useParams, useRouter } from 'next/navigation';
 import type { Source } from '@/features/chat/types/chat-types';
+import { getDisplayContent, normalizeRepoPath, normalizeSourcesFromMetadata } from '@/features/chat/utils/chat-message-utils';
+import { FileIcon } from '@/features/studio/components/file-icon';
+import { useStudioStore } from '@/features/studio/store/studio-store';
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
   mode?: string;
+  repositoryId?: string;
 }
 
 /* ── Copy button ─────────────────────────────────────── */
@@ -40,29 +43,42 @@ function CopyButton({ text }: { text: string }) {
 
 /* ── Source Explorer V2 ────────────────────────────────── */
 function SourceExplorerV2({ sources }: { sources: Source[] }) {
-  const router = useRouter();
+  const { openFileInEditor } = useStudioStore();
+  const [open, setOpen] = React.useState(false);
 
   if (sources.length === 0) return null;
 
   return (
-    <div className="mt-6 mb-2">
-      <div className="flex items-center gap-2 mb-3 px-1">
-        <FileCode className="h-4 w-4 text-muted-foreground" />
-        <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Retrieved Context</span>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+    <details
+      className="mt-4 mb-2 group"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer list-none flex items-center gap-2 px-1 py-1 text-xs font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+        <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+        <FileCode className="h-4 w-4" />
+        Retrieved Context ({sources.length})
+      </summary>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
         {sources.map((src, idx) => {
           const score = typeof src.rerank_score === 'number' ? src.rerank_score : (typeof src.score === 'number' ? src.score : null);
           const scoreDisplay = score !== null ? (score * 100).toFixed(1) + '%' : 'N/A';
+          const displayPath = normalizeRepoPath(src.path);
           return (
-            <div key={idx} className="group relative rounded-xl border border-border/50 bg-accent/10 px-3 py-2.5 hover:bg-accent/30 transition-colors flex flex-col gap-1 overflow-hidden">
+            <button
+              key={idx}
+              type="button"
+              onClick={() => openFileInEditor(src.path, src.start_line)}
+              className="group text-left rounded-xl border border-border/50 bg-accent/10 px-3 py-2.5 hover:bg-accent/30 transition-colors flex flex-col gap-1 overflow-hidden"
+            >
               <div className="flex items-center justify-between gap-2">
-                 <span className="text-xs font-semibold text-foreground truncate" title={src.path}>{src.path.split('/').pop() || src.path}</span>
-                 <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">{scoreDisplay}</Badge>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <FileIcon path={src.path} />
+                  <span className="text-xs font-semibold text-foreground truncate" title={src.path}>{displayPath}</span>
+                </span>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0">{scoreDisplay}</Badge>
               </div>
-              <div className="text-[10px] text-muted-foreground/80 truncate">
-                {src.path}
-              </div>
+              <div className="text-[10px] text-muted-foreground/80 truncate">{src.path}</div>
               <div className="flex items-center justify-between gap-2 mt-1">
                 <span className="text-[10px] font-mono text-primary/70 bg-primary/10 px-1 py-0.5 rounded truncate">
                   {src.symbol || 'module'}
@@ -73,34 +89,27 @@ function SourceExplorerV2({ sources }: { sources: Source[] }) {
                   </span>
                 )}
               </div>
-              <div className="absolute inset-0 bg-background/80 backdrop-blur-sm opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                 <button 
-                   onClick={() => router.push(`/repositories/${src.repository_id || src.repo_id}/code?path=${encodeURIComponent(src.path)}${src.start_line ? `&line=${src.start_line}` : ''}`)}
-                   className="text-xs font-bold text-primary hover:underline"
-                 >
-                   Open Full File
-                 </button>
-              </div>
-            </div>
+            </button>
           );
         })}
       </div>
-    </div>
+    </details>
   );
 }
 
 /* ── Message bubble ────────────────────────────────────── */
-export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps) {
+export function ChatMessageItemBubble({ message, mode, repositoryId: repositoryIdProp }: ChatMessageBubbleProps) {
+  const { selectedRepositoryId } = useStudioStore();
   const isAssistant = message.role === 'assistant';
   const metadata = message.metadata ?? {};
   const intent = typeof metadata.intent === 'string' ? metadata.intent : '';
-  const sources = Array.isArray(metadata.sources) ? metadata.sources : [];
+  const sources = normalizeSourcesFromMetadata(metadata);
+  const displayContent = getDisplayContent(message.content, message.role, metadata);
   
   const patchProposal = sources.find((src) => src.kind === 'patch_proposal');
   const normalSources = sources.filter((src) => src.kind !== 'patch_proposal');
 
-  const params = useParams();
-  const repositoryId = typeof params.repositoryId === 'string' ? params.repositoryId : '';
+  const repositoryId = repositoryIdProp || selectedRepositoryId || '';
 
   const isDocumentMode = isAssistant && (mode === 'PLAN' || mode === 'ACT');
 
@@ -174,6 +183,7 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
             <div className="prose prose-sm dark:prose-invert max-w-none
               prose-p:mt-0 prose-p:mb-3 prose-p:leading-[1.8] prose-p:text-foreground/70
               prose-headings:text-foreground prose-headings:font-bold prose-headings:tracking-tight
+              prose-h1:text-lg prose-h2:text-base prose-h3:text-sm
               prose-code:text-primary/90 prose-code:bg-primary/15 prose-code:rounded-lg prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.82em] prose-code:font-bold prose-code:border prose-code:border-primary/25
               prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
               prose-strong:text-foreground prose-strong:font-bold
@@ -198,7 +208,7 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
                   },
                 }}
               >
-                {message.content}
+                {displayContent}
               </ReactMarkdown>
               
               {isAssistant && patchProposal && patchProposal.proposal && repositoryId && (
@@ -210,7 +220,7 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
               )}
             </div>
           ) : (
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            <div className="whitespace-pre-wrap">{displayContent}</div>
           )}
         </div>
 
@@ -236,7 +246,7 @@ export function ChatMessageItemBubble({ message, mode }: ChatMessageBubbleProps)
 
         {/* Copy button */}
         <div className="mt-4 flex flex-wrap items-center gap-2 justify-end">
-          <CopyButton text={message.content} />
+          <CopyButton text={displayContent} />
         </div>
       </div>
     </div>

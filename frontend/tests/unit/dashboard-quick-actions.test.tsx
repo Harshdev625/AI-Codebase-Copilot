@@ -10,6 +10,12 @@ jest.mock("next/navigation", () => ({
   }),
 }));
 
+jest.mock("@/features/repositories/hooks/use-repositories", () => ({
+  useRepositories: jest.fn(() => ({
+    repositories: [{ id: "repo-1", latest_job_status: "completed", indexed_chunks_count: 10 }],
+  })),
+}));
+
 describe("DashboardQuickActions", () => {
   beforeEach(() => {
     jest.clearAllMocks();

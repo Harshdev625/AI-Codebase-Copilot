@@ -99,13 +99,19 @@ const {
   selectedRepositoryId,
   activeSessionId,
   canvasMode,
-  secondaryPanel,
+  primarySidebar,
+  contextPanelOpen,
+  mobileTab,
   activeFilePath,
   activePatchId,
+  editorWordWrap,
+  editorMinimap,
 } = useStudioStore();
 ```
 
-Single persisted store for `/studio` — repository/session selection, search state, canvas mode, secondary panel, and active file/patch. Migrates pre-consolidation localStorage keys on rehydrate.
+Single persisted store for `/studio` — repository/session selection, search state, canvas mode, VS Code-style primary sidebar, context panel visibility, mobile tab, editor preferences, and active file/patch. Migrates pre-consolidation localStorage keys on rehydrate.
+
+**Session metadata API:** `ChatSession` rows expose `metadata` (JSON object) via `GET/PATCH /v1/chat/sessions/{id}`. Scope paths persist as `metadata.scope_paths` and sync through `useSessionScope`.
 
 ---
 
@@ -170,10 +176,10 @@ Convention: all keys are arrays. Top-level key matches the resource noun.
 
 | Component | Location | Description |
 |---|---|---|
-| `CopilotStudioShell` | `features/studio/components/` | Root studio layout orchestrator |
-| `GlobalTopBar` | `features/studio/components/` | Codebase top bar (`h-14 lg:h-16`), search, profile |
-| `StudioNavRail` | `features/studio/components/` | 48px icon rail on the left |
-| `StudioSecondaryPanel` | `features/studio/components/` | Panel router (explorer/search/snapshots/patches/tasks/settings) |
+| `CopilotStudioShell` | `features/studio/components/` | VS Code-style shell: nav rail + resizable primary sidebar, canvas, context panel |
+| `GlobalTopBar` | `features/studio/components/` | Codebase top bar (`h-14 lg:h-16`), command palette trigger, settings |
+| `StudioNavRail` | `features/studio/components/` | 48px activity bar; sets `primarySidebar` |
+| `StudioPrimarySidebar` | `features/studio/components/` | Routes sessions vs explorer/search/snapshots/patches/tasks/settings |
 | `StudioCanvas` | `features/studio/components/` | Canvas router (chat/editor/diff/patch-review) |
 | `StudioSessionSidebar` | `features/studio/components/` | Session list with rename, pin, archive |
 | `StudioExplorerPanel` | `features/studio/components/` | File tree with snapshot selector for historical browsing |
@@ -196,7 +202,7 @@ User landing page after login. Glass/bento styling aligned with auth pages.
 
 **API:** `GET /v1/dashboard/me` returns `metrics`, `indexing_summary`, `recent_sessions`, enriched `recent_repositories`. `GET /v1/dashboard/activity` returns daily session/index buckets.
 
-**Layout (xl+):** hero with continue card → stats (7/12) + quick actions (5/12) → activity (8/12) + repo spotlight (4/12) → repositories table. `AppShell` uses `max-w-[1400px] xl:max-w-[1600px] 2xl:max-w-[1800px]`.
+**Layout (lg+):** full-width hero band (welcome + resume workspace card with add-repo) → overview metrics → quick actions (4-up on xl; codebase actions gated until a repo is indexed) → full-width activity → full-width repositories table. No separate spotlight column. Weekly activity totals label the rolling **last 7 days**. User-facing label is **codebase** (route remains `/studio`). Content container caps at `1920px` with responsive horizontal padding.
 
 ### Admin dashboard (`/admin/dashboard`)
 
@@ -218,14 +224,20 @@ Re-index via `useIndexRepository` invalidates both `['repositories']` and `['adm
 
 ### Navigation bars
 
-Shared tokens in `components/layout/nav-tokens.ts` and CSS variables `--spacing-nav-height` / `--spacing-nav-height-lg`:
+Shared tokens in [`components/layout/nav-tokens.ts`](frontend/src/components/layout/nav-tokens.ts):
+
+| Token | Purpose |
+|---|---|
+| `NAV_BAR_CLASS` | `h-14 md:h-16 xl:h-[4.5rem]` — scales navbar on large displays |
+| `DASHBOARD_CONTAINER_CLASS` | `max-w-[1920px]` with responsive `px-4` → `2xl:px-12` |
+| `DASHBOARD_EYEBROW` / `DASHBOARD_SECTION_TITLE` / `DASHBOARD_TABLE_HEAD` / `DASHBOARD_TABLE_CELL` / `DASHBOARD_METRIC_VALUE` | Minimum 12px typography tokens for dashboard surfaces |
 
 | Bar | Height | Notes |
 |---|---|---|
-| `TopNavbar` | `h-14 lg:h-16` (56px → 64px) | User + admin variants; on `/dashboard` breadcrumbs are `Dashboard / {title}` (no Codebase crumb) |
-| `GlobalTopBar` | `h-14 lg:h-16` | Studio/codebase shell; matches TopNavbar scale |
+| `TopNavbar` | `NAV_BAR_CLASS` | User + admin; search opens command palette; settings → `/studio?panel=settings` (user only) |
+| `GlobalTopBar` | `h-14 lg:h-16` | Studio/codebase shell |
 
-`AppShell` passes `variant="admin"` on `/admin/*` routes.
+`AppShell` uses `DASHBOARD_CONTAINER_CLASS` for `/dashboard` and `/admin/*`. `/studio` uses `variant="studio"` (full viewport).
 
 ### Studio panels (`features/studio/panels/`)
 
@@ -254,10 +266,10 @@ The app targets three breakpoints:
 | `xl` / `2xl` | Ultrawide |
 
 Key responsive behaviors:
-- **Mobile**: TopNavbar shows hamburger menu
-- **Tablet**: Sidebars collapse; breadcrumbs abbreviated
-- **Desktop**: Full layout with all panels visible
-- **Ultrawide**: Max-width container on dashboard/admin; `/studio` uses full width
+- **Mobile (`<md`)**: Studio bottom tab bar (Chat / Files / Context); full-width canvas
+- **Tablet (`md+`)**: Activity bar + resizable primary sidebar + canvas; context panel toggle
+- **Desktop (`lg+`)**: Context panel collapsible; command palette via ⌘K or top-bar search
+- **Ultrawide**: Dashboard/admin content fills up to `1920px`; typography scales at `xl`/`2xl`; `/studio` uses full width with `react-resizable-panels`
 
 ---
 

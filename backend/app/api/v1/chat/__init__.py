@@ -35,6 +35,27 @@ router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+def _session_metadata(row: ChatSession) -> dict:
+    meta = getattr(row, "session_metadata", None)
+    return dict(meta) if meta else {}
+
+
+def _session_to_response(row: ChatSession) -> ChatSessionResponse:
+    return ChatSessionResponse(
+        id=str(row.id),
+        repository_id=str(row.repository_id) if row.repository_id else None,
+        session_title=str(row.session_title) if row.session_title else None,
+        session_mode=str(row.session_mode),
+        is_pinned=bool(row.is_pinned),
+        is_archived=bool(row.is_archived),
+        summary=str(row.summary) if row.summary else None,
+        created_at=str(row.created_at),
+        updated_at=str(row.updated_at),
+        last_activity_at=str(row.last_activity_at),
+        metadata=_session_metadata(row),
+    )
+
+
 @router.get("/sessions")
 def list_sessions(
     repository_id: str | None = None,
@@ -67,21 +88,7 @@ def list_sessions(
         .all()
     )
 
-    payload = [
-        ChatSessionResponse(
-            id=str(r.id),
-            repository_id=str(r.repository_id) if r.repository_id else None,
-            session_title=str(r.session_title) if r.session_title else None,
-            session_mode=str(r.session_mode),
-            is_pinned=bool(r.is_pinned),
-            is_archived=bool(r.is_archived),
-            summary=str(r.summary) if r.summary else None,
-            created_at=str(r.created_at),
-            updated_at=str(r.updated_at),
-            last_activity_at=str(r.last_activity_at),
-            metadata=r.session_metadata or {},
-        ) for r in rows
-    ]
+    payload = [_session_to_response(r) for r in rows]
     return paginated_success_response(
         items=payload,
         total=total,
@@ -105,21 +112,7 @@ def get_session(
     if not r:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return success_response(
-        ChatSessionResponse(
-            id=str(r.id),
-            repository_id=str(r.repository_id) if r.repository_id else None,
-            session_title=str(r.session_title) if r.session_title else None,
-            session_mode=str(r.session_mode),
-            is_pinned=bool(r.is_pinned),
-            is_archived=bool(r.is_archived),
-            summary=str(r.summary) if r.summary else None,
-            created_at=str(r.created_at),
-            updated_at=str(r.updated_at),
-            last_activity_at=str(r.last_activity_at),
-            metadata=r.session_metadata or {},
-        ).model_dump()
-    )
+    return success_response(_session_to_response(r).model_dump())
 
 
 @router.patch("/sessions/{session_id}")
@@ -145,20 +138,13 @@ def update_session(
     if req.is_archived is not None:
         chat_session.is_archived = req.is_archived
     if req.metadata is not None:
-        # Merge metadata
-        current_meta = dict(chat_session.session_metadata) if chat_session.session_metadata else {}
+        current_meta = _session_metadata(chat_session)
         current_meta.update(req.metadata)
         chat_session.session_metadata = current_meta
 
     session.commit()
     session.refresh(chat_session)
-    return success_response({
-        "id": chat_session.id,
-        "session_title": chat_session.session_title,
-        "is_pinned": chat_session.is_pinned,
-        "is_archived": chat_session.is_archived,
-        "metadata": chat_session.session_metadata
-    })
+    return success_response(_session_to_response(chat_session).model_dump())
 
 
 @router.get("/sessions/{session_id}/messages")

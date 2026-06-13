@@ -4,7 +4,19 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 import { getStoredUser } from "@/lib/auth";
-import type { CanvasMode, SecondaryPanel } from "../types/studio-types";
+import {
+  createDefaultPersistV2,
+  migrateV1ToV2,
+  parsePersistV2,
+  STUDIO_STORAGE_V2_KEY,
+} from "./migrate-studio-storage";
+import type {
+  EditorTab,
+  MobileStudioTab,
+  PrimarySidebar,
+  StudioDensity,
+} from "../types/studio-types";
+import { MAX_EDITOR_TABS, WELCOME_TAB_ID } from "../types/studio-types";
 
 export interface StudioStoreState {
   selectedRepositoryId: string | null;
@@ -23,19 +35,41 @@ export interface StudioStoreState {
   hasSearched: boolean;
   setHasSearched: (hasSearched: boolean) => void;
 
-  canvasMode: CanvasMode;
-  secondaryPanel: SecondaryPanel;
+  primarySidebar: PrimarySidebar;
+  sidebarCollapsed: boolean;
+  aiPanelOpen: boolean;
+  settingsOpen: boolean;
+  mobileTab: MobileStudioTab;
+  density: StudioDensity;
+
+  editorTabs: EditorTab[];
+  activeTabId: string;
   activeFilePath: string | null;
   activeFileInitialLine: number | undefined;
   activeFileCommitSha: string | undefined;
 
-  setCanvasMode: (mode: CanvasMode) => void;
-  setSecondaryPanel: (panel: SecondaryPanel) => void;
-  toggleSecondaryPanel: (panel: NonNullable<SecondaryPanel>) => void;
-  setActiveFilePath: (path: string | null) => void;
-  setActiveFileInitialLine: (line: number | undefined) => void;
-  setActiveFileCommitSha: (sha: string | undefined) => void;
+  setPrimarySidebar: (panel: PrimarySidebar) => void;
+  /** Select a sidebar panel and ensure it is visible (uncollapsed). */
+  focusSidebar: (panel: PrimarySidebar) => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebarCollapsed: () => void;
+  setAiPanelOpen: (open: boolean) => void;
+  toggleAiPanel: () => void;
+  setSettingsOpen: (open: boolean) => void;
+  setMobileTab: (tab: MobileStudioTab) => void;
+  setDensity: (density: StudioDensity) => void;
+
+  openWelcomeTab: () => void;
+  openFileTab: (path: string, initialLine?: number, commitSha?: string) => void;
+  openPatchTab: (patchId: string, title?: string) => void;
+  closeTab: (tabId: string) => void;
+  setActiveTabId: (tabId: string) => void;
+  /** @deprecated Use openFileTab */
   openFileInEditor: (path: string, initialLine?: number, commitSha?: string) => void;
+  editorWordWrap: boolean;
+  editorMinimap: boolean;
+  setEditorWordWrap: (enabled: boolean) => void;
+  setEditorMinimap: (enabled: boolean) => void;
 }
 
 const userScopedStorage = {
@@ -56,31 +90,36 @@ const userScopedStorage = {
   },
 };
 
-function readLegacyPersistedState(): Partial<StudioStoreState> {
-  if (typeof window === "undefined") return {};
-
-  const userId = getStoredUser()?.id ?? "guest";
-  const merged: Partial<StudioStoreState> = {};
-
-  try {
-    const studioRaw = localStorage.getItem(`studio-specific-storage-${userId}`);
-    if (studioRaw) {
-      const parsed = JSON.parse(studioRaw);
-      const state = parsed?.state ?? parsed;
-      if (state.canvasMode != null) merged.canvasMode = state.canvasMode;
-      if (state.secondaryPanel !== undefined) merged.secondaryPanel = state.secondaryPanel;
-    }
-  } catch {
-    // ignore corrupt legacy storage
-  }
-
-  return merged;
+function fileTabId(path: string): string {
+  return `file:${path}`;
 }
+
+function patchTabId(patchId: string): string {
+  return `patch:${patchId}`;
+}
+
+function syncActiveFileFromTab(tab: EditorTab | undefined): Partial<StudioStoreState> {
+  if (!tab || tab.kind !== "file") {
+    return {
+      activeFilePath: null,
+      activeFileInitialLine: undefined,
+      activeFileCommitSha: undefined,
+    };
+  }
+  return {
+    activeFilePath: tab.filePath ?? null,
+    activeFileInitialLine: tab.initialLine,
+    activeFileCommitSha: tab.commitSha,
+    activePatchId: null,
+  };
+}
+
+const defaults = createDefaultPersistV2();
 
 const studioStoreBase = create<StudioStoreState>()(
   persist(
-    (set) => ({
-      selectedRepositoryId: null,
+    (set, get) => ({
+      selectedRepositoryId: defaults.selectedRepositoryId,
       setSelectedRepositoryId: (id) =>
         set((state) => {
           if (state.selectedRepositoryId === id) return {};
@@ -97,8 +136,14 @@ const studioStoreBase = create<StudioStoreState>()(
       selectedSnapshotId: null,
       setSelectedSnapshotId: (id) => set({ selectedSnapshotId: id }),
       activePatchId: null,
-      setActivePatchId: (id) => set({ activePatchId: id }),
-      activeSessionId: null,
+      setActivePatchId: (id) => {
+        if (id) {
+          get().openPatchTab(id);
+        } else {
+          set({ activePatchId: null });
+        }
+      },
+      activeSessionId: defaults.activeSessionId,
       setActiveSessionId: (id) => set({ activeSessionId: id }),
 
       searchQuery: "",
@@ -108,63 +153,245 @@ const studioStoreBase = create<StudioStoreState>()(
       hasSearched: false,
       setHasSearched: (hasSearched) => set({ hasSearched }),
 
-      canvasMode: "chat",
-      secondaryPanel: null,
+      primarySidebar: defaults.primarySidebar,
+      sidebarCollapsed: defaults.sidebarCollapsed,
+      aiPanelOpen: defaults.aiPanelOpen,
+      settingsOpen: defaults.settingsOpen,
+      mobileTab: "ai",
+      density: defaults.density,
+
+      editorTabs: defaults.editorTabs,
+      activeTabId: defaults.activeTabId,
       activeFilePath: null,
       activeFileInitialLine: undefined,
       activeFileCommitSha: undefined,
 
-      setCanvasMode: (mode) => set({ canvasMode: mode }),
-      setSecondaryPanel: (panel) => set({ secondaryPanel: panel }),
-      toggleSecondaryPanel: (panel) =>
-        set((state) => ({
-          secondaryPanel: state.secondaryPanel === panel ? null : panel,
-        })),
-      setActiveFilePath: (path) => set({ activeFilePath: path }),
-      setActiveFileInitialLine: (line) => set({ activeFileInitialLine: line }),
-      setActiveFileCommitSha: (sha) => set({ activeFileCommitSha: sha }),
-      openFileInEditor: (path, initialLine, commitSha) =>
+      setPrimarySidebar: (panel) =>
+        set({ primarySidebar: panel, sidebarCollapsed: false }),
+      focusSidebar: (panel) => {
+        // #region agent log
+        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:focusSidebar',message:'focusSidebar called',data:{panel,before:get()},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        set({ primarySidebar: panel, sidebarCollapsed: false });
+      },
+      setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+      toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setAiPanelOpen: (open) => {
+        // #region agent log
+        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:setAiPanelOpen',message:'setAiPanelOpen called',data:{open,beforeAiOpen:get().aiPanelOpen,selectedRepositoryId:get().selectedRepositoryId},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
+        set(
+          open
+            ? { aiPanelOpen: true, primarySidebar: "sessions", sidebarCollapsed: false }
+            : { aiPanelOpen: false },
+        );
+      },
+      toggleAiPanel: () => {
+        const s = get();
+        if (s.primarySidebar === "sessions" && !s.sidebarCollapsed) {
+          set({ sidebarCollapsed: true });
+        } else {
+          set({ aiPanelOpen: true, primarySidebar: "sessions", sidebarCollapsed: false });
+        }
+      },
+      setSettingsOpen: (open) => set({ settingsOpen: open }),
+      setMobileTab: (tab) => set({ mobileTab: tab }),
+      setDensity: (density) => set({ density }),
+
+      openWelcomeTab: () => {
+        const tabs = get().editorTabs;
+        const existing = tabs.find((t) => t.id === WELCOME_TAB_ID);
+        if (existing) {
+          set({ activeTabId: WELCOME_TAB_ID, ...syncActiveFileFromTab(existing) });
+          return;
+        }
+        const welcome: EditorTab = { id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" };
         set({
-          activeFilePath: path,
-          activeFileInitialLine: initialLine,
-          activeFileCommitSha: commitSha,
-          canvasMode: "editor",
-        }),
+          editorTabs: [welcome, ...tabs.filter((t) => t.id !== WELCOME_TAB_ID)],
+          activeTabId: WELCOME_TAB_ID,
+          ...syncActiveFileFromTab(welcome),
+        });
+      },
+
+      openFileTab: (path, initialLine, commitSha) => {
+        const id = fileTabId(path);
+        const title = path.split("/").pop() ?? path;
+        const tab: EditorTab = {
+          id,
+          kind: "file",
+          title,
+          filePath: path,
+          initialLine,
+          commitSha,
+        };
+        set((state) => {
+          const existing = state.editorTabs.find((t) => t.id === id);
+          let tabs = state.editorTabs;
+          if (existing) {
+            tabs = tabs.map((t) => (t.id === id ? { ...t, initialLine, commitSha } : t));
+          } else {
+            tabs = [...tabs.filter((t) => t.id !== WELCOME_TAB_ID), tab];
+            if (tabs.length > MAX_EDITOR_TABS) {
+              const removable = tabs.find((t) => t.kind !== "welcome" && t.id !== id);
+              if (removable) tabs = tabs.filter((t) => t.id !== removable.id);
+            }
+          }
+          return {
+            editorTabs: tabs,
+            activeTabId: id,
+            activeFilePath: path,
+            activeFileInitialLine: initialLine,
+            activeFileCommitSha: commitSha,
+            activePatchId: null,
+          };
+        });
+      },
+
+      openPatchTab: (patchId, title) => {
+        const id = patchTabId(patchId);
+        const tab: EditorTab = {
+          id,
+          kind: "patch",
+          title: title ?? `Patch ${patchId.slice(0, 8)}`,
+          patchId,
+        };
+        set((state) => {
+          const existing = state.editorTabs.find((t) => t.id === id);
+          const tabs = existing
+            ? state.editorTabs.map((t) => (t.id === id ? tab : t))
+            : [...state.editorTabs.filter((t) => t.id !== WELCOME_TAB_ID), tab];
+          return {
+            editorTabs: tabs,
+            activeTabId: id,
+            activePatchId: patchId,
+            activeFilePath: null,
+            activeFileInitialLine: undefined,
+            activeFileCommitSha: undefined,
+          };
+        });
+      },
+
+      closeTab: (tabId) => {
+        if (tabId === WELCOME_TAB_ID) return;
+        set((state) => {
+          const tabs = state.editorTabs.filter((t) => t.id !== tabId);
+          let nextTabs = tabs;
+          if (nextTabs.length === 0) {
+            nextTabs = [{ id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" }];
+          }
+          const nextActive =
+            state.activeTabId === tabId
+              ? nextTabs[nextTabs.length - 1]?.id ?? WELCOME_TAB_ID
+              : state.activeTabId;
+          const activeTab = nextTabs.find((t) => t.id === nextActive);
+          return {
+            editorTabs: nextTabs,
+            activeTabId: nextActive,
+            ...syncActiveFileFromTab(activeTab),
+            activePatchId: activeTab?.kind === "patch" ? activeTab.patchId ?? null : null,
+          };
+        });
+      },
+
+      setActiveTabId: (tabId) => {
+        const tab = get().editorTabs.find((t) => t.id === tabId);
+        if (!tab) return;
+        set({
+          activeTabId: tabId,
+          ...syncActiveFileFromTab(tab),
+          activePatchId: tab.kind === "patch" ? tab.patchId ?? null : null,
+        });
+      },
+
+      openFileInEditor: (path, initialLine, commitSha) => {
+        get().openFileTab(path, initialLine, commitSha);
+      },
+
+      editorWordWrap: defaults.editorWordWrap,
+      editorMinimap: defaults.editorMinimap,
+      setEditorWordWrap: (enabled) => set({ editorWordWrap: enabled }),
+      setEditorMinimap: (enabled) => set({ editorMinimap: enabled }),
     }),
     {
-      name: "studio-storage",
+      name: STUDIO_STORAGE_V2_KEY,
       storage: createJSONStorage(() => userScopedStorage),
       partialize: (state) => ({
+        version: 2 as const,
         selectedRepositoryId: state.selectedRepositoryId,
         activeSessionId: state.activeSessionId,
-        canvasMode: state.canvasMode,
-        secondaryPanel: state.secondaryPanel,
+        activePatchId: state.activePatchId,
+        aiPanelOpen: state.aiPanelOpen,
+        editorTabs: state.editorTabs,
+        activeTabId: state.activeTabId,
+        editorWordWrap: state.editorWordWrap,
+        editorMinimap: state.editorMinimap,
+        density: state.density,
       }),
-      onRehydrateStorage: () => (state, error) => {
-        if (error || !state) return;
-        const legacy = readLegacyPersistedState();
-        if (Object.keys(legacy).length === 0) return;
-        studioStoreBase.setState((current) => ({
+      merge: (persisted, current) => {
+        const parsed = parsePersistV2(
+          typeof persisted === "object" && persisted !== null
+            ? JSON.stringify({ state: persisted })
+            : null
+        );
+        if (!parsed) return current;
+        return {
           ...current,
-          selectedRepositoryId: current.selectedRepositoryId ?? legacy.selectedRepositoryId ?? null,
-          activeSessionId: current.activeSessionId ?? legacy.activeSessionId ?? null,
-          canvasMode: legacy.canvasMode ?? current.canvasMode,
-          secondaryPanel: legacy.secondaryPanel ?? current.secondaryPanel,
-        }));
+          selectedRepositoryId: parsed.selectedRepositoryId,
+          activeSessionId: parsed.activeSessionId,
+          activePatchId: parsed.activePatchId,
+          primarySidebar: "sessions",
+          aiPanelOpen: true,
+          sidebarCollapsed: false,
+          settingsOpen: false,
+          editorTabs: parsed.editorTabs,
+          activeTabId: parsed.activeTabId,
+          editorWordWrap: parsed.editorWordWrap,
+          editorMinimap: parsed.editorMinimap,
+          density: parsed.density,
+        };
+      },
+      onRehydrateStorage: () => (state, error) => {
+        // #region agent log
+        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:onRehydrateStorage',message:'persist rehydrate',data:{error:!!error,sidebarCollapsed:state?.sidebarCollapsed,aiPanelOpen:state?.aiPanelOpen,selectedRepositoryId:state?.selectedRepositoryId,primarySidebar:state?.primarySidebar},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        if (error || !state) return;
+        const userId = getStoredUser()?.id ?? "guest";
+        try {
+          const v1Raw = localStorage.getItem(`studio-storage-${userId}`);
+          if (v1Raw && !localStorage.getItem(`${STUDIO_STORAGE_V2_KEY}-${userId}`)) {
+            const migrated = migrateV1ToV2(JSON.parse(v1Raw)?.state ?? JSON.parse(v1Raw));
+            studioStoreBase.setState({
+              ...migrated,
+              editorTabs: migrated.editorTabs,
+              activeTabId: migrated.activeTabId,
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+        const tab = state.editorTabs.find((t) => t.id === state.activeTabId);
+        if (tab) {
+          studioStoreBase.setState(syncActiveFileFromTab(tab));
+        }
+        // Default to chat-first layout unless a file/patch tab is open
+        const hasEditorContent =
+          tab && (tab.kind === "file" || tab.kind === "patch");
+        if (!hasEditorContent) {
+          studioStoreBase.setState({
+            primarySidebar: "sessions",
+            sidebarCollapsed: false,
+            aiPanelOpen: true,
+          });
+        }
       },
     }
   )
 );
 
-export const useStudioStore = Object.assign(
-  function useStudioStoreHook(): StudioStoreState {
-    return studioStoreBase();
-  },
-  {
-    getState: (): StudioStoreState => studioStoreBase.getState(),
-    setState: studioStoreBase.setState,
-    subscribe: studioStoreBase.subscribe,
-  }
-);
+export const useStudioStore = studioStoreBase;
 
-export type { CanvasMode, SecondaryPanel };
+export function createEditorTabId(): string {
+  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export type { EditorTab, PrimarySidebar };

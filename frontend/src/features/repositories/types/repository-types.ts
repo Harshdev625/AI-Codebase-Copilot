@@ -32,6 +32,7 @@ export type IndexRequestPayload = {
   repo_url?: string | null;
   repo_ref?: string | null;
   commit_sha?: string;
+  full_reindex?: boolean;
 };
 
 export type IndexResponse = {
@@ -57,7 +58,11 @@ export type IndexProgress = {
     embeddings_skipped?: number;
     avg_seconds_per_file?: number;
     qdrant_chunks_queued?: number;
+    stage_timings?: Record<string, { started_at?: number; completed_at?: number; duration_seconds?: number }>;
   } | null;
+  stage_timings?: Record<string, { started_at?: number; completed_at?: number; duration_seconds?: number }>;
+  current_stage?: string | null;
+  repository_id?: string;
   total_files: number;
   processed_files: number;
   percentage: number;

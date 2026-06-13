@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { LazyTreeNode } from "@/features/explorer/components/lazy-tree-node";
-import { useChatSessions, useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
+import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
 import {
   useRepositories,
   useRepositoryTree,
@@ -58,11 +58,7 @@ export function StudioExplorerPanel() {
     selectedSnapshotId ?? undefined
   );
 
-  const { data: sessionData } = useChatSessions(100, 0);
-  const updateSessionMutation = useUpdateSessionMutation();
-
-  const activeSession = sessionData?.items?.find((s: any) => s.id === activeSessionId);
-  const scopePaths: string[] = activeSession?.metadata?.scope_paths ?? [];
+  const { scopePaths, toggleScopePath } = useSessionScope(activeSessionId);
 
   const filteredItems = React.useMemo(() => {
     if (!data?.items) return [];
@@ -77,15 +73,8 @@ export function StudioExplorerPanel() {
   };
 
   const handleToggleContext = (path: string) => {
-    // Disable scope toggling when browsing a historical snapshot
     if (!activeSessionId || selectedSnapshotId) return;
-    const newPaths = scopePaths.includes(path)
-      ? scopePaths.filter((p) => p !== path)
-      : [...scopePaths, path];
-    updateSessionMutation.mutate({
-      sessionId: activeSessionId,
-      payload: { metadata: { scope_paths: newPaths } },
-    });
+    toggleScopePath(path);
   };
 
   const handleClearSnapshot = () => setSelectedSnapshotId(null);

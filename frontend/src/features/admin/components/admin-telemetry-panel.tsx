@@ -36,8 +36,8 @@ export function AdminTelemetryPanel({
   const failedJobs = queue?.failed_jobs ?? 0;
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border/40 bg-card/60 p-4 shadow-2xl backdrop-blur-xl 2xl:col-span-8">
-      <h2 className="flex items-center gap-2 text-xs font-semibold text-foreground lg:text-sm">
+    <div className="flex flex-col gap-3 rounded-xl border border-border/40 bg-card/60 p-4 shadow-2xl backdrop-blur-xl xl:col-span-8 xl:p-5">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground xl:text-base">
         <Activity className="h-4 w-4 text-primary" />
         Worker & Retrieval Telemetry
       </h2>
@@ -70,7 +70,7 @@ export function AdminTelemetryPanel({
         />
       </div>
       {lastRefreshedAt && (
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-xs text-muted-foreground xl:text-sm">
           Last refreshed{' '}
           {formatDistanceToNow(new Date(lastRefreshedAt), { addSuffix: true })}
         </p>
@@ -109,9 +109,9 @@ function TelemetryCell({
       onClick={onClick}
       className={`rounded-lg border p-3 text-left ${accentClass} ${onClick ? 'cursor-pointer hover:opacity-90' : ''}`}
     >
-      <div className="mb-1 text-[9px] font-bold uppercase tracking-widest opacity-80">{label}</div>
-      <div className="text-lg font-bold tabular-nums lg:text-xl">{value}</div>
-      {hint && <div className="mt-0.5 text-[9px] opacity-70">{hint}</div>}
+      <div className="mb-1 text-xs font-bold uppercase tracking-widest opacity-80 xl:text-sm">{label}</div>
+      <div className="text-lg font-bold tabular-nums lg:text-xl xl:text-2xl">{value}</div>
+      {hint && <div className="mt-0.5 text-xs opacity-70">{hint}</div>}
     </Wrapper>
   );
 }

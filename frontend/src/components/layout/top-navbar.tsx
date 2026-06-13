@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LogOut, ChevronRight, Settings, Search, Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -23,10 +23,15 @@ export function TopNavbar({
   variant = "user",
 }: TopNavbarProps): React.JSX.Element {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const isAdmin = variant === "admin";
   const isDashboardHome = pathname === "/dashboard";
   const showCodebaseCrumb = !isAdmin && !isDashboardHome;
+
+  const openCommandPalette = () => {
+    window.dispatchEvent(new CustomEvent("studio:open-command-palette"));
+  };
 
   return (
     <>
@@ -36,7 +41,7 @@ export function TopNavbar({
 
           <div
             className={cn(
-              "flex w-full items-center justify-between gap-2 px-3 sm:px-4 lg:px-6",
+              "flex w-full items-center justify-between gap-2 px-3 sm:px-4 lg:px-6 xl:px-8",
               NAV_BAR_CLASS
             )}
           >
@@ -55,29 +60,29 @@ export function TopNavbar({
                 href={isAdmin ? "/admin/dashboard" : "/dashboard"}
                 className="group flex shrink-0 items-center gap-2 transition-all"
               >
-                <div className="relative flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 transition-all duration-200 group-hover:scale-105 group-hover:bg-primary/20 lg:h-9 lg:w-9">
-                  <span className="select-none text-[10px] font-bold text-primary lg:text-xs">AC</span>
+                <div className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 transition-all duration-200 group-hover:scale-105 group-hover:bg-primary/20 xl:h-10 xl:w-10">
+                  <span className="select-none text-xs font-bold text-primary xl:text-sm">AC</span>
                 </div>
-                <span className="hidden text-sm font-semibold text-foreground/80 transition-colors group-hover:text-foreground sm:inline-block lg:text-base">
+                <span className="hidden text-sm font-semibold text-foreground/80 transition-colors group-hover:text-foreground sm:inline-block xl:text-base">
                   Copilot
                 </span>
               </Link>
 
-              <div className="hidden min-w-0 items-center gap-1 font-medium text-muted-foreground sm:flex text-xs lg:text-sm">
-                <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
+              <div className="hidden min-w-0 items-center gap-1 font-medium text-muted-foreground sm:flex text-sm xl:text-base">
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
                 {isAdmin ? (
                   <>
                     <span className="shrink-0 text-muted-foreground">Admin</span>
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
-                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px]">
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
                       {sectionTitle}
                     </span>
                   </>
                 ) : isDashboardHome ? (
                   <>
                     <span className="shrink-0 text-muted-foreground">Dashboard</span>
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
-                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px]">
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
                       {sectionTitle}
                     </span>
                   </>
@@ -88,14 +93,14 @@ export function TopNavbar({
                     </Link>
                     {showCodebaseCrumb && (
                       <>
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
                         <Link href="/studio" className="shrink-0 transition-colors hover:text-foreground">
                           Codebase
                         </Link>
                       </>
                     )}
-                    <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/30" />
-                    <span className="truncate font-semibold text-foreground/80 max-w-[100px] sm:max-w-[180px] lg:max-w-[280px]">
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[100px] sm:max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
                       {sectionTitle}
                     </span>
                   </>
@@ -107,41 +112,51 @@ export function TopNavbar({
               </span>
             </div>
 
-            <div className="flex max-w-xs flex-1 justify-center px-2 lg:max-w-md xl:max-w-lg">
+            <div className="flex max-w-sm flex-1 justify-center px-2 lg:max-w-xl xl:max-w-2xl">
               <button
-                className="group flex h-8 w-full items-center justify-between gap-2 rounded-lg border border-border/40 bg-background/40 px-3 text-xs text-muted-foreground shadow-sm transition-all duration-200 hover:border-primary/30 hover:bg-card/80 lg:h-9 lg:text-sm"
+                type="button"
+                onClick={openCommandPalette}
+                className="group flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border/40 bg-background/40 px-3 text-xs text-muted-foreground shadow-sm transition-all duration-200 hover:border-primary/30 hover:bg-card/80 xl:h-10 xl:text-sm"
                 aria-label="Open command palette"
               >
                 <div className="flex min-w-0 items-center gap-2">
-                  <Search className="h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary lg:h-[18px] lg:w-[18px]" />
+                  <Search className="h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary xl:h-5 xl:w-5" />
                   <span className="hidden truncate md:inline-block">Search or run command…</span>
-                  <span className="truncate text-[11px] md:hidden">Search…</span>
+                  <span className="truncate text-xs md:hidden">Search…</span>
                 </div>
-                <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-border/40 bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-muted-foreground/60 lg:inline-flex">
+                <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-border/40 bg-muted/50 px-1.5 py-0.5 font-mono text-xs font-bold text-muted-foreground/60 lg:inline-flex">
                   ⌃K
                 </kbd>
               </button>
             </div>
 
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1 xl:gap-2">
+              {userEmail && (
+                <span className="hidden max-w-[140px] truncate text-xs text-muted-foreground lg:inline-block xl:max-w-[180px] xl:text-sm">
+                  {userEmail}
+                </span>
+              )}
               <ThemeToggle />
+              {!isAdmin && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="hidden h-9 w-9 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex xl:h-10 xl:w-10"
+                  title="Settings"
+                  onClick={() => router.push("/studio?panel=settings")}
+                >
+                  <Settings className="h-4 w-4 xl:h-5 xl:w-5" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
-                className="hidden h-9 w-9 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
-                title="Settings"
-              >
-                <Settings className="h-4 w-4 lg:h-[18px] lg:w-[18px]" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-9 w-9 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                className="h-9 w-9 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive xl:h-10 xl:w-10"
                 onClick={onSignOut}
                 title="Sign out"
                 aria-label="Sign out"
               >
-                <LogOut className="h-4 w-4 lg:h-[18px] lg:w-[18px]" />
+                <LogOut className="h-4 w-4 xl:h-5 xl:w-5" />
               </Button>
             </div>
           </div>

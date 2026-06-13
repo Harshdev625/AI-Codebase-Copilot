@@ -6,7 +6,6 @@ import { Loader2, PlayCircle, CheckCircle2, XCircle, AlertCircle, RefreshCw, Tra
 import { cn } from '@/lib/utils';
 import { MonacoDiffViewer } from './monaco-diff-viewer';
 import { Badge } from '@/components/ui/badge';
-import { useQueryClient } from '@tanstack/react-query';
 
 // ---------------------------------------------------------------------------
 // Backend status vocabulary (what the server actually stores and returns):
@@ -48,14 +47,15 @@ export function PatchReviewEditor({
   /** Optional close handler. When provided, used instead of default canvas navigation. */
   onClose?: () => void;
 }) {
-  const { selectedRepositoryId, setActivePatchId, setCanvasMode } = useStudioStore();
+  const { selectedRepositoryId, closeTab, activeTabId, openWelcomeTab } = useStudioStore();
 
   const handleClose = () => {
     if (onClose) {
       onClose();
+    } else if (activeTabId) {
+      closeTab(activeTabId);
     } else {
-      setActivePatchId(null);
-      setCanvasMode('chat');
+      openWelcomeTab();
     }
   };
   const repoId = selectedRepositoryId || '';

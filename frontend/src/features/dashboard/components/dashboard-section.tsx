@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { cn } from '@/lib/utils';
+import { DASHBOARD_SECTION_TITLE } from '@/components/layout/nav-tokens';
 
 interface DashboardSectionProps {
   title: string;
@@ -22,11 +23,9 @@ export function DashboardSection({
     <section className={cn('space-y-4', className)}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground lg:text-sm">
-            {title}
-          </h2>
+          <h2 className={DASHBOARD_SECTION_TITLE}>{title}</h2>
           {description && (
-            <p className="text-sm text-muted-foreground font-light lg:text-base">{description}</p>
+            <p className="text-sm font-light text-muted-foreground xl:text-base">{description}</p>
           )}
         </div>
         {action}

@@ -355,6 +355,9 @@ class ChatSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
+    session_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONBType(), nullable=False, default=dict
+    )
 
     user: Mapped["User"] = relationship("User", back_populates="chat_sessions")
     repository: Mapped["Repository"] = relationship("Repository", back_populates="chat_sessions")

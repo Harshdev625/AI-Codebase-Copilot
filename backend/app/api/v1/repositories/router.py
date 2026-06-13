@@ -163,6 +163,7 @@ def index_repo(
             repo_ref=req.repo_ref,
             source="manual",
             prevent_duplicate_commit=False,
+            full_reindex=bool(req.full_reindex),
         )
     except service.IndexingAlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -324,10 +325,9 @@ def get_patch(
     if not patch:
         raise HTTPException(status_code=404, detail="Patch not found")
 
-    import re
     import subprocess
-    from pathlib import Path as _Path
     from app.db.models import Repository
+    from app.services.repository_cache import resolve_repository_workspace
 
     repo = session.query(Repository).filter(Repository.id == repository_id).first()
     base_sha = patch.base_commit_sha or ""
@@ -337,9 +337,8 @@ def get_patch(
         if not base_sha or not repo:
             return ""
         repo_id_str = repo.repo_id or repository_id
-        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", repo_id_str)
-        cache_path = _Path(settings.repo_cache_path).resolve() / slug
-        if not cache_path.exists():
+        cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
+        if not cache_path:
             return ""
         cmd = ["git", "-C", str(cache_path), "show", f"{base_sha}:{file_path}"]
         try:
@@ -480,16 +479,14 @@ def get_file_content(
             raise HTTPException(status_code=404, detail="No indexed commit found")
         target_commit = job.commit_sha
 
-    import re
     import subprocess
     from pathlib import Path
-    from app.core.config import settings
+    from app.services.repository_cache import resolve_repository_workspace
 
     repo_id_str = repo.repo_id or repository_id
-    slug = re.sub(r'[^a-zA-Z0-9_-]', '_', repo_id_str)
-    cache_path = Path(settings.repo_cache_path).resolve() / slug
+    cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
 
-    if not cache_path.exists():
+    if not cache_path:
         raise HTTPException(status_code=404, detail="Repository cache not found on disk")
 
     cmd = ["git", "-C", str(cache_path), "show", f"{target_commit}:{path}"]

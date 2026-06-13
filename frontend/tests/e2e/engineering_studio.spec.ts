@@ -4,6 +4,48 @@ test.describe("Engineering Studio E2E Tests", () => {
   const repositoryId = "repo-123";
   const patchId = "patch-456";
 
+  test("0. Studio shell loads and session list populates", async ({ page }) => {
+    await page.route("**/api/v1/chat/sessions*", async (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            items: [
+              {
+                id: "sess-1",
+                session_title: "Auth refactor",
+                summary: "Auth refactor",
+                metadata: {},
+                is_pinned: false,
+                is_archived: false,
+                repository_id: repositoryId,
+              },
+            ],
+            pagination: { total: 1, limit: 100, offset: 0, has_more: false },
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.route("**/api/v1/repositories*", async (route) => {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [{ id: repositoryId, repo_id: "org/backend-core", default_branch: "main" }],
+          pagination: { total: 1, limit: 100, offset: 0, has_more: false },
+        }),
+      });
+    });
+
+    await page.goto(`/studio?repository_id=${repositoryId}`);
+
+    await expect(page.locator('[data-studio-shell="v2"]')).toBeVisible();
+    await expect(page.getByText("Auth refactor")).toBeVisible({ timeout: 10000 });
+  });
+
   test("1. Dynamic Tree Explorer lazy loading and patch overlays", async ({ page }) => {
     // Intercept lazy tree api call for root and subfolder
     await page.route(`**/api/v1/repositories/${repositoryId}/tree*`, async (route) => {
@@ -40,7 +82,10 @@ test.describe("Engineering Studio E2E Tests", () => {
     });
 
     // Navigate to page
-    await page.goto(`/repositories/${repositoryId}/explorer?patch_id=${patchId}`);
+    await page.goto(`/studio?repository_id=${repositoryId}&panel=explorer`);
+
+    // Explorer sidebar header should be visible (sidebar expanded)
+    await expect(page.getByText("EXPLORER")).toBeVisible();
 
     // Verify root items render
     const rootFolder = page.locator('[data-testid="tree-folder-toggle-src"]');
@@ -88,7 +133,7 @@ test.describe("Engineering Studio E2E Tests", () => {
       });
     });
 
-    await page.goto(`/repositories/${repositoryId}/chat`);
+    await page.goto(`/studio?repository_id=${repositoryId}&view=patch-review&patch_id=${patchId}`);
 
     // Click validate
     const validateBtn = page.locator('[data-testid="trigger-validation-btn"]');
@@ -147,7 +192,7 @@ test.describe("Engineering Studio E2E Tests", () => {
       });
     });
 
-    await page.goto(`/repositories/${repositoryId}/chat`);
+    await page.goto(`/studio?repository_id=${repositoryId}&view=patch-review&patch_id=${patchId}`);
 
     // Click Apply
     const applyBtn = page.locator('[data-testid="apply-to-codebase-btn"]');
@@ -194,7 +239,7 @@ test.describe("Engineering Studio E2E Tests", () => {
       });
     });
 
-    await page.goto(`/repositories`);
+    await page.goto(`/studio?repository_id=${repositoryId}`);
 
     // Open Snapshots modal
     const historyBtn = page.locator('[data-testid="snapshot-history-btn"]').first();
@@ -244,7 +289,7 @@ test.describe("Engineering Studio E2E Tests", () => {
       });
     });
 
-    await page.goto(`/repositories/repo-123/chat`);
+    await page.goto(`/studio?repository_id=repo-123&ai=open`);
 
     // Click Multi-Repository select popover
     const selectTrigger = page.locator('[data-testid="multi-repo-trigger-btn"]');

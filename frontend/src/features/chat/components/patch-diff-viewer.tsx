@@ -149,7 +149,8 @@ export function PatchDiffViewer({
     try {
       await indexMutation.mutateAsync({
         repository_id: repositoryId,
-        commit_sha: "local-working-copy"
+        commit_sha: "local-working-copy",
+        full_reindex: true,
       });
       setIsConflictOpen(false);
       toast.success("Reindex Triggered", "Repository re-indexing job has started.");

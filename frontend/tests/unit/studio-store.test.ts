@@ -1,4 +1,5 @@
 import { useStudioStore } from "@/features/studio/store/studio-store";
+import { WELCOME_TAB_ID } from "@/features/studio/types/studio-types";
 
 describe("studio-store", () => {
   beforeEach(() => {
@@ -10,30 +11,31 @@ describe("studio-store", () => {
       searchQuery: "",
       searchResults: [],
       hasSearched: false,
-      canvasMode: "chat",
-      secondaryPanel: null,
+      primarySidebar: "sessions",
+      aiPanelOpen: true,
+      sidebarCollapsed: false,
+      editorTabs: [{ id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" }],
+      activeTabId: WELCOME_TAB_ID,
       activeFilePath: null,
       activeFileInitialLine: undefined,
       activeFileCommitSha: undefined,
     });
   });
 
-  it("sets canvas mode", () => {
-    useStudioStore.getState().setCanvasMode("editor");
-    expect(useStudioStore.getState().canvasMode).toBe("editor");
+  it("opens file tab and sets active path", () => {
+    useStudioStore.getState().openFileTab("src/main.ts", 42);
+    const state = useStudioStore.getState();
+    expect(state.activeFilePath).toBe("src/main.ts");
+    expect(state.activeFileInitialLine).toBe(42);
+    expect(state.activeTabId).toBe("file:src/main.ts");
+    expect(state.editorTabs.some((t) => t.kind === "file")).toBe(true);
   });
 
-  it("toggles secondary panel", () => {
-    useStudioStore.getState().toggleSecondaryPanel("explorer");
-    expect(useStudioStore.getState().secondaryPanel).toBe("explorer");
-
-    useStudioStore.getState().toggleSecondaryPanel("explorer");
-    expect(useStudioStore.getState().secondaryPanel).toBeNull();
-  });
-
-  it("opens a different secondary panel directly", () => {
-    useStudioStore.getState().setSecondaryPanel("patches");
-    expect(useStudioStore.getState().secondaryPanel).toBe("patches");
+  it("opens patch tab", () => {
+    useStudioStore.getState().openPatchTab("patch-123");
+    const state = useStudioStore.getState();
+    expect(state.activePatchId).toBe("patch-123");
+    expect(state.activeTabId).toBe("patch:patch-123");
   });
 
   it("resets session state when repository changes", () => {
@@ -51,11 +53,40 @@ describe("studio-store", () => {
     expect(state.activePatchId).toBeNull();
   });
 
-  it("opens file in editor canvas", () => {
-    useStudioStore.getState().openFileInEditor("src/main.ts", 42);
+  it("focusSidebar uncollapses and sets panel", () => {
+    useStudioStore.setState({ sidebarCollapsed: true, primarySidebar: "explorer" });
+    useStudioStore.getState().focusSidebar("search");
     const state = useStudioStore.getState();
-    expect(state.activeFilePath).toBe("src/main.ts");
-    expect(state.activeFileInitialLine).toBe(42);
-    expect(state.canvasMode).toBe("editor");
+    expect(state.primarySidebar).toBe("search");
+    expect(state.sidebarCollapsed).toBe(false);
+  });
+
+  it("setPrimarySidebar uncollapses sidebar", () => {
+    useStudioStore.setState({ sidebarCollapsed: true });
+    useStudioStore.getState().setPrimarySidebar("patches");
+    const state = useStudioStore.getState();
+    expect(state.primarySidebar).toBe("patches");
+    expect(state.sidebarCollapsed).toBe(false);
+  });
+
+  it("setSidebarCollapsed toggles collapse explicitly", () => {
+    useStudioStore.getState().setSidebarCollapsed(true);
+    expect(useStudioStore.getState().sidebarCollapsed).toBe(true);
+    useStudioStore.getState().setSidebarCollapsed(false);
+    expect(useStudioStore.getState().sidebarCollapsed).toBe(false);
+  });
+
+  it("setAiPanelOpen switches to sessions mode", () => {
+    useStudioStore.setState({ primarySidebar: "explorer", aiPanelOpen: false });
+    useStudioStore.getState().setAiPanelOpen(true);
+    const state = useStudioStore.getState();
+    expect(state.aiPanelOpen).toBe(true);
+    expect(state.primarySidebar).toBe("sessions");
+    expect(state.sidebarCollapsed).toBe(false);
+  });
+
+  it("openFileInEditor alias opens file tab", () => {
+    useStudioStore.getState().openFileInEditor("lib/utils.ts");
+    expect(useStudioStore.getState().activeFilePath).toBe("lib/utils.ts");
   });
 });

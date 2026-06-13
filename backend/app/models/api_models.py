@@ -111,6 +111,10 @@ class IndexRequest(StrictRequestModel):
     repo_url: str | None = Field(default=None, max_length=1024)
     repo_ref: str | None = Field(default=None, max_length=128, pattern=BRANCH_PATTERN)
     commit_sha: str = Field(default="local-working-copy", min_length=3, max_length=80, pattern=COMMIT_PATTERN)
+    full_reindex: bool = Field(
+        default=False,
+        description="When true, wipe remote clone cache and rebuild index from scratch.",
+    )
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "IndexRequest":

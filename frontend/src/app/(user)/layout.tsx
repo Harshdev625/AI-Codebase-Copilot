@@ -11,11 +11,15 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
 
   const variant = isFullViewportRoute ? "studio" : "default";
 
+  const pageContent = isFullViewportRoute ? (
+    children
+  ) : (
+    <PageTransition>{children}</PageTransition>
+  );
+
   return (
     <AppShell title="AI Codebase Copilot" variant={variant}>
-      <PageTransition>
-        {children}
-      </PageTransition>
+      {pageContent}
     </AppShell>
   );
 }
