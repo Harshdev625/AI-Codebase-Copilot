@@ -331,8 +331,13 @@ HIGH_LEVEL_QUERY_TOKENS = {
     "how does",
     "explain",
     "what is",
+    "tell me about",
+    "about the project",
+    "about this project",
+    "about the repo",
     "document",
     "documentation",
+    "project",
 }
 
 DOC_PATH_TOKENS = {
@@ -342,6 +347,8 @@ DOC_PATH_TOKENS = {
     ".md",
     "documentation",
     "architecture",
+    "package.json",
+    "manifest.json",
 }
 
 

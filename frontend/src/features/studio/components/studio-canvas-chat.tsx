@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 import type { Repository } from "@/features/repositories/types/repository-types";
 import { MultiRepositorySelect } from "@/features/chat/components/multi-repository-select";
 import { repositoryService } from "@/features/repositories/services/repository-service";
-import { USER_QUERY_MARKER } from "@/features/chat/utils/chat-message-utils";
+import { buildFederatedChatQuery, normalizeRepoPath, FEDERATED_CONTEXT_PREFIX } from "@/features/chat/utils/chat-message-utils";
 import type { ChatMode, ChatSession } from "@/features/chat/types/chat-types";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 
@@ -124,22 +124,27 @@ export function StudioCanvasChat({
     const trimmed = query.trim();
     setQuery("");
     try {
-      if (selectedRepoIds.length > 0) {
+      const needsClientFederatedContext =
+        selectedRepoIds.length > 1 ||
+        (selectedRepoIds.length === 1 && selectedRepoIds[0] !== repositoryId);
+
+      if (needsClientFederatedContext) {
         toast.info("Retrieving Federated Context", `Querying ${selectedRepoIds.length} repositories...`);
         const allResults = await Promise.allSettled(
           selectedRepoIds.map((rid) =>
-            repositoryService.retrieveRepository(rid, { query: trimmed, top_k: 6 })
+            repositoryService.retrieveRepository(rid, { query: trimmed, top_k: 4 })
           )
         );
 
-        let formattedContext = "Below is the retrieved cross-repository context for this query:\n\n";
+        let formattedContext = FEDERATED_CONTEXT_PREFIX;
         let idx = 0;
         allResults.forEach((result) => {
           if (result.status === "fulfilled") {
             result.value.items?.forEach((item) => {
               idx++;
               const displayScore = item.rerank_score !== undefined ? item.rerank_score : item.score;
-              formattedContext += `[Source #${idx}] File: ${item.path} (Repository: ${item.repository_id})\n`;
+              const displayPath = normalizeRepoPath(item.path);
+              formattedContext += `[Source #${idx}] File: ${displayPath} (Repository: ${item.repository_id})\n`;
               formattedContext += `Symbol: ${item.symbol || "unknown"}\n`;
               formattedContext += `Score: ${(displayScore * 100).toFixed(1)}%\n`;
               formattedContext += "```\n" + item.content + "\n```\n\n";
@@ -150,7 +155,7 @@ export function StudioCanvasChat({
           formattedContext += "(No matching snippets retrieved across repositories)\n\n";
         }
 
-        const finalQuery = `${formattedContext}${USER_QUERY_MARKER}${trimmed}`;
+        const finalQuery = buildFederatedChatQuery(formattedContext, trimmed);
         await sendMessage(finalQuery, mode, scopePaths, { displayContent: trimmed });
       } else {
         await sendMessage(trimmed, mode, scopePaths);

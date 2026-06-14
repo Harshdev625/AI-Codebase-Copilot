@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     retrieval_rerank_candidate_pool: int = 32
     retrieval_cache_ttl_seconds: int = 120
     retrieval_max_chunk_chars: int = 1400
-    retrieval_context_char_budget: int = 12_000
+    retrieval_context_char_budget: int = 7_000
     retrieval_min_token_overlap: int = 1
 
     jwt_secret_key: str = "change-me-in-production"

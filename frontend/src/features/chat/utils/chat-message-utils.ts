@@ -2,9 +2,58 @@ import type { ChatMessage, Source } from "@/features/chat/types/chat-types";
 
 const FEDERATED_PREFIX = "Below is the retrieved cross-repository context";
 export const USER_QUERY_MARKER = "\nUser Query: ";
+export const CHAT_QUERY_MAX_LENGTH = 4000;
+export const FEDERATED_CONTEXT_PREFIX = `${FEDERATED_PREFIX} for this query:\n\n`;
+
+/** Combine federated retrieval context + user query within API max length. */
+export function buildFederatedChatQuery(
+  formattedContext: string,
+  userQuery: string,
+  maxLength: number = CHAT_QUERY_MAX_LENGTH,
+): string {
+  const suffix = `${USER_QUERY_MARKER}${userQuery}`;
+  const maxContextLen = Math.max(256, maxLength - suffix.length);
+  let context = formattedContext;
+  if (context.length > maxContextLen) {
+    const notice = "\n\n...(retrieved context truncated to fit API limit)...\n\n";
+    context = context.slice(0, Math.max(0, maxContextLen - notice.length)) + notice;
+  }
+  return `${context}${suffix}`;
+}
 
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[\w\s./\\-]+/g;
 const SOURCE_BLOCK_RE = /Source\s*\[S\d+\][^\n]*\n?/gi;
+const PROMPT_ECHO_SOURCE_BLOCK_RE =
+  /(?:^|\n)---\s*\n+Source\s*\[S\d+\][\s\S]*?(?=(?:\n---\s*\n+Source\s*\[S\d+\])|$)/gi;
+
+export function stripPromptEchoFromAssistant(text: string): string {
+  let cleaned = text;
+  // Strip "Retrieved codebase sources ..." context header (new format)
+  if (cleaned.startsWith("Retrieved codebase sources")) {
+    const afterHeader = cleaned.indexOf("\n\n");
+    if (afterHeader !== -1) {
+      cleaned = cleaned.slice(afterHeader + 2);
+    }
+  }
+  // Strip old "Context:" header
+  if (cleaned.startsWith("Context:")) {
+    cleaned = cleaned.replace(/^Context:\s*\n?/, "");
+  }
+  // Strip "Current user question:" line
+  if (cleaned.includes("Current user question:")) {
+    cleaned = cleaned.replace(/^Current user question:.*?(?:\n|$)/m, "").trim();
+  }
+  cleaned = cleaned.replace(PROMPT_ECHO_SOURCE_BLOCK_RE, "");
+  cleaned = cleaned.replace(/^---+(\s*\n)*/gm, "");
+  if (
+    cleaned.startsWith("Retrieved codebase sources") ||
+    cleaned.startsWith("Context:") ||
+    cleaned.includes("Current user question:")
+  ) {
+    cleaned = cleaned.trim();
+  }
+  return cleaned;
+}
 
 /** Normalize paths for display (repo-relative, no Windows absolutes). */
 export function normalizeRepoPath(path: string): string {
@@ -39,6 +88,15 @@ export function getDisplayContent(
 
   if (role === "assistant" && metadata && normalizeSourcesFromMetadata(metadata).length > 0) {
     text = text.replace(SOURCE_BLOCK_RE, "").trim();
+  }
+
+  if (
+    role === "assistant" &&
+    (text.startsWith("Context:") ||
+      text.startsWith("Retrieved codebase sources") ||
+      (text.includes("Current user question:") && /Source\s*\[S\d+\]/i.test(text)))
+  ) {
+    text = stripPromptEchoFromAssistant(text);
   }
 
   return text;

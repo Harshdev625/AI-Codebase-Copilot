@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 
 import { chatService } from "@/features/chat/services/chat-service";
 import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source } from "@/features/chat/types/chat-types";
-import { normalizeChatMessage, normalizeMessageMetadata } from "@/features/chat/utils/chat-message-utils";
+import { normalizeChatMessage, normalizeMessageMetadata, stripPromptEchoFromAssistant } from "@/features/chat/utils/chat-message-utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 import { useStudioWorkbenchSessionOptional } from "@/features/studio/context/studio-workbench-context";
 
@@ -13,6 +13,8 @@ export const chatKeys = {
   session: (sessionId: string) => ["chat", "session", sessionId] as const,
   messages: (sessionId: string) => ["chat", "messages", sessionId] as const,
 };
+
+const HISTORY_SYNC_DEBOUNCE_MS = 500;
 
 export function useChatSessions(limit = 20, offset = 0, repositoryId?: string, search?: string, isArchived?: boolean) {
   return useQuery({
@@ -122,9 +124,16 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = React.useState(false);
   const abortControllerRef = React.useRef<AbortController | null>(null);
+  const isSendingRef = React.useRef(false);
+  const skipHistorySyncUntilRef = React.useRef(0);
+  const historySyncTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
 
   const messagesQuery = useChatMessages(currentSessionId, 100, 0);
+
+  const setSessionIdSilent = React.useCallback((sessionId: string | null) => {
+    setStoreSessionId(sessionId);
+  }, [setStoreSessionId]);
 
   React.useEffect(() => {
     if (!currentSessionId) {
@@ -140,14 +149,26 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
     if (!Array.isArray(items) || items.length === 0 || isSending) {
       return;
     }
+    if (Date.now() < skipHistorySyncUntilRef.current) {
+      return;
+    }
     setMessages(items.map((item) => normalizeChatMessage(item)));
   }, [currentSessionId, messagesQuery.data?.items, isSending]);
+
+  React.useEffect(() => {
+    return () => {
+      if (historySyncTimerRef.current) {
+        clearTimeout(historySyncTimerRef.current);
+      }
+    };
+  }, []);
 
   const clearMessages = React.useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsSending(false);
+      isSendingRef.current = false;
     }
     setCurrentSessionId(null);
     setMessages([]);
@@ -158,6 +179,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsSending(false);
+      isSendingRef.current = false;
     }
     setCurrentSessionId(sessionId);
     setMessages([]);
@@ -168,8 +190,20 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsSending(false);
+      isSendingRef.current = false;
     }
   }, []);
+
+  const scheduleHistorySync = React.useCallback((sessionId: string) => {
+    skipHistorySyncUntilRef.current = Date.now() + HISTORY_SYNC_DEBOUNCE_MS;
+    if (historySyncTimerRef.current) {
+      clearTimeout(historySyncTimerRef.current);
+    }
+    historySyncTimerRef.current = setTimeout(() => {
+      skipHistorySyncUntilRef.current = 0;
+      void queryClient.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+    }, HISTORY_SYNC_DEBOUNCE_MS);
+  }, [queryClient]);
 
   const sendMessage = React.useCallback(
     async (
@@ -178,7 +212,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       scopePaths?: string[],
       options?: { displayContent?: string },
     ) => {
-      if (isSending) return;
+      if (isSendingRef.current) return;
       if (!content.trim()) return;
 
       const userMessageId = uuidv4();
@@ -204,6 +238,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
 
       setMessages((prev) => [...prev, newUserMessage, placeholderAssistantMessage]);
       setIsSending(true);
+      isSendingRef.current = true;
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
@@ -226,7 +261,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
             if (event.type === 'start' && event.session_id) {
               if (localSessionId !== event.session_id) {
                 localSessionId = event.session_id;
-                setCurrentSessionId(event.session_id);
+                setSessionIdSilent(event.session_id);
                 void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
                 void queryClient.invalidateQueries({ queryKey: chatKeys.session(event.session_id) });
                 void queryClient.invalidateQueries({ queryKey: ["admin", "metrics"] });
@@ -236,7 +271,8 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
               setMessages((prev) => 
                 prev.map((msg) => {
                   if (msg.id === assistantMessageId) {
-                    return { ...msg, content: msg.content + deltaStr };
+                    const nextContent = stripPromptEchoFromAssistant(msg.content + deltaStr);
+                    return { ...msg, content: nextContent };
                   }
                   return msg;
                 })
@@ -271,16 +307,22 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                   return msg;
                 })
               );
-            } else if (event.type === 'done' && event.sources) {
+            } else if (event.type === 'done') {
               setMessages((prev) => 
                 prev.map((msg) => {
                   if (msg.id === assistantMessageId) {
                     const newMetadata = normalizeMessageMetadata({
                       ...msg.metadata,
-                      sources: event.sources,
+                      ...(event.intent ? { intent: event.intent } : {}),
+                      ...(event.sources ? { sources: event.sources } : {}),
                       ...(event.proposal ? { patch_proposal: event.proposal } : {}),
+                      ...(event.trace ? { trace: event.trace } : {}),
                     });
-                    return { ...msg, metadata: newMetadata };
+                    return {
+                      ...msg,
+                      content: stripPromptEchoFromAssistant(msg.content),
+                      metadata: newMetadata,
+                    };
                   }
                   return msg;
                 })
@@ -289,9 +331,9 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
           },
           controller.signal
         );
-      } catch (error: any) {
-        if (error.name !== "AbortError") {
-          const message = error instanceof Error ? error.message : "Unable to send message.";
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name !== "AbortError") {
+          const message = error.message || "Unable to send message.";
           setMessages((prev) =>
             prev.map((msg) => {
               if (msg.id === assistantMessageId) {
@@ -300,19 +342,19 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
               return msg;
             })
           );
-          throw error;
         }
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
           setIsSending(false);
+          isSendingRef.current = false;
           if (localSessionId) {
-            void queryClient.invalidateQueries({ queryKey: chatKeys.messages(localSessionId) });
+            scheduleHistorySync(localSessionId);
           }
         }
       }
     },
-    [repositoryId, currentSessionId, queryClient, isSending, setCurrentSessionId]
+    [repositoryId, currentSessionId, queryClient, setSessionIdSilent, scheduleHistorySync]
   );
 
   return {
@@ -325,5 +367,6 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
     clearMessages,
     currentSessionId,
     selectSession,
+    setSessionIdSilent,
   };
 }

@@ -157,19 +157,39 @@ export function ChatMessageItemBubble({ message, mode, repositoryId: repositoryI
         </div>
 
         {/* Thinking Process */}
-        {isAssistant && Array.isArray(metadata.statuses) && metadata.statuses.length > 0 && (
+        {isAssistant && (
+          (Array.isArray(metadata.statuses) && metadata.statuses.length > 0) ||
+          (Array.isArray(metadata.trace) && metadata.trace.length > 0)
+        ) && (
           <details className="group mb-4">
             <summary className="cursor-pointer text-xs font-semibold text-muted-foreground flex items-center gap-2 hover:text-foreground transition-colors select-none">
               <span className="group-open:rotate-90 transition-transform text-[8px]">▶</span>
               Thinking Process
             </summary>
             <div className="mt-2 pl-4 border-l-2 border-border/50 flex flex-col gap-1.5">
-              {metadata.statuses.map((status: string, idx: number) => (
-                <div key={idx} className="text-[11px] text-muted-foreground/80 flex items-center gap-2 animate-fade-in">
+              {Array.isArray(metadata.statuses) && metadata.statuses.map((status: string, idx: number) => (
+                <div key={`status-${idx}`} className="text-[11px] text-muted-foreground/80 flex items-center gap-2 animate-fade-in">
                   <span className="w-1.5 h-1.5 rounded-full bg-primary/40 shrink-0" />
                   {status}
                 </div>
               ))}
+              {Array.isArray(metadata.trace) && metadata.trace.map((entry: Record<string, unknown>, idx: number) => {
+                const label = typeof entry.label === 'string'
+                  ? entry.label
+                  : typeof entry.node === 'string'
+                    ? entry.node
+                    : `Step ${idx + 1}`;
+                const detail = entry.detail as Record<string, unknown> | undefined;
+                const confidence = detail && typeof detail.confidence === 'number'
+                  ? ` (${Math.round(detail.confidence * 100)}% confidence)`
+                  : '';
+                return (
+                  <div key={`trace-${idx}`} className="text-[11px] text-muted-foreground/70 flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30 shrink-0" />
+                    {label}{confidence}
+                  </div>
+                );
+              })}
             </div>
           </details>
         )}

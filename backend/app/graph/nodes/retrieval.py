@@ -17,6 +17,7 @@ def retrieval_node(state: CopilotState) -> CopilotState:
         len(str(state.get("query", ""))),
     )
     session = state["session"]
+    scope_paths = state.get("scope_paths")
     started = time.perf_counter()
     if hasattr(session, "execute"):
         retrieval_service = get_retrieval_service(session)
@@ -24,6 +25,7 @@ def retrieval_node(state: CopilotState) -> CopilotState:
             repository_id=state["repository_id"],
             query=state["query"],
             top_k=8,
+            scope_paths=scope_paths,
         )
     else:
         # Backward-compatible path for tests and stubs that monkeypatch hybrid_retrieve.
@@ -32,6 +34,7 @@ def retrieval_node(state: CopilotState) -> CopilotState:
             repository_id=state["repository_id"],
             query=state["query"],
             top_k=8,
+            scope_paths=scope_paths,
         )
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     runtime_metrics.observe_ms("graph_retrieval_node_latency_ms", elapsed_ms)
@@ -48,4 +51,14 @@ def retrieval_node(state: CopilotState) -> CopilotState:
         for item in results[:8]
     ]
     logger.debug("graph_retrieval - response results=%s", len(results))
-    return {"retrieved_context": results, "source_index": source_index}
+
+    trace = list(state.get("run_trace") or [])
+    trace.append(
+        {
+            "node": "retrieval",
+            "label": f"Retrieved {len(results)} sources",
+            "ts": time.time(),
+            "detail": {"retrieved_count": len(results), "scope_paths": scope_paths or []},
+        }
+    )
+    return {"retrieved_context": results, "source_index": source_index, "run_trace": trace}

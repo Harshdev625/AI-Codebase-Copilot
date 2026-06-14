@@ -169,17 +169,11 @@ const studioStoreBase = create<StudioStoreState>()(
       setPrimarySidebar: (panel) =>
         set({ primarySidebar: panel, sidebarCollapsed: false }),
       focusSidebar: (panel) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:focusSidebar',message:'focusSidebar called',data:{panel,before:get()},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         set({ primarySidebar: panel, sidebarCollapsed: false });
       },
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       setAiPanelOpen: (open) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:setAiPanelOpen',message:'setAiPanelOpen called',data:{open,beforeAiOpen:get().aiPanelOpen,selectedRepositoryId:get().selectedRepositoryId},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-        // #endregion
         set(
           open
             ? { aiPanelOpen: true, primarySidebar: "sessions", sidebarCollapsed: false }
@@ -351,9 +345,6 @@ const studioStoreBase = create<StudioStoreState>()(
         };
       },
       onRehydrateStorage: () => (state, error) => {
-        // #region agent log
-        fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-store.ts:onRehydrateStorage',message:'persist rehydrate',data:{error:!!error,sidebarCollapsed:state?.sidebarCollapsed,aiPanelOpen:state?.aiPanelOpen,selectedRepositoryId:state?.selectedRepositoryId,primarySidebar:state?.primarySidebar},timestamp:Date.now(),hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
         if (error || !state) return;
         const userId = getStoredUser()?.id ?? "guest";
         try {

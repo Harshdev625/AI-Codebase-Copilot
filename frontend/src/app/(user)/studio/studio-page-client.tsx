@@ -42,10 +42,6 @@ export function StudioPageClient(): React.JSX.Element {
     }
 
     focusSidebar("sessions");
-
-    // #region agent log
-    fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-page-client.tsx:init',message:'studio init chat-first',data:{panel,file,patchId,selectedRepositoryId:useStudioStore.getState().selectedRepositoryId,activeTabId:useStudioStore.getState().activeTabId},timestamp:Date.now(),hypothesisId:'E',runId:'flex-layout'})}).catch(()=>{});
-    // #endregion
   }, [searchParams, focusSidebar, setSidebarCollapsed]);
 
   return (

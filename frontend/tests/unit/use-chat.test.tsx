@@ -35,13 +35,16 @@ const mockSetActiveSessionId = jest.fn();
 let mockActiveSessionId: string | null = "existing-session";
 
 jest.mock("@/features/studio/store/studio-store", () => ({
-  useStudioStore: () => ({
-    activeSessionId: mockActiveSessionId,
-    setActiveSessionId: (id: string | null) => {
-      mockActiveSessionId = id;
-      mockSetActiveSessionId(id);
-    },
-  }),
+  useStudioStore: (selector?: (state: { activeSessionId: string | null; setActiveSessionId: (id: string | null) => void }) => unknown) => {
+    const state = {
+      activeSessionId: mockActiveSessionId,
+      setActiveSessionId: (id: string | null) => {
+        mockActiveSessionId = id;
+        mockSetActiveSessionId(id);
+      },
+    };
+    return selector ? selector(state) : state;
+  },
 }));
 
 describe("use-chat hooks", () => {
@@ -168,6 +171,53 @@ describe("use-chat hooks", () => {
       expect(result.current.messages.length).toBe(2);
       expect(result.current.messages[1].content).toBe("hello world");
       expect(mockSetActiveSessionId).toHaveBeenCalledWith("new-session");
+    });
+
+    it("new session start does not clear messages", async () => {
+      mockActiveSessionId = null;
+      (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
+        onEvent({ type: "start", session_id: "new-session" });
+        onEvent({ type: "status", step: "Planning intent: docs" });
+        onEvent({ type: "chunk", delta: "A productivity extension." });
+        onEvent({
+          type: "done",
+          intent: "docs",
+          sources: [{ path: "README.md", content: "test" }],
+          trace: [{ node: "planner", label: "Planning intent: docs" }],
+        });
+      });
+
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
+
+      await act(async () => {
+        await result.current.sendMessage("tell me about the project");
+      });
+
+      expect(result.current.messages.length).toBe(2);
+      expect(result.current.messages[1].content).toBe("A productivity extension.");
+      expect(result.current.messages[1].metadata.statuses).toEqual(["Planning intent: docs"]);
+      expect(result.current.messages[1].metadata.trace).toEqual([
+        { node: "planner", label: "Planning intent: docs" },
+      ]);
+    });
+
+    it("merges done metadata even when sources are empty", async () => {
+      (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
+        onEvent({ type: "start", session_id: "existing-session" });
+        onEvent({ type: "chunk", delta: "answer text" });
+        onEvent({ type: "done", intent: "search", sources: [], trace: [{ node: "retrieval", label: "Retrieved 0 sources" }] });
+      });
+
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
+
+      await act(async () => {
+        await result.current.sendMessage("test");
+      });
+
+      expect(result.current.messages[1].metadata.intent).toBe("search");
+      expect(result.current.messages[1].metadata.trace).toEqual([
+        { node: "retrieval", label: "Retrieved 0 sources" },
+      ]);
     });
 
     it("clears messages", () => {

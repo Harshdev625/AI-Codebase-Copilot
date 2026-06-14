@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,9 +31,62 @@ from app.models.api_models import (
 )
 from app.services.query_service import QueryService
 from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
+from app.llm.prompt_builder import BASE_SYSTEM_PROMPT
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+_ECHO_PREFIXES = (
+    "Context:",
+    "Retrieved codebase sources",
+    "Current user question:",
+    "Graph analysis",
+    "--- Retrieved codebase context",
+)
+
+_INSUFFICIENT_CONTEXT_ANSWER = (
+    "The retrieved context does not contain enough information to answer this question. "
+    "Try rephrasing your question or ensure the repository is fully indexed."
+)
+
+
+def _looks_like_prompt_echo(text: str) -> bool:
+    """Detect when the model regurgitates the retrieval context instead of answering."""
+    probe = text.strip()
+    if not probe:
+        return False
+    for prefix in _ECHO_PREFIXES:
+        if probe.startswith(prefix):
+            return True
+    if "Current user question:" in probe and "Source [S" in probe:
+        return True
+    if re.search(r"Source\s*\[S\d+\].*?\nCode:", probe, re.DOTALL | re.IGNORECASE):
+        return True
+    if probe.count("Source [S") >= 2:
+        return True
+    return False
+
+
+def _is_unacceptable_answer(text: str) -> bool:
+    probe = text.strip()
+    if not probe:
+        return True
+    if _looks_like_prompt_echo(probe):
+        return True
+    if re.search(r"Source\s*\[S\d+\]\s*File:", probe):
+        return True
+    return False
+
+
+def _statuses_from_trace(run_trace: list) -> list[str]:
+    statuses: list[str] = []
+    for entry in run_trace:
+        if isinstance(entry, dict):
+            label = entry.get("label")
+            if label:
+                statuses.append(str(label))
+    return statuses
 
 
 def _session_metadata(row: ChatSession) -> dict:
@@ -343,6 +397,8 @@ async def chat_stream(
 
     intent = str(result.get("intent", "unknown"))
     sources = result.get("retrieved_context", [])
+    run_trace = list(result.get("run_trace") or [])
+    stream_statuses = _statuses_from_trace(run_trace)
     deterministic_answer = None
     build_deterministic = getattr(service, "build_deterministic_answer", None)
     if not from_cache and callable(build_deterministic):
@@ -378,6 +434,9 @@ async def chat_stream(
         try:
             yield _event_success({"type": "start", "intent": intent, "session_id": active_session_id})
             stream_started = True
+
+            for status_label in stream_statuses:
+                yield _event_success({"type": "status", "step": status_label, "stage": "pipeline"})
 
             if from_cache:
                 try:
@@ -443,36 +502,115 @@ async def chat_stream(
 
             # H6 FIX: Stream LLM response with per-delta error recovery
             generated_parts: list[str] = []
+            pending_probe: list[str] = []
+            started_yielding = False
+            used_non_stream_fallback = False
+
+            async def _fallback_non_stream() -> str:
+                llm_answer = await service._get_llm_answer_with_timeout(
+                    req.query,
+                    assembled_context,
+                    mode="single",
+                )
+                if _is_unacceptable_answer(llm_answer):
+                    return _INSUFFICIENT_CONTEXT_ANSWER
+                return llm_answer
+
+            yield _event_success({"type": "status", "step": "Generating answer", "stage": "llm"})
+            stream_statuses.append("Generating answer")
+            result["stream_statuses"] = stream_statuses
+
             try:
-                for delta in service.model_router.stream_chat(prompt=req.query, context=assembled_context):
+                stream_iter = service.model_router.stream_chat(
+                    prompt=req.query,
+                    context=assembled_context,
+                    system_prompt=BASE_SYSTEM_PROMPT,
+                )
+                for delta in stream_iter:
                     try:
                         if not delta:
                             continue
+                        if not started_yielding:
+                            pending_probe.append(delta)
+                            probe_text = "".join(pending_probe)
+                            if len(probe_text.strip()) >= 12 and _looks_like_prompt_echo(probe_text):
+                                logger.warning(
+                                    "chat_stream - prompt echo detected; retrying with non-stream chat"
+                                )
+                                llm_answer = await _fallback_non_stream()
+                                used_non_stream_fallback = True
+                                generated_parts = [llm_answer]
+                                chunk_size = 48
+                                for i in range(0, len(llm_answer), chunk_size):
+                                    piece = llm_answer[i : i + chunk_size]
+                                    yield _event_success({"type": "chunk", "delta": piece})
+                                break
+                            starts_with_echo_prefix = any(
+                                probe_text.lstrip().startswith(p) for p in _ECHO_PREFIXES
+                            )
+                            if not starts_with_echo_prefix and len(probe_text) >= 8:
+                                started_yielding = True
+                                for piece in pending_probe:
+                                    generated_parts.append(piece)
+                                    yield _event_success({"type": "chunk", "delta": piece})
+                                pending_probe = []
+                            elif len(probe_text) >= 160:
+                                logger.warning(
+                                    "chat_stream - 160-char echo prefix buffer hit; forcing non-stream fallback"
+                                )
+                                llm_answer = await _fallback_non_stream()
+                                used_non_stream_fallback = True
+                                generated_parts = [llm_answer]
+                                chunk_size = 48
+                                for i in range(0, len(llm_answer), chunk_size):
+                                    piece = llm_answer[i : i + chunk_size]
+                                    yield _event_success({"type": "chunk", "delta": piece})
+                                break
+                            continue
                         generated_parts.append(delta)
                         yield _event_success({"type": "chunk", "delta": delta})
-                    except Exception as delta_exc:
+                    except Exception:
                         logger.exception("chat_stream - error yielding delta")
-                        # Continue collecting deltas; error won't stop streaming
                         continue
+                if pending_probe and not started_yielding and not used_non_stream_fallback:
+                    joined = "".join(pending_probe)
+                    if _looks_like_prompt_echo(joined):
+                        logger.warning(
+                            "chat_stream - prompt echo detected at stream end; retrying with non-stream chat"
+                        )
+                        llm_answer = await _fallback_non_stream()
+                        generated_parts = [llm_answer]
+                        chunk_size = 48
+                        for i in range(0, len(llm_answer), chunk_size):
+                            piece = llm_answer[i : i + chunk_size]
+                            yield _event_success({"type": "chunk", "delta": piece})
+                    else:
+                        for piece in pending_probe:
+                            generated_parts.append(piece)
+                            yield _event_success({"type": "chunk", "delta": piece})
             except asyncio.CancelledError:
                 logger.info("chat_stream - client disconnected during LLM stream")
                 raise
             except Exception as stream_exc:
                 logger.exception("chat_stream - error in model_router.stream_chat")
                 if generated_parts:
-                    # Partial response already sent; send error to indicate incomplete
                     yield _event_error(
                         "Stream interrupted: response may be incomplete",
                         "stream_interrupted",
                     )
                 else:
-                    # No data sent yet; send full error
                     yield _event_error(str(stream_exc), "llm_stream_error")
                 return
 
+            final_answer = "".join(generated_parts).strip()
+            if _is_unacceptable_answer(final_answer):
+                final_answer = _INSUFFICIENT_CONTEXT_ANSWER
+                generated_parts = [final_answer]
+
             # H6 FIX: Finalize result with error recovery
             try:
-                result["answer"] = "".join(generated_parts)
+                result["answer"] = final_answer
+                result["stream_statuses"] = stream_statuses
                 await service.finalize_result(
                     active_repository_id,
                     active_repo_id,
@@ -481,9 +619,8 @@ async def chat_stream(
                     user_id=str(current_user["id"]),
                     session_id=active_session_id,
                 )
-            except Exception as finalize_exc:
+            except Exception:
                 logger.exception("chat_stream - error finalizing result")
-                # Still send completion even if finalization fails
                 pass
 
             yield _event_success(
@@ -492,7 +629,7 @@ async def chat_stream(
                     "intent": intent,
                     "sources": sources,
                     "proposal": result.get("patch_proposal"),
-                    "trace": result.get("run_trace", []),
+                    "trace": run_trace,
                 }
             )
         except asyncio.CancelledError:

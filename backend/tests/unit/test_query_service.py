@@ -211,16 +211,16 @@ async def test_ensure_session_with_existing_id(query_service):
 
 @pytest.mark.asyncio
 async def test_ensure_session_creates_new(query_service, mock_session):
-    mock_session.execute.return_value = MagicMock()
     result = await query_service._ensure_session(None, "user-1", "repo-1")
     assert result is not None
     assert len(result) > 0
+    mock_session.add.assert_called_once()
     mock_session.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_ensure_session_db_failure(query_service, mock_session):
-    mock_session.execute.side_effect = Exception("DB Error")
+    mock_session.add.side_effect = Exception("DB Error")
     with pytest.raises(DatabaseException, match="Failed to create new chat session"):
         await query_service._ensure_session(None, "user-1", "repo-1")
     mock_session.rollback.assert_called_once()

@@ -54,9 +54,6 @@ export function WelcomeTab(): React.JSX.Element {
               variant="outline"
               className="h-auto flex-col gap-2 border-[#2D313E] py-4"
               onClick={() => {
-                // #region agent log
-                fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'welcome-tab.tsx:explorer',message:'Welcome Open Explorer clicked',data:{selectedRepositoryId},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-                // #endregion
                 focusSidebar("explorer");
               }}
             >
@@ -83,9 +80,6 @@ export function WelcomeTab(): React.JSX.Element {
               variant="outline"
               className="h-auto flex-col gap-2 border-[#2D313E] py-4"
               onClick={() => {
-                // #region agent log
-                fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'welcome-tab.tsx:ask-ai',message:'Welcome Ask AI clicked',data:{selectedRepositoryId},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-                // #endregion
                 setAiPanelOpen(true);
                 focusSidebar("sessions");
               }}

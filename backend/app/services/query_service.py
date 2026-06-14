@@ -26,6 +26,7 @@ from app.core.exceptions import (
     WorkflowError,
 )
 from app.core.resilience import retry, circuit_breaker
+from app.db.models import ChatSession
 
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,13 @@ class QueryService:
             history=history,
             chat_mode=chat_mode,
         )
+        analysis = str(result.get("analysis") or "").strip()
+        if analysis:
+            analysis_summary = analysis[:500]
+            assembled_context = (
+                f"Graph analysis (guidance only — do not repeat verbatim):\n{analysis_summary}\n\n"
+                f"{assembled_context}"
+            )
         result["source_index"] = source_index
         logger.debug(
             "query_prepare - context assembled repository_id=%s snippets=%s context_chars=%s",
@@ -497,6 +505,8 @@ class QueryService:
                 stats=safe_result.get("stats", {}) or {},
                 patch_proposal=safe_result.get("patch_proposal"),
                 session_id=session_id,
+                trace=safe_result.get("run_trace", []) or [],
+                statuses=safe_result.get("stream_statuses", []) or [],
             )
         except Exception:
             logger.exception("Failed to record agent run")
@@ -514,18 +524,13 @@ class QueryService:
         
         new_session_id = str(uuid.uuid4())
         try:
-            self.session.execute(
-                text(
-                    """
-                    INSERT INTO chat_sessions (id, user_id, repository_id)
-                    VALUES (:id, :user_id, :repository_id)
-                    """
-                ),
-                {
-                    "id": new_session_id,
-                    "user_id": user_id,
-                    "repository_id": repository_id,
-                },
+            self.session.add(
+                ChatSession(
+                    id=new_session_id,
+                    user_id=user_id,
+                    repository_id=repository_id,
+                    session_metadata={},
+                )
             )
             self.session.commit()
             return new_session_id
@@ -596,6 +601,8 @@ class QueryService:
                 "sources": source_index,
                 "stats": kwargs.get("stats", {}),
                 "patch_proposal": kwargs.get("patch_proposal"),
+                "trace": kwargs.get("trace", []) or [],
+                "statuses": kwargs.get("statuses", []) or [],
             }
             query_text = str(kwargs.get("query") or "").strip()
             answer_text = str(kwargs.get("answer") or "").strip()

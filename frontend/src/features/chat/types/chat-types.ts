@@ -73,7 +73,7 @@ export type ChatStreamDone = {
   trace?: unknown;
 };
 
-export type ChatStreamStatus = { type: "status"; step: string };
+export type ChatStreamStatus = { type: "status"; step: string; stage?: string };
 export type ChatStreamSource = { type: "source"; source: Source };
 export type ChatStreamProgress = { type: "progress"; stage: string; percent: number };
 export type ChatStreamError = { type: "error"; error: string };

@@ -101,16 +101,10 @@ export function StudioV2Shell({
   }, [sessionsQuery.data?.items, orphanSessionQuery.data]);
 
   React.useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'16bbe5'},body:JSON.stringify({sessionId:'16bbe5',location:'studio-v2-shell.tsx:layout',message:'shell layout state',data:{sidebarCollapsed,primarySidebar,isChatMode,selectedRepositoryId:useStudioStore.getState().selectedRepositoryId,activeTabId:useStudioStore.getState().activeTabId,sessionsCount:sessions.length,repositoryIdProp:repositoryId},timestamp:Date.now(),hypothesisId:'A',runId:'flex-layout'})}).catch(()=>{});
-    // #endregion
-  }, [sidebarCollapsed, primarySidebar, isChatMode, sessions.length, repositoryId]);
-
-  React.useEffect(() => {
     if (orphanSessionQuery.isError && chat.currentSessionId) {
       chat.clearMessages();
     }
-  }, [orphanSessionQuery.isError, chat.currentSessionId, chat]);
+  }, [orphanSessionQuery.isError, chat.currentSessionId, chat.clearMessages]);
 
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -136,7 +130,7 @@ export function StudioV2Shell({
         else chat.clearMessages();
       },
     }),
-    [activeSessionId, chat, setActiveSessionId],
+    [activeSessionId, chat.currentSessionId, chat.selectSession, chat.clearMessages, setActiveSessionId],
   );
 
   const sessionSidebarProps = {

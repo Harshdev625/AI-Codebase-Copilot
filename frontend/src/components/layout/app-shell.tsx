@@ -44,8 +44,13 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
           />
         )}
 
-        {/* Page content */}
-        <main className={cn("flex-1 scroll-smooth custom-scrollbar", variant === "default" && "p-0", variant === "studio" && "overflow-hidden")}>
+        {/* Page content — min-h-0 + overflow-y-auto so flex child can scroll inside 100dvh shell */}
+        <main
+          className={cn(
+            "flex-1 min-h-0 scroll-smooth custom-scrollbar",
+            variant === "studio" ? "overflow-hidden" : "overflow-y-auto p-0",
+          )}
+        >
           {variant === "default" ? (
             <div className={cn("flex min-h-full flex-col", DASHBOARD_CONTAINER_CLASS)}>
               {children}
