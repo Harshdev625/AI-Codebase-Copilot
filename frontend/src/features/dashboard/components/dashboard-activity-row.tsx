@@ -41,7 +41,7 @@ function RecentSessionsCard() {
   }
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-border/60 bg-card/60 p-6 shadow-premium backdrop-blur-xl">
+    <div className="relative overflow-hidden rounded-3xl border border-border/60 dark:border-white/10 bg-card/60 dark:bg-[#161820] p-6 shadow-premium backdrop-blur-xl">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h3 className="text-base font-semibold tracking-tight text-foreground xl:text-lg">Recent Sessions</h3>
@@ -52,7 +52,7 @@ function RecentSessionsCard() {
         <MessageSquare className="h-5 w-5 text-primary" />
       </div>
       {sessions.length === 0 ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-border/40 bg-muted/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-xl border border-dashed border-border/40 bg-gradient-to-b from-muted/5 to-muted/20 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
             {hasIndexedRepo
               ? 'No chat sessions yet.'
@@ -70,7 +70,7 @@ function RecentSessionsCard() {
             <li key={session.id}>
               <Link
                 href={`/studio?session_id=${session.id}${session.repository_id ? `&repository_id=${session.repository_id}` : ''}`}
-                className="group flex items-center justify-between gap-3 rounded-xl border border-border/40 bg-muted/20 px-4 py-3 transition-colors hover:border-primary/30 hover:bg-muted/40"
+                className="group flex items-center justify-between gap-3 rounded-xl border border-border/40 dark:border-white/5 bg-muted/20 dark:bg-[#1A1D24] px-4 py-3 transition-colors hover:border-primary/30 hover:bg-muted/40 dark:hover:bg-[#20242D]"
               >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">

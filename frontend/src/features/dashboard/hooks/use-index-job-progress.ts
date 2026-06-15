@@ -1,6 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as React from 'react';
 
+import { useToast } from '@/components/shared/toast-provider';
 import { repositoryService } from '@/features/repositories/services/repository-service';
+import {
+  invalidateIndexingCaches,
+  isTerminalIndexingStatus,
+} from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 import type { IndexProgress } from '@/features/repositories/types/repository-types';
 
@@ -46,6 +52,14 @@ export function useIndexJobProgress<T extends Record<string, unknown>>(
   fallbackJob: T,
   enabled = true,
 ) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const lastStatusRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    lastStatusRef.current = null;
+  }, [jobId]);
+
   const query = useQuery({
     queryKey: ['index-progress', jobId],
     queryFn: () => repositoryService.getIndexProgress(jobId),
@@ -59,11 +73,29 @@ export function useIndexJobProgress<T extends Record<string, unknown>>(
   });
 
   const job = mergeJobProgress(fallbackJob, query.data);
+  const status = String(job.status ?? query.data?.job_status ?? '').toLowerCase();
+
+  React.useEffect(() => {
+    if (!status || !isTerminalIndexingStatus(status)) {
+      return;
+    }
+    if (lastStatusRef.current === status) {
+      return;
+    }
+    lastStatusRef.current = status;
+    invalidateIndexingCaches(queryClient);
+    if (status === 'failed' || status === 'error') {
+      const message = String(job.message ?? query.data?.message ?? 'Indexing job failed.').trim();
+      toast.error('Indexing Failed', message);
+    }
+  }, [status, queryClient, job.message, query.data?.message, toast]);
 
   return {
     job,
     isInitialLoad: query.isLoading && !query.data,
     isFetching: query.isFetching,
+    isTerminal: isTerminalIndexingStatus(status),
+    isFailed: status === 'failed' || status === 'error',
   };
 }
 

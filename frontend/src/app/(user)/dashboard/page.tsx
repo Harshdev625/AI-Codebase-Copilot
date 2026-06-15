@@ -1,10 +1,9 @@
 'use client';
 
 import * as React from 'react';
-import { Plus, Sparkles } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { DASHBOARD_EYEBROW } from '@/components/layout/nav-tokens';
 import { DashboardAddRepository } from '@/features/dashboard/components/dashboard-add-repository';
 import { DashboardActivityRow } from '@/features/dashboard/components/dashboard-activity-row';
@@ -14,6 +13,13 @@ import { DashboardRecentRepositories } from '@/features/dashboard/components/das
 import { DashboardSection } from '@/features/dashboard/components/dashboard-section';
 import { DashboardStatsGrid } from '@/features/dashboard/components/dashboard-stats-grid';
 import { useDashboard } from '@/features/dashboard/hooks/use-dashboard';
+
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
 
 export default function UserDashboard() {
   const { summary } = useDashboard();
@@ -30,16 +36,15 @@ export default function UserDashboard() {
     addRepoRef.current?.click();
   }, []);
 
-  const addRepositoryControl = (
-    <DashboardAddRepository
-      open={addRepoOpen}
-      onOpenChange={setAddRepoOpen}
-      triggerRef={addRepoRef}
-      triggerVariant="default"
-      triggerClassName="h-12 flex-1 gap-2 shadow-glow-sm sm:flex-1"
-      triggerLabel="Add repository"
-    />
-  );
+  // First-time user detection — no repos and no sessions means brand new
+  const hasRepos = (summary?.recent_repositories?.length ?? 0) > 0;
+  const hasSessions = (summary?.recent_sessions?.length ?? 0) > 0;
+  const isFirstTimeUser = !hasRepos && !hasSessions;
+
+  // Contextual subtitle
+  const heroSubtitle = isFirstTimeUser
+    ? 'Get started by adding a repository — we\'ll index it so you can chat, search, and explore your codebase with AI.'
+    : 'Add repositories, run indexing, then open your codebase to chat and search.';
 
   return (
     <div className="w-full space-y-8 py-6 animate-in fade-in duration-500 lg:space-y-10 lg:py-8 xl:py-10">
@@ -59,11 +64,11 @@ export default function UserDashboard() {
                 {role}
               </Badge>
             </div>
-            <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground lg:text-4xl xl:text-5xl">
-              Welcome back, {displayName}
+            <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground lg:text-4xl xl:text-4xl">
+              {getGreeting()}, {displayName}
             </h1>
             <p className="max-w-xl text-sm font-light leading-relaxed text-muted-foreground lg:text-base xl:text-lg">
-              Add repositories, run indexing, then open your codebase to chat and search.
+              {heroSubtitle}
             </p>
           </div>
 
@@ -71,33 +76,42 @@ export default function UserDashboard() {
             <DashboardContinueCard
               session={continueSession}
               repository={primaryRepo}
-              addRepositoryAction={addRepositoryControl}
               className="h-full border-border/40 bg-background/40"
             />
           </div>
         </div>
       </section>
 
-      <DashboardSection title="Overview" description="Platform metrics at a glance">
-        <DashboardStatsGrid />
-      </DashboardSection>
+      {/* Only show stats when user has data — avoids a wall of zeros for new users */}
+      {!isFirstTimeUser && (
+        <DashboardSection title="Overview" description="Platform metrics at a glance">
+          <DashboardStatsGrid />
+        </DashboardSection>
+      )}
 
       <DashboardSection title="Quick Actions" description="Common engineering workflows">
         <DashboardQuickActions onAddRepository={openAddRepository} />
       </DashboardSection>
 
-      <DashboardSection title="Activity" description="Recent sessions and weekly usage">
-        <DashboardActivityRow />
-      </DashboardSection>
+      {/* Only show activity when user has sessions */}
+      {!isFirstTimeUser && (
+        <DashboardSection title="Activity" description="Recent sessions and weekly usage">
+          <DashboardActivityRow />
+        </DashboardSection>
+      )}
 
       <DashboardSection
         title="Repositories"
         description="Indexed codebases in your project"
         action={
-          <Button size="lg" className="h-11 gap-2 px-5 shadow-glow-sm" onClick={openAddRepository}>
-            <Plus className="h-4 w-4" />
-            Add repository
-          </Button>
+          <DashboardAddRepository
+            open={addRepoOpen}
+            onOpenChange={setAddRepoOpen}
+            triggerRef={addRepoRef}
+            triggerVariant="default"
+            triggerClassName="h-11 gap-2 px-5 shadow-glow-sm"
+            triggerLabel="Add repository"
+          />
         }
       >
         <DashboardRecentRepositories summaryRepos={summary?.recent_repositories} />

@@ -4,7 +4,7 @@ export const NAV_MOBILE_MENU_TOP = 'top-14 md:top-16 xl:top-[4.5rem]';
 
 /** Dashboard page container — wider cap with responsive horizontal padding */
 export const DASHBOARD_CONTAINER_CLASS =
-  'w-full mx-auto max-w-[1920px] px-4 sm:px-6 lg:px-8 xl:px-10 2xl:px-12';
+  'w-full mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-8 xl:px-10 2xl:px-12';
 
 /** Dashboard typography tokens (min 12px / text-xs) */
 export const DASHBOARD_EYEBROW =
@@ -16,4 +16,4 @@ export const DASHBOARD_TABLE_HEAD =
 export const DASHBOARD_TABLE_CELL =
   'text-sm text-foreground lg:text-base xl:text-lg';
 export const DASHBOARD_METRIC_VALUE =
-  'text-3xl font-semibold tracking-tight tabular-nums text-foreground lg:text-4xl xl:text-5xl';
+  'text-3xl font-semibold tracking-tight tabular-nums text-foreground lg:text-4xl xl:text-4xl';

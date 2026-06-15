@@ -13,14 +13,12 @@ import type { DashboardRecentSession, DashboardRecentRepository } from '@/featur
 interface DashboardContinueCardProps {
   session?: DashboardRecentSession | null;
   repository?: DashboardRecentRepository | null;
-  addRepositoryAction?: React.ReactNode;
   className?: string;
 }
 
 export function DashboardContinueCard({
   session,
   repository,
-  addRepositoryAction,
   className,
 }: DashboardContinueCardProps) {
   const indexMutation = useIndexRepository();
@@ -53,7 +51,7 @@ export function DashboardContinueCard({
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-2xl border border-border/50 bg-card/70 shadow-premium backdrop-blur-xl',
+        'overflow-hidden rounded-2xl border border-border/50 dark:border-white/10 bg-card/70 dark:bg-[#161820] shadow-premium backdrop-blur-xl',
         className,
       )}
     >
@@ -103,7 +101,7 @@ export function DashboardContinueCard({
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
             {canOpenCodebase ? (
-              <Button asChild size="lg" className="h-12 flex-1 gap-2 shadow-glow-sm sm:flex-[1.4]">
+              <Button asChild size="lg" className="h-12 flex-1 gap-2 shadow-glow-sm">
                 <Link href={href}>
                   <PlayCircle className="h-4 w-4 shrink-0" aria-hidden />
                   <span>{hasSession ? 'Continue session' : 'Open codebase'}</span>
@@ -113,7 +111,7 @@ export function DashboardContinueCard({
             ) : canStartIndexing ? (
               <Button
                 size="lg"
-                className="h-12 flex-1 gap-2 shadow-glow-sm sm:flex-[1.4]"
+                className="h-12 flex-1 gap-2 shadow-glow-sm"
                 onClick={handleStartIndexing}
                 disabled={indexMutation.isPending}
               >
@@ -125,7 +123,6 @@ export function DashboardContinueCard({
                 Start indexing
               </Button>
             ) : null}
-            {addRepositoryAction}
           </div>
         </div>
       </div>

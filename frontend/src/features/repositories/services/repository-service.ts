@@ -28,6 +28,12 @@ export const repositoryService = {
     });
   },
 
+  deleteRepository(repositoryId: string): Promise<{ deleted: boolean }> {
+    return apiClient<{ deleted: boolean }>(`/v1/repositories/${repositoryId}`, {
+      method: "DELETE",
+    });
+  },
+
   startIndex(payload: IndexRequestPayload): Promise<IndexResponse> {
     return apiClient<IndexResponse>("/v1/index", {
       method: "POST",

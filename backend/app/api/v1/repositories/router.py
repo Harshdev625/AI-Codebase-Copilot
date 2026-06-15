@@ -279,6 +279,22 @@ def add_user_repository(
     )
 
 
+@router.delete("/repositories/{repository_id}")
+def delete_user_repository(
+    repository_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(current_user, {"repository:write"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+    service.soft_delete_repository(
+        session,
+        repository_id=repository_id,
+        user_id=str(current_user["id"]),
+    )
+    return success_response({"deleted": True})
+
+
 # ---------------------------------------------------------------------------
 # ACT Patch Draft
 # ---------------------------------------------------------------------------

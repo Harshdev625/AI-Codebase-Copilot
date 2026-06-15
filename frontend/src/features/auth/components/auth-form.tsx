@@ -349,10 +349,10 @@ export function AuthForm({ mode }: AuthFormProps) {
       initial={{ opacity: 0, y: 16, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-      className="relative overflow-hidden rounded-[1.75rem] border-white/10 bg-white/[0.02] p-6 shadow-[0_24px_80px_-20px_rgba(0,0,0,0.55)] sm:p-8"
+      className="relative overflow-hidden rounded-[1.75rem] border border-indigo-200/40 bg-white/80 p-6 shadow-[0_24px_80px_-20px_rgba(99,102,241,0.12),0_8px_24px_-8px_rgba(0,0,0,0.08)] dark:border-white/[0.1] dark:bg-[rgba(22,24,32,0.85)] dark:shadow-[0_24px_80px_-20px_rgba(0,0,0,0.55)] sm:p-8 lg:p-10"
       role="main"
     >
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.05] via-transparent to-transparent" />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-indigo-100/20 via-transparent to-violet-100/10 dark:from-white/[0.04] dark:via-transparent dark:to-transparent" />
       <motion.div
         variants={authContainerVariants}
         initial="hidden"
@@ -366,14 +366,6 @@ export function AuthForm({ mode }: AuthFormProps) {
           subtitle={copy.subtitle}
         />
 
-        {mode === 'admin-register' && (
-          <motion.div variants={authItemVariants}>
-            <Surface variant="sunken" className="p-3 text-xs leading-relaxed text-muted-foreground">
-              Admin accounts can manage users, repositories, and system health. Keep your secret key
-              confidential.
-            </Surface>
-          </motion.div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           {isRegister && (
@@ -452,7 +444,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               type="password"
               value={adminSecret}
               onChange={setAdminSecret}
-              placeholder="From ADMIN_REGISTRATION_SECRET_KEY"
+              placeholder="Enter your admin secret key"
               autoComplete="off"
               required
               error={errors.adminSecret}

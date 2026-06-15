@@ -4,6 +4,7 @@ import { repositoryService } from '../services/repository-service';
 import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/core/api/errors';
 import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
+import { invalidateIndexingCaches } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 
 
@@ -46,6 +47,23 @@ export function useAddRepository() {
   });
 }
 
+export function useDeleteRepository() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (repositoryId: string) => repositoryService.deleteRepository(repositoryId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+      toast.success('Repository Deleted', 'The repository has been successfully removed.');
+    },
+    onError: (error) => {
+      toast.error('Failed to Delete Repository', toApiError(error));
+    },
+  });
+}
+
 export function useIndexRepository() {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -53,9 +71,7 @@ export function useIndexRepository() {
   return useMutation({
     mutationFn: (payload: IndexRequestPayload) => repositoryService.startIndex(payload),
     onSuccess: (data, variables) => {
-      void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
-      void queryClient.invalidateQueries({ queryKey: ['indexing-jobs'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin'] });
+      invalidateIndexingCaches(queryClient);
 
       const jobId = data.indexing_job_id;
       const repositoryId = variables.repository_id;

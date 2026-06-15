@@ -24,16 +24,21 @@ interface AuthLayoutProps {
 function AmbientBackground() {
   return (
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-zinc-100 via-zinc-50 to-slate-100 dark:from-[#09090b] dark:via-zinc-950 dark:to-[#0c0c0f]" />
+      <div className="absolute inset-0 bg-gradient-to-br from-indigo-50/80 via-violet-50/50 to-sky-50/60 dark:from-[#111318] dark:via-[#0f1117] dark:to-[#131620]" />
       <motion.div
-        className="absolute -left-[8%] top-[10%] h-[min(420px,50vh)] w-[min(420px,50vh)] rounded-full bg-indigo-500/10 blur-[120px] dark:bg-indigo-500/12"
+        className="absolute -left-[8%] top-[10%] h-[min(420px,50vh)] w-[min(420px,50vh)] rounded-full bg-indigo-400/15 blur-[120px] dark:bg-indigo-500/12"
         animate={{ x: [0, 30, 0], y: [0, 18, 0], scale: [1, 1.06, 1] }}
         transition={{ duration: 22, repeat: Infinity, ease: 'easeInOut' }}
       />
       <motion.div
-        className="absolute right-[8%] top-[18%] h-[min(320px,40vh)] w-[min(320px,40vh)] rounded-full bg-teal-500/8 blur-[100px] dark:bg-primary/10"
+        className="absolute right-[8%] top-[18%] h-[min(320px,40vh)] w-[min(320px,40vh)] rounded-full bg-violet-400/12 blur-[100px] dark:bg-primary/10"
         animate={{ x: [0, -24, 0], y: [0, 14, 0], scale: [1, 1.05, 1] }}
         transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
+      />
+      <motion.div
+        className="absolute bottom-[15%] left-[40%] h-[min(280px,35vh)] w-[min(280px,35vh)] rounded-full bg-sky-300/10 blur-[100px] dark:bg-cyan-500/8"
+        animate={{ x: [0, -18, 0], y: [0, -12, 0], scale: [1, 1.04, 1] }}
+        transition={{ duration: 20, repeat: Infinity, ease: 'easeInOut', delay: 4 }}
       />
       <div className="noise-overlay absolute inset-0 opacity-50 dark:opacity-35" />
     </div>
@@ -49,7 +54,7 @@ export function AuthLayout({ children }: AuthLayoutProps) {
     <div className="relative flex min-h-[100dvh] flex-col overflow-hidden text-foreground selection:bg-primary/30">
       <AmbientBackground />
 
-      <header className="relative z-30 flex h-14 shrink-0 items-center justify-between border-b border-white/10 bg-white/[0.02] px-4 backdrop-blur-xl sm:px-6">
+      <header className="relative z-30 flex h-14 shrink-0 items-center justify-between border-b border-indigo-200/30 bg-white/70 px-4 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.02] sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           <Button
             variant="ghost"
@@ -76,9 +81,9 @@ export function AuthLayout({ children }: AuthLayoutProps) {
       </header>
 
       <main className="relative z-10 flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-4 py-6 sm:px-6 lg:py-10">
-        <div className="grid w-full max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+        <div className="grid w-full max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14 xl:max-w-7xl xl:gap-20">
           <AuthMarketing page={page} className="hidden lg:flex" />
-          <div className="w-full max-w-[440px] justify-self-center lg:max-w-none lg:justify-self-end">
+          <div className="w-full max-w-[480px] justify-self-center sm:max-w-[520px] lg:max-w-[520px] lg:justify-self-end">
             <React.Suspense
               fallback={<div className="h-64 animate-pulse rounded-2xl bg-muted/20" />}
             >

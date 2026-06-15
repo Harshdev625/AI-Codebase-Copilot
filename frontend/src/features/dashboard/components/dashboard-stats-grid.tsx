@@ -33,7 +33,7 @@ function StatCard({ label, value, suffix, subtitle, icon, gradient, glow, glowSo
 
   return (
     <div
-      className="group relative flex flex-col gap-3 overflow-hidden bg-card/60 p-6 backdrop-blur-md transition-all duration-300 hover:bg-card/80"
+      className="group relative flex flex-col gap-3 overflow-hidden bg-card/60 dark:bg-[#161820] p-6 backdrop-blur-md transition-all duration-300 hover:bg-card/80 dark:hover:bg-[#20242D]"
       style={{ animationDelay: `${delay}ms` }}
     >
       <div
@@ -182,7 +182,7 @@ export function DashboardStatsGrid() {
   const metricRecord = metrics as Record<string, number | undefined>;
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-border/60 shadow-premium">
+    <div className="relative overflow-hidden rounded-3xl border border-border/60 dark:border-white/10 shadow-premium">
       <div className="grid grid-cols-1 divide-y divide-border/40 sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
         {STAT_CONFIG.map((cfg, i) => (
           <StatCard

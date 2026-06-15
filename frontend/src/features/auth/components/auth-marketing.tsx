@@ -35,7 +35,7 @@ function BentoCard({
       transition={{ duration: 0.45, delay: 0.12 + index * 0.07, ease: 'easeOut' }}
       className={cn('min-h-[132px]', feature.className, hideClass)}
     >
-      <div className="group relative h-full overflow-hidden rounded-2xl border border-white/10 bg-white/[0.03] p-4 backdrop-blur-xl transition-all duration-300 hover:border-indigo-400/25 hover:bg-white/[0.05] dark:bg-white/[0.02]">
+      <div className="group relative h-full overflow-hidden rounded-2xl border border-indigo-200/30 bg-white/60 p-4 backdrop-blur-xl transition-all duration-300 hover:border-indigo-300/50 hover:bg-white/80 hover:shadow-lg hover:shadow-indigo-500/5 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:border-indigo-400/25 dark:hover:bg-white/[0.07] dark:hover:shadow-none">
         {feature.accent && (
           <div
             className={cn(
@@ -76,7 +76,7 @@ export function AuthMarketing({ page, className, onNavigate }: AuthMarketingProp
         transition={{ duration: 0.5 }}
         className="space-y-5"
       >
-        <div className="inline-flex items-center gap-2 rounded-full border border-indigo-400/25 bg-indigo-500/10 px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.22em] text-indigo-600 dark:text-indigo-300">
+        <div className="inline-flex items-center gap-2 rounded-full border border-indigo-300/40 bg-indigo-50 px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.22em] text-indigo-600 dark:border-indigo-400/25 dark:bg-indigo-500/10 dark:text-indigo-300">
           <span className="relative flex h-2 w-2">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-75" />
             <span className="relative inline-flex h-2 w-2 rounded-full bg-indigo-400" />

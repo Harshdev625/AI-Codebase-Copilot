@@ -108,8 +108,8 @@ export function TaskCard({ job, embedded = false }: TaskCardProps) {
     iconClass = 'text-muted-foreground';
     bgClass = 'bg-muted';
   } else if (isRunning) {
-    Icon = Loader2;
-    iconClass = 'text-primary animate-spin';
+    Icon = Activity;
+    iconClass = 'text-primary animate-pulse';
     bgClass = 'bg-primary/10';
   }
 
@@ -211,23 +211,27 @@ export function TaskCard({ job, embedded = false }: TaskCardProps) {
                   <div key={stage.id} className="flex flex-col items-center w-1/4 min-w-0">
                     <div
                       className={[
-                        'w-8 h-8 rounded-full flex items-center justify-center border-2 bg-card',
-                        isCompleted ? 'border-primary bg-primary text-primary-foreground' : '',
-                        isActive ? 'border-primary text-primary' : '',
+                        'w-10 h-10 rounded-full flex items-center justify-center border-2 bg-card relative shadow-sm',
+                        isCompleted ? 'border-primary bg-primary text-primary-foreground shadow-primary/20' : '',
+                        isActive ? 'border-primary text-primary shadow-primary/30' : '',
                         isPending ? 'border-border/60 text-muted-foreground' : '',
                       ].join(' ')}
                     >
                       {isCompleted ? (
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-5 h-5" />
                       ) : isActive ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <stage.icon className="w-5 h-5 animate-pulse" />
                       ) : (
-                        <stage.icon className="w-3.5 h-3.5" />
+                        <stage.icon className="w-4 h-4 opacity-50" />
+                      )}
+                      
+                      {isActive && (
+                        <span className="absolute inset-0 rounded-full border-2 border-primary animate-ping opacity-20" />
                       )}
                     </div>
                     <span
                       className={[
-                        'mt-2 text-[9px] font-bold uppercase tracking-wider text-center leading-tight',
+                        'mt-3 text-[10px] font-bold uppercase tracking-wider text-center leading-tight',
                         isCompleted ? 'text-foreground' : '',
                         isActive ? 'text-primary' : '',
                         isPending ? 'text-muted-foreground/60' : '',
@@ -251,8 +255,14 @@ export function TaskCard({ job, embedded = false }: TaskCardProps) {
             </div>
           </div>
 
-          <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5 flex items-center gap-2.5 min-h-[2.5rem]">
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+          <div className="rounded-lg border border-border/40 bg-background/40 px-3 py-2.5 flex items-center gap-3 min-h-[2.5rem]">
+            {currentStageIndex >= 0 ? (
+              React.createElement(STAGES[currentStageIndex].icon, {
+                className: "h-4 w-4 shrink-0 animate-pulse text-primary"
+              })
+            ) : (
+              <Activity className="h-4 w-4 shrink-0 animate-pulse text-primary" />
+            )}
             <span
               className="text-[11px] text-muted-foreground font-mono truncate flex-1"
               title={String(stats.current_file || job.message || '')}

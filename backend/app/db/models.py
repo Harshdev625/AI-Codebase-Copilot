@@ -58,6 +58,8 @@ class Repository(Base):
     retain_snapshots_mode: Mapped[str] = mapped_column(String, nullable=False, default="LAST_N")
     retain_snapshot_count: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
 
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
 

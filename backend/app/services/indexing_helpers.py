@@ -54,33 +54,34 @@ async def upsert_file_records(
     commit_sha: str,
     file_list: list[Path],
     ignore_spec: PathSpec | None = None,
-) -> tuple[int, list[Path]]:
+    force_rechunk: bool = False,
+) -> tuple[int, list[Path], list[str]]:
     """
     Persist a row in repository_files for every discovered file.
     Uses INSERT ... ON CONFLICT DO UPDATE so repeated indexing is idempotent.
     Commits in batches of 500 rows.
 
-    Returns the number of rows upserted and a list of files that need chunking.
+    Returns the number of rows upserted, a list of files that need chunking, and a list of deleted relative paths.
     """
-    if not file_list:
-        return 0, []
-
     is_sqlite = is_sqlite_session(session)
     ts_sql = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
     BATCH_SIZE = 500
     upserted = 0
 
     files_to_chunk: list[Path] = []
+    deleted_paths: list[str] = []
     
     # Pre-fetch existing hashes for incremental logic
     existing_hashes: dict[str, str] = {}
+    existing_paths: set[str] = set()
     try:
         rows = session.execute(
-            text("SELECT path, hash FROM repository_files WHERE repository_id = :rid"),
+            text("SELECT path, hash FROM repository_files WHERE repository_id = :rid AND status != 'DELETED'"),
             {"rid": repository_id}
         ).mappings().all()
         for r in rows:
             existing_hashes[r["path"]] = r["hash"]
+            existing_paths.add(r["path"])
     except Exception:
         logger.warning("index_file_records - failed to pre-fetch hashes")
 
@@ -158,9 +159,12 @@ async def upsert_file_records(
                 # Incremental Check: If hash matches, we don't need to re-chunk
                 needs_chunking = False
                 if status == "INDEXED" and content_hash:
-                    old_hash = existing_hashes.get(rel)
-                    if old_hash != content_hash:
+                    if force_rechunk:
                         needs_chunking = True
+                    else:
+                        old_hash = existing_hashes.get(rel)
+                        if old_hash != content_hash:
+                            needs_chunking = True
                 
                 if needs_chunking:
                     files_to_chunk.append(fp)
@@ -224,13 +228,36 @@ async def upsert_file_records(
                 exc,
             )
 
+    current_paths = {fp.relative_to(repo_root).as_posix() for fp in file_list}
+    deleted_paths = list(existing_paths - current_paths)
+    
+    if deleted_paths:
+        try:
+            for i in range(0, len(deleted_paths), BATCH_SIZE):
+                batch_deleted = deleted_paths[i: i + BATCH_SIZE]
+                session.execute(
+                    text(
+                        f"""
+                        UPDATE repository_files
+                        SET status = 'DELETED', updated_at = {ts_sql}
+                        WHERE repository_id = :rid AND path IN :paths
+                        """
+                    ),
+                    {"rid": repository_id, "paths": tuple(batch_deleted)}
+                )
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            logger.warning("index_file_records - failed to mark files as DELETED error=%s", exc)
+
     logger.info(
-        "index_file_records - complete repository_id=%s upserted=%s files_to_chunk=%s",
+        "index_file_records - complete repository_id=%s upserted=%s files_to_chunk=%s deleted=%s",
         repository_id,
         upserted,
-        len(files_to_chunk)
+        len(files_to_chunk),
+        len(deleted_paths)
     )
-    return upserted, files_to_chunk
+    return upserted, files_to_chunk, deleted_paths
 
 
 async def create_snapshot(

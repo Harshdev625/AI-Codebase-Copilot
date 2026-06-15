@@ -106,9 +106,14 @@ def get_repositories_for_user(
                 WHERE ij.repository_id = r.id
                 ORDER BY ij.created_at DESC
                 LIMIT 1
-              ) AS latest_job_stats
+              ) AS latest_job_stats,
+              (
+                SELECT COUNT(*)
+                FROM code_chunks cc
+                WHERE cc.repository_id = r.id
+              ) AS latest_indexed_chunks
             FROM repositories r
-            WHERE r.owner_user_id = :user_id
+            WHERE r.owner_user_id = :user_id AND r.is_deleted = false
             ORDER BY r.created_at DESC
             {pagination_sql}
             """
@@ -425,6 +430,7 @@ async def trigger_repository_indexing(
         )
 
         if repository_db_id is not None and indexing_job_id is not None:
+            msg = f"Indexed {total} new chunks" if total > 0 else "Index up to date (no new changes)"
             db.execute(
                 text(
                     f"""
@@ -433,7 +439,7 @@ async def trigger_repository_indexing(
                     WHERE id = :id
                     """
                 ),
-                {"id": indexing_job_id, "message": f"Indexed {total} chunks"},
+                {"id": indexing_job_id, "message": msg},
             )
             db.commit()
             logger.info(
@@ -743,3 +749,18 @@ def get_repository_insights(session: Session, repository_id: str) -> dict[str, A
         "latest_commit": latest_commit_sha,
         "indexing_duration_seconds": indexing_duration
     }
+
+def soft_delete_repository(session: Session, *, repository_id: str, user_id: str) -> None:
+    is_sqlite = _is_sqlite_session(session)
+    timestamp_sql = _timestamp_sql(sqlite=is_sqlite)
+    session.execute(
+        text(
+            f"""
+            UPDATE repositories
+            SET is_deleted = true, updated_at = {timestamp_sql}
+            WHERE id = :id AND owner_user_id = :user_id
+            """
+        ),
+        {"id": repository_id, "user_id": user_id},
+    )
+    session.commit()

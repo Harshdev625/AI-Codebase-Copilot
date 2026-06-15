@@ -98,9 +98,9 @@ export function DashboardQuickActions({ onAddRepository }: DashboardQuickActions
             onClick={() => handleAction(action.id)}
             title={disabled ? 'Index a repository first' : undefined}
             className={cn(
-              'group relative flex h-full items-center gap-4 rounded-2xl border p-4 text-left transition-all duration-300 xl:flex-col xl:items-start xl:p-5',
-              'bg-card/60 backdrop-blur-xl',
-              !disabled && 'hover:-translate-y-0.5 hover:bg-card/80',
+              'group relative flex h-full items-center gap-4 rounded-2xl border dark:border-white/10 p-4 text-left transition-all duration-300 xl:flex-col xl:items-start xl:p-5',
+              'bg-card/60 dark:bg-[#161820] backdrop-blur-xl',
+              !disabled && 'hover:-translate-y-1 hover:bg-card/80 dark:hover:bg-[#20242D]',
               action.borderColor,
               !disabled && action.glow,
               disabled && 'cursor-not-allowed opacity-50',
