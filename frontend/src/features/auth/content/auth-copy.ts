@@ -65,7 +65,7 @@ const USER_FEATURES: AuthFeatureItem[] = [
     icon: BrainCircuit,
     title: 'AI Context Management',
     description:
-      'Pin files, scope folders, and monitor token budgets across your project.',
+      'Pin files, scope folders, and monitor token budgets across your repositories.',
     className: 'md:col-span-5',
     iconClass: 'text-violet-400',
     accent: 'from-violet-500/12 to-transparent',

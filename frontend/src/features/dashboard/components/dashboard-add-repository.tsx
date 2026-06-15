@@ -116,7 +116,7 @@ export function DashboardAddRepository({
               autoFocus
             />
             <p className="text-xs text-muted-foreground">
-              e.g. facebook/react or my-project
+              e.g. facebook/react or my-repo
             </p>
           </div>
           <div className="space-y-2">

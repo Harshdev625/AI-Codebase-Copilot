@@ -279,9 +279,21 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [confirmPassword, setConfirmPassword] = React.useState('');
   const [fullName, setFullName] = React.useState('');
   const [adminSecret, setAdminSecret] = React.useState('');
+  const [inviteToken, setInviteToken] = React.useState('');
   const [errors, setErrors] = React.useState<Record<string, string | undefined>>({});
 
   const registeredToastShown = React.useRef(false);
+  React.useEffect(() => {
+    if (mode !== 'admin-register') return;
+    const invite = searchParams.get('invite')?.trim();
+    const invitedEmail = searchParams.get('email')?.trim();
+    if (invite) {
+      setInviteToken(invite);
+    }
+    if (invitedEmail) {
+      setEmail(invitedEmail);
+    }
+  }, [mode, searchParams]);
   React.useEffect(() => {
     if (registeredToastShown.current) return;
     if (mode !== 'login' && mode !== 'admin-login') return;
@@ -314,7 +326,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         nextErrors.confirmPassword = validatePasswordMatch(password, confirmPassword);
       } else {
         nextErrors.password = validateAdminPassword(password);
-        nextErrors.adminSecret = validateAdminSecret(adminSecret);
+        if (!inviteToken) {
+          nextErrors.adminSecret = validateAdminSecret(adminSecret);
+        }
       }
     }
 
@@ -339,7 +353,9 @@ export function AuthForm({ mode }: AuthFormProps) {
       email,
       password,
       full_name: fullName.trim(),
-      admin_secret_key: adminSecret,
+      ...(inviteToken
+        ? { invite_token: inviteToken }
+        : { admin_secret_key: adminSecret }),
     });
   };
 
@@ -437,7 +453,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             />
           )}
 
-          {mode === 'admin-register' && (
+          {mode === 'admin-register' && !inviteToken && (
             <FormField
               id="admin-register-secret"
               label="Admin Secret Key"
@@ -452,6 +468,12 @@ export function AuthForm({ mode }: AuthFormProps) {
               showPasswordToggle
             />
           )}
+
+          {mode === 'admin-register' && inviteToken ? (
+            <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
+              You are registering with a one-time admin invite. The secret key is not required.
+            </p>
+          ) : null}
 
           <SubmitButton
             id={mode === 'login' ? 'login-submit' : undefined}

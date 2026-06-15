@@ -32,6 +32,34 @@ class User(Base):
 
     repositories: Mapped[list["Repository"]] = relationship("Repository", back_populates="owner", cascade="all, delete-orphan")
     chat_sessions: Mapped[list["ChatSession"]] = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
+    admin_invites_created: Mapped[list["AdminInvite"]] = relationship(
+        "AdminInvite",
+        back_populates="created_by",
+        cascade="all, delete-orphan",
+        foreign_keys="AdminInvite.created_by_user_id",
+    )
+
+
+class AdminInvite(Base):
+    __tablename__ = "admin_invites"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    created_by: Mapped["User"] = relationship(
+        "User",
+        back_populates="admin_invites_created",
+        foreign_keys=[created_by_user_id],
+    )
 
 
 # ---------------------------------------------------------------------------

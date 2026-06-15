@@ -8,7 +8,28 @@ import { ToastProvider, useToast } from '@/components/shared/toast-provider';
 import { ErrorBoundary } from '@/components/shared/error-boundary';
 import { useLogout } from '@/features/auth/hooks/use-auth';
 import { useAuthStore } from '@/store/auth-store';
+import { useOnboardingStore } from '@/store/onboarding-store';
 import { globalEvents, EVENTS } from '@/lib/events';
+import { notifyError } from '@/features/notifications/utils/notify';
+
+function OnboardingInitializer() {
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const userId = useAuthStore((state) => state.user?.id);
+  const userRole = useAuthStore((state) => state.user?.role);
+  const initializeForUser = useOnboardingStore((state) => state.initializeForUser);
+
+  React.useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    if (userRole === 'ADMIN') {
+      return;
+    }
+    initializeForUser(userId ?? null);
+  }, [hydrated, userId, userRole, initializeForUser]);
+
+  return null;
+}
 
 function AuthEventHandler() {
   const pathname = usePathname();
@@ -28,6 +49,7 @@ function AuthEventHandler() {
 
       if (!onAuthPage) {
         toast.error("Session Expired", "Please log in again to continue.");
+        notifyError("Session Expired", "Please log in again to continue.");
       }
     });
     return unsubscribe;
@@ -65,6 +87,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         <ThemeProvider>
           <ToastProvider>
             <AuthEventHandler />
+            <OnboardingInitializer />
             {children}
           </ToastProvider>
         </ThemeProvider>

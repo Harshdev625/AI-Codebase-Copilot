@@ -27,7 +27,7 @@ describe("AuthForm admin-register", () => {
     fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: "Admin" } });
     fireEvent.change(screen.getByPlaceholderText("admin@example.com"), { target: { value: "test@example.com" } });
     fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password" } });
-    fireEvent.change(screen.getByPlaceholderText(/ADMIN_REGISTRATION_SECRET_KEY/i), { target: { value: "secret" } });
+    fireEvent.change(screen.getByPlaceholderText("Enter your admin secret key"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: /create admin account/i }));
 
     expect(registerMock).toHaveBeenCalledWith({

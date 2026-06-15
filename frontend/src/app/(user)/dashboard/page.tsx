@@ -102,7 +102,7 @@ export default function UserDashboard() {
 
       <DashboardSection
         title="Repositories"
-        description="Indexed codebases in your project"
+        description="Indexed codebases in your workspace"
         action={
           <DashboardAddRepository
             open={addRepoOpen}

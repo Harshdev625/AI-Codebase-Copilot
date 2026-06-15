@@ -3,6 +3,7 @@ import { Inter, Outfit, JetBrains_Mono } from "next/font/google";
 
 import { AppProviders } from "@/components/app-providers";
 import { CommandPalette } from "@/components/command-palette";
+import { OnboardingWalkthrough } from "@/features/onboarding/components/onboarding-walkthrough";
 import "@/styles/globals.css";
 
 const inter = Inter({
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
         <AppProviders>
           {children}
           <CommandPalette />
+          <OnboardingWalkthrough />
         </AppProviders>
       </body>
     </html>

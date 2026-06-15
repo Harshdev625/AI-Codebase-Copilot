@@ -96,27 +96,19 @@ def test_auth_flow(api_client):
     assert r.json().get("email") == email
 
 
-def test_project_creation(api_client, authenticated_user):
-    """Test project creation."""
+def test_projects_api_disabled(api_client, authenticated_user):
+    """Project CRUD is disabled; endpoints return 410 Gone."""
     headers = {"Authorization": f"Bearer {authenticated_user['token']}"}
 
-    # Create project
     r = api_client.post(
         f"{BASE}/projects",
         json={"name": "test-project", "description": "A test project"},
         headers=headers,
     )
-    assert r.status_code == 201
-    project = _payload(r)
-    assert project.get("name") == "test-project"
-    assert "id" in project
+    assert r.status_code == 410
 
-    # List projects
     r = api_client.get(f"{BASE}/projects", headers=headers)
-    assert r.status_code == 200
-    projects = _payload(r)
-    assert len(projects.get("items", [])) > 0
-    assert "pagination" in projects
+    assert r.status_code == 410
 
 
 @pytest.mark.asyncio
@@ -124,20 +116,10 @@ async def test_repository_management(api_client, authenticated_user):
     """Test repository addition and listing."""
     headers = {"Authorization": f"Bearer {authenticated_user['token']}"}
 
-    # Create project first
-    r = await api_client.post(
-        f"{BASE}/projects",
-        json={"name": "repo-test-project", "description": "For repo tests"},
-        headers=headers,
-    )
-    project_id = _payload(r).get("id")
-    assert project_id
-
     repo_id = f"test-repo-{uuid.uuid4().hex[:8]}"
 
-    # Add repository
     r = await api_client.post(
-        f"{BASE}/projects/{project_id}/repositories",
+        f"{BASE}/repositories",
         json={
             "repo_id": repo_id,
             "remote_url": "https://github.com/octocat/Hello-World.git",
@@ -149,8 +131,7 @@ async def test_repository_management(api_client, authenticated_user):
     repo = _payload(r)
     assert repo.get("repo_id") == repo_id
 
-    # List repositories
-    r = await api_client.get(f"{BASE}/projects/{project_id}/repositories", headers=headers)
+    r = await api_client.get(f"{BASE}/repositories", headers=headers)
     assert r.status_code == 200
     repos = _payload(r)
     assert len(repos.get("items", [])) > 0
@@ -162,21 +143,14 @@ async def test_index_endpoint(api_client, authenticated_user):
     """Test indexing endpoint response format."""
     headers = {"Authorization": f"Bearer {authenticated_user['token']}"}
 
-    # Create project and repository
-    r = await api_client.post(
-        f"{BASE}/projects",
-        json={"name": "index-test-project", "description": "For indexing tests"},
-        headers=headers,
-    )
-    project_id = _payload(r).get("id")
-
     repo_id = f"index-test-repo-{uuid.uuid4().hex[:8]}"
 
     r = await api_client.post(
-        f"{BASE}/projects/{project_id}/repositories",
+        f"{BASE}/repositories",
         json={
             "repo_id": repo_id,
             "remote_url": "https://github.com/octocat/Hello-World.git",
+            "default_branch": "main",
         },
         headers=headers,
     )

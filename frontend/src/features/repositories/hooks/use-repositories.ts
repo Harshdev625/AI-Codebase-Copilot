@@ -6,6 +6,7 @@ import { toApiError } from '@/core/api/errors';
 import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
 import { invalidateIndexingCaches } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
+import { notifyInfo, notifySuccess, notifyError } from '@/features/notifications/utils/notify';
 
 
 export function useRepositories(limit = 100, offset = 0) {
@@ -40,6 +41,7 @@ export function useAddRepository() {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Repository Added', 'Source has been linked successfully.');
+      notifySuccess('Repository Added', 'Source has been linked successfully.');
     },
     onError: (error) => {
       toast.error('Failed to Add Repository', toApiError(error));
@@ -57,6 +59,7 @@ export function useDeleteRepository() {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Repository Deleted', 'The repository has been successfully removed.');
+      notifySuccess('Repository Deleted', 'The repository has been successfully removed.');
     },
     onError: (error) => {
       toast.error('Failed to Delete Repository', toApiError(error));
@@ -93,6 +96,7 @@ export function useIndexRepository() {
       }
 
       toast.info('Indexing Started', 'The repository is being processed.');
+      notifyInfo('Indexing Started', 'The repository is being processed.');
     },
     onError: (error) => {
       toast.error('Indexing Failed', toApiError(error));
@@ -163,13 +167,6 @@ export function useContextTokens(repositoryId: string, payload: { scope_paths?: 
     queryFn: () => repositoryService.getContextTokens(repositoryId, payload),
     enabled: !!repositoryId,
     staleTime: 60_000,
-  });
-}
-
-export function useProjectRetrieveMutation(projectId: string) {
-  return useMutation({
-    mutationFn: (payload: { query: string; repository_ids: string[]; top_k?: number }) =>
-      repositoryService.retrieveProject(projectId, payload),
   });
 }
 

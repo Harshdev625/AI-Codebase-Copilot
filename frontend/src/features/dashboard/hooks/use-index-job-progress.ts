@@ -9,6 +9,7 @@ import {
 } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 import type { IndexProgress } from '@/features/repositories/types/repository-types';
+import { notifyError, notifySuccess } from '@/features/notifications/utils/notify';
 
 const PROGRESS_POLL_MS = 3000;
 
@@ -87,6 +88,10 @@ export function useIndexJobProgress<T extends Record<string, unknown>>(
     if (status === 'failed' || status === 'error') {
       const message = String(job.message ?? query.data?.message ?? 'Indexing job failed.').trim();
       toast.error('Indexing Failed', message);
+      notifyError('Indexing Failed', message);
+    } else if (status === 'completed' || status === 'complete' || status === 'success') {
+      const message = String(job.message ?? query.data?.message ?? 'Indexing completed.').trim();
+      notifySuccess('Indexing Complete', message);
     }
   }, [status, queryClient, job.message, query.data?.message, toast]);
 

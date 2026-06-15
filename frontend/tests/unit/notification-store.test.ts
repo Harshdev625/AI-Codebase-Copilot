@@ -1,7 +1,8 @@
-import { useNotificationStore } from '@/store/notification-store';
+import { useNotificationStore, selectUnreadCount } from '@/store/notification-store';
 
 describe('notification-store', () => {
   beforeEach(() => {
+    localStorage.removeItem('tm.notifications.items');
     useNotificationStore.setState({ notifications: [] });
   });
 
@@ -42,5 +43,33 @@ describe('notification-store', () => {
     useNotificationStore.getState().clearAll();
     const notifs = useNotificationStore.getState().notifications;
     expect(notifs.length).toBe(0);
+  });
+
+  it('marks all as read and tracks unread count', () => {
+    useNotificationStore.getState().addNotification({
+      title: 'One',
+      message: 'A',
+      type: 'info',
+    });
+    useNotificationStore.getState().addNotification({
+      title: 'Two',
+      message: 'B',
+      type: 'warning',
+    });
+
+    expect(selectUnreadCount(useNotificationStore.getState().notifications)).toBe(2);
+    useNotificationStore.getState().markAllAsRead();
+    expect(selectUnreadCount(useNotificationStore.getState().notifications)).toBe(0);
+  });
+
+  it('removes a single notification', () => {
+    useNotificationStore.getState().addNotification({
+      title: 'Remove me',
+      message: 'Bye',
+      type: 'error',
+    });
+    const id = useNotificationStore.getState().notifications[0].id;
+    useNotificationStore.getState().removeNotification(id);
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
   });
 });

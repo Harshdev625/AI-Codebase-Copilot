@@ -194,10 +194,24 @@ server {
 
 ## Admin Account Setup
 
-1. Set `ADMIN_REGISTRATION_SECRET_KEY` to a strong secret in `backend/.env`
-2. Navigate to `/admin/register` in the frontend
-3. Fill in email, password, and the registration secret
-4. After creating the first admin, **remove or rotate** `ADMIN_REGISTRATION_SECRET_KEY` to lock registration
+### Bootstrap (first admin)
+
+1. Generate a secret: `openssl rand -hex 32`
+2. Set `ADMIN_REGISTRATION_SECRET_KEY` in `backend/.env`
+3. Navigate to `/admin/register` in the frontend
+4. Fill in email, password, and the registration secret
+5. After creating the first admin, **unset** `ADMIN_REGISTRATION_SECRET_KEY` in production
+
+### Invite additional admins (recommended)
+
+1. Sign in as an existing admin and open **Admin → Users & Access**
+2. Use **Admin Invites** to create a one-time link for the new admin email
+3. Share the link (`/admin/register?invite=...&email=...`) — no shared secret required
+4. Invites expire after 72 hours by default and can be revoked before use
+
+### Promote existing users
+
+Any admin can promote a `USER` to `ADMIN` from the Users table without an invite.
 
 ---
 

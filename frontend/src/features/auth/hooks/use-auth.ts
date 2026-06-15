@@ -7,6 +7,11 @@ import { useAuthStore } from "@/store/auth-store";
 import { useToast } from "@/components/shared/toast-provider";
 import { toApiError } from "@/core/api/errors";
 import type { LoginPayload, RegisterPayload } from "@/features/auth/types/auth-types";
+import {
+  consumePendingOnboardingEmail,
+  markBrandNewUser,
+  markPendingOnboardingEmail,
+} from "@/store/onboarding-store";
 
 export const authKeys = {
   me: ["auth", "me"] as const,
@@ -72,6 +77,9 @@ export function useLoginMutation() {
     onSuccess: ({ tokenPayload, me }) => {
       const normalizedRole = String(me.role).toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
       setAuth({ ...me, role: normalizedRole }, tokenPayload.access_token);
+      if (normalizedRole === "USER" && consumePendingOnboardingEmail(me.email)) {
+        markBrandNewUser(me.id);
+      }
       void queryClient.invalidateQueries({ queryKey: authKeys.me });
     },
     onError: (error) => {
@@ -86,6 +94,9 @@ export function useRegisterMutation() {
 
   return useMutation({
     mutationFn: (payload: RegisterPayload) => authService.register(payload),
+    onSuccess: (_data, payload) => {
+      markPendingOnboardingEmail(payload.email);
+    },
     onError: (error) => {
       toast.error("Registration Failed", toApiError(error));
     },

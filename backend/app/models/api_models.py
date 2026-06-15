@@ -148,7 +148,16 @@ class AuthAdminRegisterRequest(StrictRequestModel):
     email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
     password: str = Field(..., min_length=8, max_length=256)
     full_name: str | None = Field(default=None, max_length=120)
-    admin_secret_key: str = Field(..., min_length=1, max_length=256)
+    admin_secret_key: str | None = Field(default=None, max_length=256)
+    invite_token: str | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def require_registration_credential(self) -> "AuthAdminRegisterRequest":
+        secret = (self.admin_secret_key or "").strip()
+        invite = (self.invite_token or "").strip()
+        if not secret and not invite:
+            raise ValueError("Either admin_secret_key or invite_token is required")
+        return self
 
 
 class AuthLoginRequest(StrictRequestModel):

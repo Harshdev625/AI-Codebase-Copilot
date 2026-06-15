@@ -1,7 +1,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
-import { useAuth, useMeQuery, useLogout } from "@/features/auth/hooks/use-auth";
+import { useAuth, useMeQuery, useLogout, useLoginMutation } from "@/features/auth/hooks/use-auth";
 import { authService } from "@/features/auth/services/auth-service";
 import { useAuthStore } from "@/store/auth-store";
+import {
+  consumePendingOnboardingEmail,
+  markPendingOnboardingEmail,
+} from "@/store/onboarding-store";
 import { TestProviders } from "../test-utils";
 
 jest.mock("@/features/auth/services/auth-service", () => ({
@@ -26,6 +30,7 @@ jest.mock("next/navigation", () => ({
 describe("use-auth hook", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    localStorage.clear();
     useAuthStore.setState({ user: null, token: null, isAuthenticated: false, hydrated: true });
     mockReplace.mockClear();
   });
@@ -86,6 +91,26 @@ describe("use-auth hook", () => {
     });
     
     expect(authService.register).toHaveBeenCalledWith({ email: "new@example.com", password: "pwd", full_name: "New" });
+    expect(localStorage.getItem('tm.walkthrough.pendingUserEmail')).toBe('new@example.com');
+  });
+
+  it("marks brand-new user on first login after registration", async () => {
+    markPendingOnboardingEmail("fresh@example.com");
+    const mockTokenPayload = { access_token: "token-fresh", token_type: "bearer" };
+    const mockUser = { id: "fresh-user", email: "fresh@example.com", role: "USER", is_active: true };
+
+    (authService.login as jest.Mock).mockResolvedValueOnce(mockTokenPayload);
+    (authService.me as jest.Mock).mockResolvedValueOnce(mockUser);
+
+    const { result } = renderHook(() => useLoginMutation(), { wrapper: TestProviders });
+    result.current.mutate({ email: "fresh@example.com", password: "pwd" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(consumePendingOnboardingEmail("fresh@example.com")).toBe(false);
+
+    const brandNewKey = 'tm.walkthrough.brandNewByUser';
+    const brandNewMap = JSON.parse(localStorage.getItem(brandNewKey) || '{}');
+    expect(brandNewMap['fresh-user']).toBe(true);
   });
 
   it("provides me query when authenticated", async () => {

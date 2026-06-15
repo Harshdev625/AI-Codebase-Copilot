@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, ChevronRight, Settings, Search, Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
+import { NotificationBell } from "@/features/notifications/components/notification-bell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { NAV_BAR_CLASS, NAV_MOBILE_MENU_TOP } from "./nav-tokens";
@@ -137,6 +138,7 @@ export function TopNavbar({
                 </span>
               )}
               <ThemeToggle />
+              <NotificationBell />
               {!isAdmin && (
                 <Button
                   variant="ghost"

@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { AdminUser } from '@/features/admin/services/admin-service';
 import { adminService } from '@/features/admin/services/admin-service';
 import { AdminUserActionsDialog } from './admin-user-actions-dialog';
+import { AdminInvitesPanel } from './admin-invites-panel';
 
 const PAGE_SIZE = 20;
 
@@ -38,6 +39,7 @@ export function AdminUsersTable() {
 
   return (
     <>
+      <AdminInvitesPanel />
       <div className="rounded-2xl border border-border/40 bg-card/60 p-6 shadow-2xl backdrop-blur-xl">
         <div className="mb-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">

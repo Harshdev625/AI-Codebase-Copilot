@@ -15,6 +15,7 @@ import { Virtuoso } from "react-virtuoso";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/shared/toast-provider";
+import { notifyWarning } from "@/features/notifications/utils/notify";
 import type { useChat } from "@/features/chat/hooks/use-chat";
 import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
 import { ChatMessageItemBubble } from "@/features/chat/components/chat-message-item-bubble";
@@ -28,6 +29,11 @@ import { repositoryService } from "@/features/repositories/services/repository-s
 import { buildFederatedChatQuery, normalizeRepoPath, FEDERATED_CONTEXT_PREFIX } from "@/features/chat/utils/chat-message-utils";
 import type { ChatMode, ChatSession } from "@/features/chat/types/chat-types";
 import { useStudioStore } from "@/features/studio/store/studio-store";
+import { useAuthStore } from "@/store/auth-store";
+import {
+  readFederatedRepoIds,
+  writeFederatedRepoIds,
+} from "@/features/studio/utils/federated-scope-storage";
 
 type StudioChatState = ReturnType<typeof useChat>;
 
@@ -62,6 +68,7 @@ export function StudioCanvasChat({
   variant = "canvas",
 }: StudioCanvasChatProps) {
   const toast = useToast();
+  const userId = useAuthStore((s) => s.user?.id);
   const { setSelectedRepositoryId } = useStudioStore();
   const [query, setQuery] = React.useState("");
   const [mode, setMode] = React.useState<ChatMode>("ASK");
@@ -85,6 +92,19 @@ export function StudioCanvasChat({
 
   const selectedRepo = repositories.find((r) => r.id === repositoryId);
   const branchLabel = selectedRepo?.default_branch || "main";
+
+  React.useEffect(() => {
+    if (!userId) return;
+    const stored = readFederatedRepoIds(userId);
+    if (stored.length > 0) {
+      setSelectedRepoIds(stored);
+    }
+  }, [userId]);
+
+  React.useEffect(() => {
+    if (!userId) return;
+    writeFederatedRepoIds(userId, selectedRepoIds);
+  }, [userId, selectedRepoIds]);
 
   React.useEffect(() => {
     const el = inputAreaRef.current;
@@ -138,6 +158,7 @@ export function StudioCanvasChat({
 
         let formattedContext = FEDERATED_CONTEXT_PREFIX;
         let idx = 0;
+        let failedRepos = 0;
         allResults.forEach((result) => {
           if (result.status === "fulfilled") {
             result.value.items?.forEach((item) => {
@@ -149,8 +170,15 @@ export function StudioCanvasChat({
               formattedContext += `Score: ${(displayScore * 100).toFixed(1)}%\n`;
               formattedContext += "```\n" + item.content + "\n```\n\n";
             });
+          } else {
+            failedRepos += 1;
           }
         });
+        if (failedRepos > 0) {
+          const message = `${failedRepos} of ${selectedRepoIds.length} repositories failed retrieval.`;
+          toast.error("Partial Retrieval", message);
+          notifyWarning("Partial Retrieval", message);
+        }
         if (idx === 0) {
           formattedContext += "(No matching snippets retrieved across repositories)\n\n";
         }

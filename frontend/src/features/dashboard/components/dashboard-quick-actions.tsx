@@ -38,7 +38,7 @@ const ACTIONS = [
     id: 'search',
     icon: Search,
     label: 'Semantic Search',
-    description: 'Hybrid search across your project',
+    description: 'Hybrid search across your repositories',
     requiresIndex: true,
     color: 'text-success',
     gradient: 'from-success/15 to-success/5',
