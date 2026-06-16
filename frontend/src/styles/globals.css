@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:where(.dark, .dark *));
 @theme {
@@ -728,4 +729,40 @@ select {
 }
 .studio-chrome-bg {
   background-color: var(--studio-bg);
+}
+
+/* Monaco: line range highlighted when opened from search */
+.monaco-editor .view-overlays .studio-editor-search-line {
+  background-color: rgba(227, 179, 65, 0.22) !important;
+  border-left: 3px solid #e3b341;
+}
+.monaco-editor .view-overlays .studio-editor-search-match {
+  background-color: rgba(255, 213, 0, 0.5) !important;
+  border-radius: 2px;
+}
+
+/* Studio markdown preview — README HTML blocks, badges, centered headers */
+.studio-markdown-preview [align="center"] {
+  text-align: center;
+}
+.studio-markdown-preview [align="center"] img {
+  display: inline-block;
+  margin: 0.15rem;
+  vertical-align: middle;
+}
+.studio-markdown-preview > div:first-child[align="center"] {
+  margin-bottom: 1.5rem;
+}
+.studio-markdown-preview > div:first-child[align="center"] h1 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.studio-markdown-preview > div:first-child[align="center"] h3 {
+  margin-top: 0;
+  font-weight: 500;
+  color: #8b949e;
+}
+.studio-markdown-preview > div:first-child[align="center"] p {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
 }

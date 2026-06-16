@@ -317,6 +317,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                       ...(event.sources ? { sources: event.sources } : {}),
                       ...(event.proposal ? { patch_proposal: event.proposal } : {}),
                       ...(event.trace ? { trace: event.trace } : {}),
+                      ...(event.usage ? { usage: event.usage } : {}),
                     });
                     return {
                       ...msg,
@@ -327,6 +328,9 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                   return msg;
                 })
               );
+              if (localSessionId) {
+                void queryClient.invalidateQueries({ queryKey: chatKeys.session(localSessionId) });
+              }
             }
           },
           controller.signal

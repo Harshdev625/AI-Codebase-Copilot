@@ -4,6 +4,7 @@ from pathlib import Path
 from app.core.config import settings
 from app.services.repository_cache import (
     WORKING_COPY_COMMIT,
+    normalize_repository_file_path,
     read_repository_file,
     read_workspace_file_bytes,
     repo_cache_root,
@@ -69,3 +70,26 @@ def test_read_workspace_file_bytes_rejects_traversal(tmp_path: Path):
     (repo / "safe.txt").write_text("ok", encoding="utf-8")
 
     assert read_workspace_file_bytes(repo, "../outside.txt") is None
+
+
+def test_normalize_repository_file_path_relative_to_workspace(tmp_path: Path):
+    repo = tmp_path / "timemachine"
+    assets = repo / "assets"
+    assets.mkdir(parents=True)
+    script = assets / "script.js"
+    script.write_text("console.log(1)", encoding="utf-8")
+
+    abs_path = str(script.resolve())
+    assert normalize_repository_file_path(abs_path, workspace=repo) == "assets/script.js"
+    assert normalize_repository_file_path("assets/script.js", workspace=repo) == "assets/script.js"
+
+
+def test_normalize_repository_file_path_strips_after_workspace_name(tmp_path: Path):
+    repo = tmp_path / "timemachine"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    changelog = docs / "CHANGELOG.md"
+    changelog.write_text("# Log", encoding="utf-8")
+
+    long_path = f"Projects/AI Codebase Copilot/timemachine/docs/CHANGELOG.md"
+    assert normalize_repository_file_path(long_path, workspace=repo) == "docs/CHANGELOG.md"

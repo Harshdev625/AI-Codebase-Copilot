@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
 import { getStoredUser } from "@/lib/auth";
+import { formatEditorTabTitle, isMarkdownFile, toRepoRelativePath } from "@/lib/path-utils";
 import {
   createDefaultPersistV2,
   migrateExplorerFirstIfIdle,
@@ -12,6 +13,7 @@ import {
   STUDIO_STORAGE_V2_KEY,
 } from "./migrate-studio-storage";
 import type {
+  EditorSearchHighlight,
   EditorTab,
   MarkdownViewMode,
   MobileStudioTab,
@@ -39,6 +41,7 @@ export interface StudioStoreState {
 
   primarySidebar: PrimarySidebar;
   sidebarCollapsed: boolean;
+  contextPanelOpen: boolean;
   aiPanelOpen: boolean;
   settingsOpen: boolean;
   mobileTab: MobileStudioTab;
@@ -55,6 +58,8 @@ export interface StudioStoreState {
   focusSidebar: (panel: PrimarySidebar) => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebarCollapsed: () => void;
+  setContextPanelOpen: (open: boolean) => void;
+  toggleContextPanel: () => void;
   setAiPanelOpen: (open: boolean) => void;
   toggleAiPanel: () => void;
   setSettingsOpen: (open: boolean) => void;
@@ -62,7 +67,13 @@ export interface StudioStoreState {
   setDensity: (density: StudioDensity) => void;
 
   openWelcomeTab: () => void;
-  openFileTab: (path: string, initialLine?: number, commitSha?: string) => void;
+  openFileTab: (
+    path: string,
+    initialLine?: number,
+    commitSha?: string,
+    initialEndLine?: number,
+    searchHighlight?: EditorSearchHighlight,
+  ) => void;
   openPatchTab: (patchId: string, title?: string) => void;
   closeTab: (tabId: string) => void;
   closeOtherTabs: (tabId: string) => void;
@@ -96,10 +107,6 @@ const userScopedStorage = {
     localStorage.removeItem(`${name}-${userId}`);
   },
 };
-
-function isMarkdownPath(path: string): boolean {
-  return path.toLowerCase().endsWith(".md");
-}
 
 function fileTabId(path: string): string {
   return `file:${path}`;
@@ -166,6 +173,7 @@ const studioStoreBase = create<StudioStoreState>()(
 
       primarySidebar: defaults.primarySidebar,
       sidebarCollapsed: defaults.sidebarCollapsed,
+      contextPanelOpen: defaults.contextPanelOpen,
       aiPanelOpen: defaults.aiPanelOpen,
       settingsOpen: defaults.settingsOpen,
       mobileTab: defaults.mobileTab,
@@ -192,6 +200,8 @@ const studioStoreBase = create<StudioStoreState>()(
       },
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setContextPanelOpen: (open) => set({ contextPanelOpen: open }),
+      toggleContextPanel: () => set((s) => ({ contextPanelOpen: !s.contextPanelOpen })),
       setAiPanelOpen: (open) => {
         set(
           open
@@ -226,24 +236,50 @@ const studioStoreBase = create<StudioStoreState>()(
         });
       },
 
-      openFileTab: (path, initialLine, commitSha) => {
-        const id = fileTabId(path);
-        const title = path.split("/").pop() ?? path;
+      openFileTab: (path, initialLine, commitSha, initialEndLine, searchHighlight) => {
+        const normalizedPath = toRepoRelativePath(path);
+        const id = fileTabId(normalizedPath);
+        const title = formatEditorTabTitle(normalizedPath);
         const defaultView = get().defaultMarkdownView;
+        const markdownView = isMarkdownFile(normalizedPath)
+          ? initialLine || searchHighlight
+            ? "split"
+            : defaultView
+          : undefined;
         const tab: EditorTab = {
           id,
           kind: "file",
           title,
-          filePath: path,
+          filePath: normalizedPath,
           initialLine,
+          initialEndLine,
           commitSha,
-          viewMode: isMarkdownPath(path) ? defaultView : undefined,
+          searchHighlight,
+          viewMode: markdownView,
         };
         set((state) => {
           const existing = state.editorTabs.find((t) => t.id === id);
           let tabs = state.editorTabs;
           if (existing) {
-            tabs = tabs.map((t) => (t.id === id ? { ...t, initialLine, commitSha } : t));
+            tabs = tabs.map((t) =>
+              t.id === id
+                ? {
+                    ...t,
+                    title,
+                    initialLine,
+                    initialEndLine,
+                    commitSha,
+                    searchHighlight,
+                    viewMode:
+                      t.viewMode ??
+                      (isMarkdownFile(normalizedPath)
+                        ? initialLine || searchHighlight
+                          ? "split"
+                          : defaultView
+                        : undefined),
+                  }
+                : t,
+            );
           } else {
             tabs = [...tabs.filter((t) => t.id !== WELCOME_TAB_ID), tab];
             if (tabs.length > MAX_EDITOR_TABS) {
@@ -254,13 +290,10 @@ const studioStoreBase = create<StudioStoreState>()(
           return {
             editorTabs: tabs,
             activeTabId: id,
-            activeFilePath: path,
+            activeFilePath: normalizedPath,
             activeFileInitialLine: initialLine,
             activeFileCommitSha: commitSha,
             activePatchId: null,
-            primarySidebar: "explorer",
-            sidebarCollapsed: false,
-            aiPanelOpen: false,
           };
         });
       },
@@ -285,9 +318,6 @@ const studioStoreBase = create<StudioStoreState>()(
             activeFilePath: null,
             activeFileInitialLine: undefined,
             activeFileCommitSha: undefined,
-            primarySidebar: "explorer",
-            sidebarCollapsed: false,
-            aiPanelOpen: false,
           };
         });
       },
@@ -384,6 +414,7 @@ const studioStoreBase = create<StudioStoreState>()(
         selectedSnapshotId: state.selectedSnapshotId,
         primarySidebar: state.primarySidebar,
         sidebarCollapsed: state.sidebarCollapsed,
+        contextPanelOpen: state.contextPanelOpen,
         aiPanelOpen: state.aiPanelOpen,
         mobileTab: state.mobileTab,
         editorTabs: state.editorTabs,
@@ -409,13 +440,14 @@ const studioStoreBase = create<StudioStoreState>()(
           primarySidebar: migrated.primarySidebar ?? "explorer",
           aiPanelOpen: migrated.aiPanelOpen ?? false,
           sidebarCollapsed: migrated.sidebarCollapsed ?? false,
+          contextPanelOpen: migrated.contextPanelOpen ?? true,
           settingsOpen: false,
           mobileTab: migrated.mobileTab ?? "files",
           editorTabs: migrated.editorTabs,
           activeTabId: migrated.activeTabId,
           editorWordWrap: migrated.editorWordWrap,
           editorMinimap: migrated.editorMinimap,
-          defaultMarkdownView: migrated.defaultMarkdownView ?? "source",
+          defaultMarkdownView: migrated.defaultMarkdownView ?? "preview",
         };
       },
       onRehydrateStorage: () => (state, error) => {

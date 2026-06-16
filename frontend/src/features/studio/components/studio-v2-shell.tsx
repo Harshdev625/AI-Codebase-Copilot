@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { PanelLeftOpen } from "lucide-react";
+import { PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 
 import { ContextPanel } from "@/features/chat/components/context-panel";
 import {
@@ -12,6 +12,7 @@ import {
   useUpdateSessionMutation,
 } from "@/features/chat/hooks/use-chat";
 import type { Repository } from "@/features/repositories/types/repository-types";
+import { useRepositories } from "@/features/repositories/hooks/use-repositories";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -41,19 +42,57 @@ export interface StudioV2ShellProps {
 }
 
 function ContextColumn({ repositoryId }: { repositoryId?: string }) {
+  const { contextPanelOpen, toggleContextPanel } = useStudioStore();
+  const { repositories } = useRepositories();
+  const repo = repositories.find((r) => r.id === repositoryId);
+  const repoLabel = repo?.repo_id?.split("/").pop() ?? "Repository";
+
+  if (!contextPanelOpen) {
+    return (
+      <div
+        className="flex shrink-0 flex-col border-l border-[#1E212B] bg-[#0F1117] px-1 py-2"
+        data-testid="studio-context-panel-collapsed"
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-10 w-10 xl:h-11 xl:w-11"
+          onClick={toggleContextPanel}
+          title="Show context panel"
+          aria-label="Show context panel"
+        >
+          <PanelRightOpen className="h-[18px] w-[18px] xl:h-5 xl:w-5" />
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <aside
-      className="flex h-full w-[min(320px,24vw)] min-w-[280px] shrink-0 flex-col overflow-hidden border-l border-[#1E212B] bg-[#13151A]"
+      className="flex h-full w-[min(300px,22vw)] min-w-[260px] shrink-0 flex-col overflow-hidden border-l border-[#1E212B] bg-[#13151A]"
       data-testid="studio-context-panel"
       aria-label="Repository context"
     >
-      <div className="flex h-10 shrink-0 items-center border-b border-[#1E212B] px-4 xl:h-11">
-        <span className="text-[11px] font-bold tracking-widest text-[#8B949E] xl:text-xs">
-          CONTEXT
-        </span>
+      <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-[#1E212B] px-3 xl:h-11">
+        <div className="min-w-0">
+          <span className="text-[10px] font-bold tracking-widest text-[#6E7681]">CONTEXT</span>
+          <p className="truncate text-xs font-medium text-[#C9D1D9]" title={repo?.repo_id}>
+            {repoLabel}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-[#8B949E] hover:text-[#C9D1D9]"
+          onClick={toggleContextPanel}
+          title="Hide context panel"
+          aria-label="Hide context panel"
+        >
+          <PanelRightClose className="h-4 w-4" />
+        </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-        <ContextPanel repositoryId={repositoryId} />
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+        <ContextPanel repositoryId={repositoryId} embedded />
       </div>
     </aside>
   );

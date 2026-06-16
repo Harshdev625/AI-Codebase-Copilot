@@ -4,7 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useStudioStore } from "@/features/studio/store/studio-store";
-import { useRepositoryRetrieveMutation, useRepositories } from "@/features/repositories/hooks/use-repositories";
+import { useRepositories } from "@/features/repositories/hooks/use-repositories";
 import { Command, Search, Database, MessageSquarePlus, Camera, GitPullRequestDraft, ArrowRight, Sparkles, ListTodo, FileSearch } from "lucide-react";
 
 function navigateToStudio(router: ReturnType<typeof useRouter>, action: () => void) {
@@ -21,7 +21,6 @@ export function CommandPalette() {
   const { selectedRepositoryId, setSearchQuery, focusSidebar } = useStudioStore();
   const { repositories } = useRepositories();
   const selectedRepository = repositories.find((r) => r.id === selectedRepositoryId);
-  const searchMutation = useRepositoryRetrieveMutation(selectedRepository?.id || "");
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -54,12 +53,6 @@ export function CommandPalette() {
     goStudio(() => {
       setSearchQuery(query.trim());
       focusSidebar("search");
-      useStudioStore.getState().setHasSearched(true);
-      searchMutation.mutateAsync({ query: query.trim(), top_k: 20 }).then((res) => {
-        useStudioStore.getState().setSearchResults(res.items || []);
-      }).catch(() => {
-        useStudioStore.getState().setSearchResults([]);
-      });
     });
   };
 

@@ -483,17 +483,8 @@ def get_file_content(
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
-    target_commit = commit_sha
-    if not target_commit:
-        job = session.query(IndexingJob).filter(
-            IndexingJob.repository_id == repository_id,
-            IndexingJob.status == 'completed'
-        ).order_by(IndexingJob.created_at.desc()).first()
-        if not job:
-            raise HTTPException(status_code=404, detail="No indexed commit found")
-        target_commit = job.commit_sha
-
     from app.services.repository_cache import (
+        normalize_repository_file_path,
         read_repository_file,
         resolve_repository_workspace,
     )
@@ -503,6 +494,24 @@ def get_file_content(
 
     if not cache_path:
         raise HTTPException(status_code=404, detail="Repository cache not found on disk")
+
+    path = normalize_repository_file_path(
+        path,
+        workspace=cache_path,
+        local_path=repo.local_path,
+    )
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
+    target_commit = commit_sha
+    if not target_commit:
+        job = session.query(IndexingJob).filter(
+            IndexingJob.repository_id == repository_id,
+            IndexingJob.status == 'completed'
+        ).order_by(IndexingJob.created_at.desc()).first()
+        if not job:
+            raise HTTPException(status_code=404, detail="No indexed commit found")
+        target_commit = job.commit_sha
 
     raw = read_repository_file(cache_path, path, target_commit)
     if raw is None:
@@ -1466,6 +1475,17 @@ def apply_patch(
     })
 
 
+class WorkspaceSearchPayload(BaseModel):
+    query: str
+    case_sensitive: bool = False
+    whole_word: bool = False
+    use_regex: bool = False
+    include_globs: Optional[List[str]] = None
+    exclude_globs: Optional[List[str]] = None
+    max_results: Optional[int] = 500
+    max_matches_per_file: Optional[int] = 50
+
+
 class RetrieveRepositoryPayload(BaseModel):
     query: str
     top_k: Optional[int] = 8
@@ -1477,6 +1497,53 @@ class RetrieveProjectPayload(BaseModel):
     query: str
     top_k: Optional[int] = 10
     repository_ids: List[str]
+
+
+@router.post("/repositories/{repository_id}/search")
+def search_repository_workspace(
+    repository_id: str,
+    payload: WorkspaceSearchPayload,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """VS Code-style text search across repository files (ripgrep or Python fallback)."""
+    assert_scopes(current_user, {"repository:read"})
+    repo_row = ensure_repository_access_by_id(session, repository_id, current_user["id"])
+
+    from app.services.repository_cache import resolve_repository_workspace
+    from app.services.workspace_search import search_workspace
+
+    workspace = resolve_repository_workspace(str(repo_row.get("repo_id") or ""), repo_row.get("local_path"))
+    if workspace is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Repository workspace not found on disk. Clone or index the repository first.",
+        )
+
+    query = payload.query.strip()
+    if not query:
+        return success_response(
+            {
+                "files": [],
+                "total_matches": 0,
+                "total_files": 0,
+                "truncated": False,
+                "engine": "none",
+            }
+        )
+
+    result = search_workspace(
+        workspace,
+        query,
+        case_sensitive=payload.case_sensitive,
+        whole_word=payload.whole_word,
+        use_regex=payload.use_regex,
+        include_globs=payload.include_globs,
+        exclude_globs=payload.exclude_globs,
+        max_results=min(int(payload.max_results or 500), 2000),
+        max_matches_per_file=min(int(payload.max_matches_per_file or 50), 100),
+    )
+    return success_response(result.to_dict())
 
 
 @router.post("/repositories/{repository_id}/retrieve")
@@ -1501,6 +1568,27 @@ def retrieve_repository_endpoint(
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(exc)}")
+
+    from app.db.models import Repository
+    from app.services.repository_cache import (
+        normalize_repository_file_path,
+        resolve_repository_workspace,
+    )
+
+    repo = session.query(Repository).filter(Repository.id == repository_id).first()
+    cache_path = None
+    local_path = None
+    if repo:
+        local_path = repo.local_path
+        cache_path = resolve_repository_workspace(repo.repo_id or repository_id, repo.local_path)
+
+    for item in items:
+        raw_path = str(item.get("path") or "")
+        item["path"] = normalize_repository_file_path(
+            raw_path,
+            workspace=cache_path,
+            local_path=local_path,
+        )
 
     return success_response({"items": items})
 

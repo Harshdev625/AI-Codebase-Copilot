@@ -47,6 +47,7 @@ export interface StudioPersistV2 {
   defaultMarkdownView: MarkdownViewMode;
   density: "comfortable" | "compact";
   mobileTab: MobileStudioTab;
+  contextPanelOpen: boolean;
 }
 
 const VALID_SIDEBARS: PrimarySidebar[] = [
@@ -103,9 +104,10 @@ export function createDefaultPersistV2(): StudioPersistV2 {
     activeTabId: WELCOME_TAB_ID,
     editorWordWrap: true,
     editorMinimap: false,
-    defaultMarkdownView: "source",
+    defaultMarkdownView: "preview",
     density: "comfortable",
     mobileTab: "files",
+    contextPanelOpen: true,
   };
 }
 
@@ -120,6 +122,10 @@ export function migrateV1ToV2(v1: StudioPersistV1): StudioPersistV2 {
 
   if (v1.activeSessionId) {
     base.aiPanelOpen = true;
+  }
+
+  if (typeof v1.contextPanelOpen === "boolean") {
+    base.contextPanelOpen = v1.contextPanelOpen;
   }
 
   if (v1.canvasMode === "editor") {

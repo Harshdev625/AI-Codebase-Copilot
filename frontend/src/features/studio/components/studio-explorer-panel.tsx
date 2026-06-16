@@ -215,15 +215,9 @@ export function StudioExplorerPanel() {
             Indexing may still be in progress — showing available tree entries.
           </p>
         )}
-
-        {!activeSessionId && !selectedSnapshotId && (
-          <p className="px-1 text-[10px] text-[#8B949E]">
-            Start a chat session to pin files to context.
-          </p>
-        )}
       </div>
 
-      <div className="custom-scrollbar flex-1 overflow-y-auto px-2 pb-4">
+        <div className="flex-1 overflow-y-auto px-1 pb-3 custom-scrollbar">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-[#8B949E]">
             <Loader2 className="h-4 w-4 animate-spin" />

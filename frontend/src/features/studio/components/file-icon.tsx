@@ -91,6 +91,7 @@ const BASENAME_SPECS: Record<string, IconSpec> = {
   "readme.md": { icon: FileText, color: "#519aba" },
   "changelog.md": { icon: FileText, color: "#519aba" },
   license: { icon: FileText, color: "#d4aa00" },
+  LICENSE: { icon: FileText, color: "#d4aa00" },
   ".gitignore": { icon: GitBranch, color: "#f05032" },
   ".gitattributes": { icon: GitBranch, color: "#f05032" },
   ".env": { icon: Settings2, color: "#ecd53f" },

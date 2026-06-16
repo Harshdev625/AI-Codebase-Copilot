@@ -17,7 +17,36 @@ def ensure_app_schema() -> None:
         if connection.dialect.name == "postgresql":
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         Base.metadata.create_all(bind=connection)
+        _apply_additive_migrations(connection)
     logger.info("schema_ensure - completed")
+
+
+def _apply_additive_migrations(connection) -> None:
+    """Idempotent ALTERs for columns added after initial table creation."""
+    dialect = connection.dialect.name
+    if dialect == "postgresql":
+        connection.execute(
+            text(
+                "ALTER TABLE chat_sessions "
+                "ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE chat_sessions "
+                "ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL"
+            )
+        )
+    elif dialect == "sqlite":
+        # SQLite lacks IF NOT EXISTS for columns; ignore if already present.
+        for stmt in (
+            "ALTER TABLE chat_sessions ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT 0",
+            "ALTER TABLE chat_sessions ADD COLUMN deleted_at TEXT NULL",
+        ):
+            try:
+                connection.execute(text(stmt))
+            except Exception:
+                pass
 
 
 def reset_app_schema() -> None:

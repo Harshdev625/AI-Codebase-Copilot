@@ -126,3 +126,32 @@ export interface RetrievalItem {
   start_line: number;
   end_line: number;
 }
+
+export interface WorkspaceSearchMatch {
+  line: number;
+  column: number;
+  preview: string;
+}
+
+export interface WorkspaceSearchFileResult {
+  path: string;
+  matches: WorkspaceSearchMatch[];
+}
+
+export interface WorkspaceSearchResponse {
+  files: WorkspaceSearchFileResult[];
+  total_matches: number;
+  total_files: number;
+  truncated: boolean;
+  engine: string;
+}
+
+export interface WorkspaceSearchPayload {
+  query: string;
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  use_regex?: boolean;
+  include_globs?: string[];
+  exclude_globs?: string[];
+  max_results?: number;
+}

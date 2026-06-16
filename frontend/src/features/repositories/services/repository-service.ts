@@ -11,6 +11,8 @@ import type {
   SnapshotDiffResponse,
   TreeResponse,
   RetrievalItem,
+  WorkspaceSearchPayload,
+  WorkspaceSearchResponse,
 } from "@/features/repositories/types/repository-types";
 
 export const repositoryService = {
@@ -139,6 +141,16 @@ export const repositoryService = {
     payload: { query: string; top_k?: number }
   ): Promise<{ items: RetrievalItem[] }> {
     return apiClient<{ items: RetrievalItem[] }>(`/v1/repositories/${repositoryId}/retrieve`, {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  searchWorkspace(
+    repositoryId: string,
+    payload: WorkspaceSearchPayload,
+  ): Promise<WorkspaceSearchResponse> {
+    return apiClient<WorkspaceSearchResponse>(`/v1/repositories/${repositoryId}/search`, {
       method: "POST",
       body: payload,
     });

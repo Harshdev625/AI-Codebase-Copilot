@@ -49,7 +49,7 @@ export function StudioPrimarySidebar({
   onTogglePin: _onTogglePin,
   onArchiveSession: _onArchiveSession,
 }: StudioPrimarySidebarProps) {
-  const { primarySidebar, selectedRepositoryId, openFileTab, openPatchTab, setSidebarCollapsed } =
+  const { primarySidebar, selectedRepositoryId, openPatchTab, setSidebarCollapsed } =
     useStudioStore();
 
   const title = PANEL_TITLES[primarySidebar] ?? primarySidebar.toUpperCase();
@@ -59,9 +59,7 @@ export function StudioPrimarySidebar({
       case "explorer":
         return <StudioExplorerPanel />;
       case "search":
-        return (
-          <SearchPanel onResultClick={(path, _content, line) => openFileTab(path, line)} />
-        );
+        return <SearchPanel />;
       case "snapshots":
         return selectedRepositoryId ? (
           <SnapshotTimeline repositoryId={selectedRepositoryId} />

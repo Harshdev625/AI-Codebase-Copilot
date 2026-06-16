@@ -172,6 +172,7 @@ def _dense_search_postgres_with_embedding(
     stmt = text(
         f"""
         SELECT id, path, symbol, content, repository_id, repo_id,
+               start_line, end_line, language, chunk_type,
                {score_expression}
         FROM {table_name}
         WHERE repository_id = :repository_id
@@ -227,7 +228,7 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
     status_clause = "" if patch_id else "AND status = 'ACTIVE'"
     
     stmt = text(
-        f"SELECT id, path, symbol, content, repository_id, repo_id FROM {table_name} WHERE id IN ({placeholders}) {status_clause}"
+        f"SELECT id, path, symbol, content, repository_id, repo_id, start_line, end_line, language, chunk_type FROM {table_name} WHERE id IN ({placeholders}) {status_clause}"
     )
     params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
     rows = session.execute(stmt, params).mappings().all()
@@ -286,6 +287,7 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         stmt = text(
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
                    1.0 AS score
             FROM {table_name}
             WHERE repository_id = :repository_id
@@ -300,6 +302,7 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         stmt = text(
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
                    ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
             FROM {table_name}
             WHERE repository_id = :repository_id

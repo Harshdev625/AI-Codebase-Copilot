@@ -8,6 +8,9 @@ import { Loader2 } from "lucide-react";
 import { repositoryService } from "@/features/repositories/services/repository-service";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 
+import { applySearchLineHighlight } from "./monaco-line-highlight";
+import type { SearchHighlightOptions } from "./search-highlight-types";
+
 /**
  * Single Monaco editor instance — updates model when active file tab changes.
  * Avoids mounting multiple Editor widgets (memory-safe tab strategy).
@@ -16,14 +19,19 @@ export function MonacoEditorHost({
   filePath,
   commitSha,
   initialLine,
+  initialEndLine,
+  searchHighlight,
 }: {
   filePath: string;
   commitSha?: string;
   initialLine?: number;
+  initialEndLine?: number;
+  searchHighlight?: SearchHighlightOptions;
 }): React.JSX.Element {
   const { resolvedTheme } = useTheme();
   const { editorWordWrap, editorMinimap } = useStudioStore();
   const editorRef = React.useRef<Parameters<NonNullable<React.ComponentProps<typeof Editor>["onMount"]>>[0] | null>(null);
+  const highlightRef = React.useRef<ReturnType<typeof applySearchLineHighlight>>(null);
   const [content, setContent] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -81,11 +89,31 @@ export function MonacoEditorHost({
   }, [selectedRepositoryId, filePath, commitSha]);
 
   React.useEffect(() => {
-    if (editorRef.current && initialLine) {
-      editorRef.current.revealLineInCenter(initialLine);
-      editorRef.current.setPosition({ lineNumber: initialLine, column: 1 });
+    highlightRef.current?.clear();
+    highlightRef.current = null;
+    const editor = editorRef.current;
+    if (!editor || !content) return;
+    if (initialLine || searchHighlight?.snippet) {
+      highlightRef.current = applySearchLineHighlight(
+        editor,
+        initialLine,
+        initialEndLine,
+        searchHighlight,
+      );
     }
-  }, [initialLine, filePath, content]);
+    return () => {
+      highlightRef.current?.clear();
+      highlightRef.current = null;
+    };
+  }, [
+    initialLine,
+    initialEndLine,
+    filePath,
+    content,
+    searchHighlight?.query,
+    searchHighlight?.column,
+    searchHighlight?.snippet,
+  ]);
 
   if (isLoading) {
     return (
@@ -114,9 +142,13 @@ export function MonacoEditorHost({
         value={content ?? ""}
         onMount={(editor) => {
           editorRef.current = editor;
-          if (initialLine) {
-            editor.revealLineInCenter(initialLine);
-            editor.setPosition({ lineNumber: initialLine, column: 1 });
+          if (initialLine || searchHighlight?.snippet) {
+            highlightRef.current = applySearchLineHighlight(
+              editor,
+              initialLine,
+              initialEndLine,
+              searchHighlight,
+            );
           }
         }}
         options={{

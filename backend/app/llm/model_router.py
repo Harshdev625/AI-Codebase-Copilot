@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -10,6 +11,7 @@ import httpx
 from app.core.config import settings
 from app.core.http_client import get_http_client
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT
+from app.llm.token_usage import extract_ollama_usage
 from app.rag.embeddings.provider import get_embedding_provider
 
 
@@ -56,14 +58,26 @@ def build_chat_messages(
     ]
 
 
+@dataclass
+class ChatCompletion:
+    text: str
+    usage: dict[str, Any]
+
+
 class OllamaModelRouter:
     def __init__(self) -> None:
         self.base_url = settings.ollama_base_url.rstrip("/")
         self.chat_model = settings.ollama_chat_model
         self.timeout = settings.ollama_chat_timeout_seconds
         self.embedder = get_embedding_provider()
+        self._stream_usage: dict[str, Any] = {}
 
-    def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> str:
+    def consume_stream_usage(self) -> dict[str, Any]:
+        usage = dict(self._stream_usage)
+        self._stream_usage = {}
+        return usage
+
+    def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> ChatCompletion:
         logger.debug("ollama_chat - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         full_context = context
         short_context = context[:6000] if context else ""
@@ -107,8 +121,13 @@ class OllamaModelRouter:
                     raise last_error from exc
                 message = body.get("message", {})
                 text = str(message.get("content", "")).strip()
-                logger.info("ollama_chat - response received chars=%s", len(text))
-                return text
+                usage = extract_ollama_usage(
+                    body,
+                    prompt_text=f"{prompt}\n{context}",
+                    completion_text=text,
+                )
+                logger.info("ollama_chat - response received chars=%s tokens=%s", len(text), usage.get("total_tokens"))
+                return ChatCompletion(text=text, usage=usage)
             except httpx.HTTPStatusError as exc:
                 body_excerpt = exc.response.text[:200] if exc.response is not None else "<no body>"
                 last_error = RuntimeError(
@@ -172,6 +191,7 @@ class OllamaModelRouter:
                     response.read()
                     response.raise_for_status()
                 yielded = 0
+                completion_parts: list[str] = []
                 for line in response.iter_lines():
                     if not line:
                         continue
@@ -183,8 +203,15 @@ class OllamaModelRouter:
                     delta = str(message.get("content", ""))
                     if delta:
                         yielded += 1
+                        completion_parts.append(delta)
                         yield delta
                     if body.get("done"):
+                        completion_text = "".join(completion_parts)
+                        self._stream_usage = extract_ollama_usage(
+                            body,
+                            prompt_text=f"{prompt}\n{context}",
+                            completion_text=completion_text,
+                        )
                         break
                 logger.info("ollama_stream - completed chunks=%s", yielded)
         except httpx.HTTPStatusError as exc:

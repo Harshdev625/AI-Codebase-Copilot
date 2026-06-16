@@ -23,6 +23,8 @@ export function EditorWorkbench(): React.JSX.Element {
             filePath={activeTab.filePath}
             commitSha={activeTab.commitSha}
             initialLine={activeTab.initialLine}
+            initialEndLine={activeTab.initialEndLine}
+            searchHighlight={activeTab.searchHighlight}
             viewMode={activeTab.viewMode}
           />
         )}

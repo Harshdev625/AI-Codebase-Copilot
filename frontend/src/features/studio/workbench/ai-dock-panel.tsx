@@ -95,8 +95,8 @@ export function AiDockPanel({
               sessions={sessions}
             />
           </div>
-          <div className="hidden max-h-[200px] shrink-0 overflow-hidden border-t border-[#1E212B] lg:block">
-            <ContextPanel repositoryId={repositoryId} />
+          <div className="hidden max-h-[44px] shrink-0 overflow-hidden border-t border-[#1E212B] lg:block">
+            <ContextPanel repositoryId={repositoryId} compact />
           </div>
         </div>
       </div>

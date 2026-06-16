@@ -71,6 +71,23 @@ export type ChatStreamDone = {
   sources: Source[];
   proposal?: unknown;
   trace?: unknown;
+  usage?: TokenUsage;
+  session_usage?: SessionUsageTotals;
+};
+
+export type TokenUsage = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  source?: string;
+  model?: string;
+};
+
+export type SessionUsageTotals = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  request_count?: number;
 };
 
 export type ChatStreamStatus = { type: "status"; step: string; stage?: string };

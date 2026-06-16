@@ -5,6 +5,7 @@ import { repositoryService } from "@/features/repositories/services/repository-s
 import type { TreeItem } from "@/features/repositories/types/repository-types";
 import { sortTreeItems } from "@/features/explorer/utils/sort-tree-items";
 import { FileIcon } from "@/features/studio/components/file-icon";
+import { useStudioStore } from "@/features/studio/store/studio-store";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,7 @@ interface LazyTreeNodeProps {
   name: string;
   path: string;
   type: "FILE" | "DIRECTORY";
+  depth?: number;
   snapshotId?: string;
   patchId?: string;
   status?: "INDEXED" | "ADDED" | "MODIFIED" | "DELETED" | string;
@@ -22,11 +24,18 @@ interface LazyTreeNodeProps {
   scopePaths?: string[];
 }
 
+const INDENT_PX = 12;
+
+function isDotEntry(name: string): boolean {
+  return name.startsWith(".");
+}
+
 export function LazyTreeNode({
   repoId,
   name,
   path,
   type,
+  depth = 0,
   snapshotId,
   patchId,
   status = "INDEXED",
@@ -35,6 +44,9 @@ export function LazyTreeNode({
   contextDisabledReason,
   scopePaths = [],
 }: LazyTreeNodeProps) {
+  const activeFilePath = useStudioStore((s) => s.activeFilePath);
+  const isActive = type === "FILE" && activeFilePath === path;
+  const isDot = isDotEntry(name);
   const [isOpen, setIsOpen] = React.useState(false);
   const [contextMenu, setContextMenu] = React.useState<{ x: number; y: number } | null>(null);
   const [childItems, setChildItems] = React.useState<TreeItem[]>([]);
@@ -120,20 +132,25 @@ export function LazyTreeNode({
       <div
         onClick={handleClick}
         onContextMenu={handleContextMenu}
+        style={{ paddingLeft: depth * INDENT_PX }}
         className={cn(
-          "group flex cursor-pointer items-center justify-between rounded-[4px] px-1.5 py-0.5 text-[13px] font-medium transition-colors hover:bg-accent",
-          status === "ADDED" && "bg-success/5 text-success hover:bg-success/10",
-          status === "MODIFIED" && "bg-primary/5 text-primary hover:bg-primary/10",
-          status === "DELETED" && "text-destructive line-through opacity-60 hover:bg-destructive/5",
+          "group flex cursor-pointer items-center justify-between rounded-[3px] py-[3px] pr-1.5 text-[13px] leading-tight transition-colors",
+          isActive
+            ? "bg-[#37373D] text-[#FFFFFF]"
+            : "text-[#CCCCCC] hover:bg-[#2A2D2E]",
+          isDot && !isActive && "opacity-80",
+          status === "ADDED" && !isActive && "text-[#73C991]",
+          status === "MODIFIED" && !isActive && "text-[#58A6FF]",
+          status === "DELETED" && "text-destructive line-through opacity-60",
         )}
       >
-        <div className="flex min-w-0 items-center gap-1.5 truncate">
-          {type === "DIRECTORY" ? (
-            <>
+        <div className="flex min-w-0 flex-1 items-center gap-0.5 truncate">
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+            {type === "DIRECTORY" ? (
               <button
                 type="button"
                 data-testid={`tree-folder-toggle-${path}`}
-                className="p-0.5 focus:outline-none"
+                className="flex h-4 w-4 items-center justify-center rounded-sm focus:outline-none hover:bg-white/5"
                 aria-expanded={isOpen}
                 aria-label={isOpen ? `Collapse ${name}` : `Expand ${name}`}
                 onClick={(e) => {
@@ -142,19 +159,25 @@ export function LazyTreeNode({
                 }}
               >
                 {isOpen ? (
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[#8B949E]" />
                 ) : (
-                  <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[#8B949E]" />
                 )}
               </button>
-              <FileIcon path={path} isDirectory isOpen={isOpen} />
-            </>
-          ) : (
-            <FileIcon path={path} className="ml-[22px] shrink-0" />
-          )}
+            ) : null}
+          </span>
+          <FileIcon
+            path={path}
+            isDirectory={type === "DIRECTORY"}
+            isOpen={isOpen}
+            className="shrink-0"
+          />
           <span
             data-testid={type === "FILE" ? `tree-file-node-${path}` : undefined}
-            className="truncate font-[family-name:var(--font-sans)] text-foreground/90"
+            className={cn(
+              "truncate pl-1",
+              isDot && "italic",
+            )}
           >
             {name}
           </span>
@@ -220,7 +243,7 @@ export function LazyTreeNode({
       </div>
 
       {isOpen && type === "DIRECTORY" && (
-        <div className="mt-0.5 ml-3 flex flex-col gap-0.5 border-l border-border/40 pl-2">
+        <div className="flex flex-col">
           {isLoading ? (
             <div className="flex items-center gap-2 py-1 text-[10px] text-muted-foreground/60">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -234,6 +257,7 @@ export function LazyTreeNode({
                 name={node.path.split("/").pop() || node.path}
                 path={node.path}
                 type={node.type}
+                depth={depth + 1}
                 snapshotId={snapshotId}
                 patchId={patchId}
                 status={node.status}

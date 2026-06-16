@@ -5,6 +5,7 @@ import { X, FileCode2, GitPullRequestDraft, Home, MoreHorizontal } from "lucide-
 
 import { cn } from "@/lib/utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
+import { FileIcon } from "@/features/studio/components/file-icon";
 import type { EditorTab } from "@/features/studio/types/studio-types";
 import { WELCOME_TAB_ID } from "@/features/studio/types/studio-types";
 
@@ -15,6 +16,9 @@ function tabIcon(tab: EditorTab): React.ReactNode {
     case "patch":
       return <GitPullRequestDraft className="h-4 w-4 shrink-0 opacity-70" />;
     default:
+      if (tab.filePath) {
+        return <FileIcon path={tab.filePath} className="h-4 w-4 shrink-0" />;
+      }
       return <FileCode2 className="h-4 w-4 shrink-0 opacity-70" />;
   }
 }
@@ -76,7 +80,7 @@ export function EditorTabBar(): React.JSX.Element {
             tabIndex={active ? 0 : -1}
             title={tabTooltip(tab)}
             className={cn(
-              "group flex max-w-[200px] min-w-[120px] cursor-pointer items-center gap-1.5 border-r border-[#1E212B] px-3 text-xs transition-colors xl:text-sm",
+              "group flex max-w-[220px] min-w-[100px] cursor-pointer items-center gap-1.5 border-r border-[#1E212B] px-2.5 text-xs transition-colors xl:text-sm",
               active
                 ? "bg-[#0B0D14] text-[#C9D1D9]"
                 : "bg-[#13151A] text-[#8B949E] hover:bg-[#1A1C23] hover:text-[#C9D1D9]",

@@ -16,10 +16,10 @@ export function ScopeBar(): React.JSX.Element {
 
   if (scopePaths.length === 0) {
     return (
-      <div className="shrink-0 border-t border-[#1E212B] px-3 py-2 text-[11px] text-[#8B949E]">
+      <div className="shrink-0 border-t border-[#1E212B] px-3 py-1.5 text-[10px] text-[#6E7681]">
         <span className="flex items-center gap-1.5">
-          <FolderTree className="h-3 w-3" />
-          No scope paths — add from Explorer
+          <FolderTree className="h-3 w-3 shrink-0" />
+          Scope empty — right-click files in Explorer to add
         </span>
       </div>
     );

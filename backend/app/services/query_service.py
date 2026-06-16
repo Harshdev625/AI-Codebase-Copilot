@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -15,6 +16,7 @@ from app.core.config import settings
 from app.graph.workflow import compiled_graph
 from app.llm.model_router import get_model_router
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT, build_context_packet
+from app.llm.token_usage import extract_ollama_usage, merge_usage_totals
 from app.observability.metrics import runtime_metrics
 from app.rag.retrieval.service import get_retrieval_service
 from app.services.cache_service import get_cache_service
@@ -121,11 +123,12 @@ class QueryService:
             )
 
         try:
-            llm_answer = await self._get_llm_answer_with_timeout(
+            llm_answer, usage = await self._get_llm_answer_with_timeout(
                 query,
                 assembled_context,
                 mode="federated" if federated else "single",
             )
+            result["stats"] = {"usage": usage}
         except (LLMRequestError, ExternalServiceError) as exc:
             logger.exception("LLM call failed repo_id=%s repository_id=%s", repo_id, repository_id)
             runtime_metrics.increment("llm_chat_errors_total", mode="federated" if federated else "single")
@@ -176,11 +179,11 @@ class QueryService:
         )
 
     @circuit_breaker(failure_threshold=3, recovery_timeout_seconds=300, service_name="LLM")
-    async def _get_llm_answer_with_timeout(self, query: str, context: str, mode: str) -> str:
+    async def _get_llm_answer_with_timeout(self, query: str, context: str, mode: str) -> tuple[str, dict]:
         with runtime_metrics.timer("llm_chat_latency_ms", mode=mode):
             timeout_seconds = max(5.0, float(settings.ollama_chat_timeout_seconds))
             try:
-                return await asyncio.wait_for(
+                completion = await asyncio.wait_for(
                     asyncio.to_thread(
                         self.model_router.chat,
                         prompt=query,
@@ -189,6 +192,7 @@ class QueryService:
                     ),
                     timeout=timeout_seconds,
                 )
+                return completion.text, dict(completion.usage or {})
             except asyncio.TimeoutError as exc:
                 logger.warning("llm_chat - timeout after %s seconds", timeout_seconds)
                 raise LLMRequestError(f"Language model timed out after {timeout_seconds}s") from exc
@@ -593,16 +597,22 @@ class QueryService:
             return
         try:
             source_index = kwargs.get("source_index", []) or []
-            metadata = {
+            usage = dict((kwargs.get("stats") or {}).get("usage") or {})
+            assistant_metadata = {
                 "intent": kwargs.get("intent"),
                 "repository_id": kwargs.get("repository_id"),
                 "repo_id": kwargs.get("repo_id"),
                 "source_index": source_index,
                 "sources": source_index,
                 "stats": kwargs.get("stats", {}),
+                "usage": usage,
                 "patch_proposal": kwargs.get("patch_proposal"),
                 "trace": kwargs.get("trace", []) or [],
                 "statuses": kwargs.get("statuses", []) or [],
+            }
+            user_metadata = {
+                "repository_id": kwargs.get("repository_id"),
+                "repo_id": kwargs.get("repo_id"),
             }
             query_text = str(kwargs.get("query") or "").strip()
             answer_text = str(kwargs.get("answer") or "").strip()
@@ -620,7 +630,7 @@ class QueryService:
                         "chat_session_id": session_id,
                         "role": "user",
                         "content": query_text,
-                        "metadata": json.dumps(metadata),
+                        "metadata": json.dumps(user_metadata),
                     },
                 )
 
@@ -637,13 +647,35 @@ class QueryService:
                         "chat_session_id": session_id,
                         "role": "assistant",
                         "content": answer_text,
-                        "metadata": json.dumps(metadata),
+                        "metadata": json.dumps(assistant_metadata),
                     },
                 )
+
+            self._touch_session(session_id, query_text=query_text, usage=usage)
             self.session.commit()
         except Exception as exc:
             self.session.rollback()
             raise DatabaseException("Failed to record agent run") from exc
+
+    def _touch_session(self, session_id: str, *, query_text: str, usage: dict) -> None:
+        row = self.session.query(ChatSession).filter(ChatSession.id == session_id).first()
+        if not row:
+            return
+
+        now = datetime.now(timezone.utc)
+        row.last_activity_at = now
+        row.updated_at = now
+
+        title = (row.session_title or "").strip()
+        if not title and query_text:
+            preview = query_text.strip()
+            row.session_title = preview[:60] + ("…" if len(preview) > 60 else "")
+
+        meta = dict(row.session_metadata or {})
+        if query_text:
+            meta["title_preview"] = query_text.strip()[:80]
+        meta["usage_totals"] = merge_usage_totals(meta.get("usage_totals"), usage)
+        row.session_metadata = meta
 
     async def _invoke_graph_with_trace(self, state: dict) -> dict:
         try:

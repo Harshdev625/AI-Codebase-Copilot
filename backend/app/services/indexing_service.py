@@ -1206,10 +1206,11 @@ class IndexingService:
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
                 try:
+                    rel_path = file_path.relative_to(root).as_posix()
                     source = file_path.read_text(encoding="utf-8", errors="ignore")
                     if file_path.suffix == ".py":
                         try:
-                            python_chunks = chunk_python_file(repo_id, commit_sha, file_path, source)
+                            python_chunks = chunk_python_file(repo_id, commit_sha, rel_path, source)
                         except Exception:
                             python_chunks = []
 
@@ -1218,11 +1219,11 @@ class IndexingService:
 
                         # Keep python files searchable even when AST parsing fails
                         # or when a file has no function/class definitions.
-                        return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
-                    structured_chunks = chunk_with_tree_sitter(repo_id, commit_sha, file_path, source)
+                        return file_path, self.generic_chunk_file(repo_id, commit_sha, rel_path, source, file_path.suffix), None
+                    structured_chunks = chunk_with_tree_sitter(repo_id, commit_sha, rel_path, source, file_path)
                     if structured_chunks:
                         return file_path, structured_chunks, None
-                    return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
+                    return file_path, self.generic_chunk_file(repo_id, commit_sha, rel_path, source, file_path.suffix), None
                 except Exception as exc:
                     return file_path, [], exc
 
@@ -1440,7 +1441,14 @@ class IndexingService:
             )
             chunk.id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
-    def generic_chunk_file(self, repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
+    def generic_chunk_file(
+        self,
+        repo_id: str,
+        commit_sha: str,
+        rel_path: str,
+        source: str,
+        file_suffix: str = "",
+    ) -> list[CodeChunk]:
         # Simple chunking: split file into N-line chunks (e.g., 40 lines)
         chunks: list[CodeChunk] = []
         lines = source.splitlines()
@@ -1456,15 +1464,15 @@ class IndexingService:
             start_line = i + 1
             end_line = min(i + chunk_size, len(lines))
             # Use UUID5 for deterministic, Qdrant-compatible IDs
-            raw_key = f"{repo_id}|{file_path}|{start_line}|{end_line}"
+            raw_key = f"{repo_id}|{rel_path}|{start_line}|{end_line}"
             chunk_id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
             chunks.append(
                 CodeChunk(
                     id=chunk_id,
                     repo_id=repo_id,
                     commit_sha=commit_sha,
-                    path=str(file_path),
-                    language=file_path.suffix.lstrip('.'),
+                    path=rel_path,
+                    language=file_suffix.lstrip("."),
                     symbol="",
                     chunk_type="generic",
                     start_line=start_line,

@@ -41,7 +41,7 @@ SYMBOL_REGEXES = [
 def _make_chunk(
     repo_id: str,
     commit_sha: str,
-    file_path: Path,
+    rel_path: str,
     language: str,
     symbol: str,
     chunk_type: str,
@@ -49,12 +49,12 @@ def _make_chunk(
     end_line: int,
     content: str,
 ) -> CodeChunk:
-    raw_key = f"{repo_id}|{file_path}|{symbol}|{start_line}|{end_line}|{content[:200]}"
+    raw_key = f"{repo_id}|{rel_path}|{symbol}|{start_line}|{end_line}|{content[:200]}"
     return CodeChunk(
         id=str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key)),
         repo_id=repo_id,
         commit_sha=commit_sha,
-        path=str(file_path),
+        path=rel_path,
         language=language,
         symbol=symbol,
         chunk_type=chunk_type,
@@ -81,6 +81,7 @@ def _iter_nodes(root_node):
 def _chunk_with_tree_sitter_parser(
     repo_id: str,
     commit_sha: str,
+    rel_path: str,
     file_path: Path,
     source: str,
     language: str,
@@ -136,7 +137,7 @@ def _chunk_with_tree_sitter_parser(
             _make_chunk(
                 repo_id=repo_id,
                 commit_sha=commit_sha,
-                file_path=file_path,
+                rel_path=rel_path,
                 language=language,
                 symbol=symbol,
                 chunk_type=chunk_type,
@@ -155,7 +156,13 @@ def _chunk_with_tree_sitter_parser(
     return chunks
 
 
-def _fallback_structured_chunks(repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
+def _fallback_structured_chunks(
+    repo_id: str,
+    commit_sha: str,
+    rel_path: str,
+    file_path: Path,
+    source: str,
+) -> list[CodeChunk]:
     language = file_path.suffix.lstrip(".") or "text"
     lines = source.splitlines()
     chunks: list[CodeChunk] = []
@@ -178,7 +185,7 @@ def _fallback_structured_chunks(repo_id: str, commit_sha: str, file_path: Path, 
             _make_chunk(
                 repo_id=repo_id,
                 commit_sha=commit_sha,
-                file_path=file_path,
+                rel_path=rel_path,
                 language=language,
                 symbol=symbol,
                 chunk_type="generic",
@@ -192,13 +199,19 @@ def _fallback_structured_chunks(repo_id: str, commit_sha: str, file_path: Path, 
     return chunks
 
 
-def chunk_with_tree_sitter(repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
-    logger.debug("chunk_tree_sitter - start repo_id=%s path=%s", repo_id, file_path)
+def chunk_with_tree_sitter(
+    repo_id: str,
+    commit_sha: str,
+    rel_path: str,
+    source: str,
+    file_path: Path,
+) -> list[CodeChunk]:
+    logger.debug("chunk_tree_sitter - start repo_id=%s path=%s", repo_id, rel_path)
     language = _detect_language(file_path)
     if language:
-        chunks = _chunk_with_tree_sitter_parser(repo_id, commit_sha, file_path, source, language)
+        chunks = _chunk_with_tree_sitter_parser(repo_id, commit_sha, rel_path, file_path, source, language)
         if chunks:
             return chunks
 
-    logger.debug("chunk_tree_sitter - falling back to regex chunking path=%s", file_path)
-    return _fallback_structured_chunks(repo_id, commit_sha, file_path, source)
+    logger.debug("chunk_tree_sitter - falling back to regex chunking path=%s", rel_path)
+    return _fallback_structured_chunks(repo_id, commit_sha, rel_path, file_path, source)

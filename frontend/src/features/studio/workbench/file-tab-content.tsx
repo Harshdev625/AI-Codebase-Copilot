@@ -9,33 +9,58 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { repositoryService } from "@/features/repositories/services/repository-service";
 import { useStudioStore } from "@/features/studio/store/studio-store";
-import type { MarkdownViewMode } from "@/features/studio/types/studio-types";
+import type { EditorSearchHighlight, MarkdownViewMode } from "@/features/studio/types/studio-types";
 import { MonacoEditorHost } from "./monaco-editor-host";
 import { MarkdownFileViewer } from "./markdown-file-viewer";
+import { applySearchLineHighlight } from "./monaco-line-highlight";
+import type { SearchHighlightOptions } from "./search-highlight-types";
 
-function isMarkdownPath(filePath: string): boolean {
-  return filePath.toLowerCase().endsWith(".md");
-}
+import { isMarkdownFile } from "@/lib/path-utils";
 
 function MarkdownMonacoPane({
   filePath,
   content,
   initialLine,
+  initialEndLine,
+  searchHighlight,
 }: {
   filePath: string;
   content: string;
   initialLine?: number;
+  initialEndLine?: number;
+  searchHighlight?: SearchHighlightOptions;
 }): React.JSX.Element {
   const { resolvedTheme } = useTheme();
   const { editorWordWrap, editorMinimap } = useStudioStore();
   const editorRef = React.useRef<Parameters<NonNullable<React.ComponentProps<typeof Editor>["onMount"]>>[0] | null>(null);
+  const highlightRef = React.useRef<ReturnType<typeof applySearchLineHighlight>>(null);
 
   React.useEffect(() => {
-    if (editorRef.current && initialLine) {
-      editorRef.current.revealLineInCenter(initialLine);
-      editorRef.current.setPosition({ lineNumber: initialLine, column: 1 });
+    highlightRef.current?.clear();
+    highlightRef.current = null;
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (initialLine || searchHighlight?.snippet) {
+      highlightRef.current = applySearchLineHighlight(
+        editor,
+        initialLine,
+        initialEndLine,
+        searchHighlight,
+      );
     }
-  }, [initialLine, filePath, content]);
+    return () => {
+      highlightRef.current?.clear();
+      highlightRef.current = null;
+    };
+  }, [
+    initialLine,
+    initialEndLine,
+    filePath,
+    content,
+    searchHighlight?.query,
+    searchHighlight?.column,
+    searchHighlight?.snippet,
+  ]);
 
   return (
     <div className="h-full w-full min-h-0" data-testid="monaco-editor-host">
@@ -48,9 +73,13 @@ function MarkdownMonacoPane({
         value={content}
         onMount={(editor) => {
           editorRef.current = editor;
-          if (initialLine) {
-            editor.revealLineInCenter(initialLine);
-            editor.setPosition({ lineNumber: initialLine, column: 1 });
+          if (initialLine || searchHighlight?.snippet) {
+            highlightRef.current = applySearchLineHighlight(
+              editor,
+              initialLine,
+              initialEndLine,
+              searchHighlight,
+            );
           }
         }}
         options={{
@@ -73,21 +102,27 @@ export function FileTabContent({
   filePath,
   commitSha,
   initialLine,
-  viewMode = "source",
+  initialEndLine,
+  searchHighlight,
+  viewMode = "preview",
 }: {
   tabId: string;
   filePath: string;
   commitSha?: string;
   initialLine?: number;
+  initialEndLine?: number;
+  searchHighlight?: EditorSearchHighlight;
   viewMode?: MarkdownViewMode;
 }): React.JSX.Element {
   const selectedRepositoryId = useStudioStore((s) => s.selectedRepositoryId);
   const setTabViewMode = useStudioStore((s) => s.setTabViewMode);
+  const defaultMarkdownView = useStudioStore((s) => s.defaultMarkdownView);
   const [content, setContent] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
-  const isMarkdown = isMarkdownPath(filePath);
+  const isMarkdown = isMarkdownFile(filePath);
+  const effectiveViewMode = viewMode ?? defaultMarkdownView;
 
   React.useEffect(() => {
     if (!isMarkdown) return;
@@ -123,6 +158,8 @@ export function FileTabContent({
         filePath={filePath}
         commitSha={commitSha}
         initialLine={initialLine}
+        initialEndLine={initialEndLine}
+        searchHighlight={searchHighlight}
       />
     );
   }
@@ -148,7 +185,7 @@ export function FileTabContent({
       key={mode}
       type="button"
       size="sm"
-      variant={viewMode === mode ? "secondary" : "ghost"}
+      variant={effectiveViewMode === mode ? "secondary" : "ghost"}
       className="h-7 gap-1.5 px-2 text-xs"
       onClick={() => setTabViewMode(tabId, mode)}
     >
@@ -174,16 +211,23 @@ export function FileTabContent({
           viewMode === "split" && "grid grid-rows-2",
         )}
       >
-        {(viewMode === "source" || viewMode === "split") && (
+        {(effectiveViewMode === "source" || effectiveViewMode === "split") && (
           <MarkdownMonacoPane
             filePath={filePath}
             content={content ?? ""}
             initialLine={initialLine}
+            initialEndLine={initialEndLine}
+            searchHighlight={searchHighlight}
           />
         )}
-        {(viewMode === "preview" || viewMode === "split") && (
-          <div className={cn(viewMode === "split" && "border-t border-[#1E212B]")}>
-            <MarkdownFileViewer content={content ?? ""} />
+        {(effectiveViewMode === "preview" || effectiveViewMode === "split") && (
+          <div
+            className={cn(
+              "h-full min-h-0",
+              effectiveViewMode === "split" && "border-t border-[#1E212B]",
+            )}
+          >
+            <MarkdownFileViewer content={content ?? ""} className="h-full" />
           </div>
         )}
       </div>

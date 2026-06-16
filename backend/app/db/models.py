@@ -381,6 +381,8 @@ class ChatSession(Base):
     session_mode: Mapped[str] = mapped_column(String, nullable=False, server_default="ASK")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())

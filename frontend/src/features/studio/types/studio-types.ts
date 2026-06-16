@@ -6,13 +6,21 @@ export type EditorTabKind = "welcome" | "file" | "patch";
 
 export type MarkdownViewMode = "source" | "preview" | "split";
 
+export interface EditorSearchHighlight {
+  query?: string;
+  column?: number;
+  snippet?: string;
+}
+
 export interface EditorTab {
   id: string;
   kind: EditorTabKind;
   title: string;
   filePath?: string;
   initialLine?: number;
+  initialEndLine?: number;
   commitSha?: string;
+  searchHighlight?: EditorSearchHighlight;
   patchId?: string;
   viewMode?: MarkdownViewMode;
 }

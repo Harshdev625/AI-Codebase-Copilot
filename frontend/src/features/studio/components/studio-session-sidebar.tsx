@@ -26,6 +26,19 @@ import { cn } from "@/lib/utils";
 import type { ChatSession } from "@/features/chat/types/chat-types";
 import type { Repository } from "@/features/repositories/types/repository-types";
 import { useChatSessions } from "@/features/chat/hooks/use-chat";
+import {
+  formatTokenCount,
+  getSessionDisplayTitle,
+  getSessionUsageTotals,
+} from "@/features/chat/utils/token-usage-utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface StudioSessionSidebarProps {
   sessions: ChatSession[];
@@ -82,7 +95,8 @@ function SessionItem({
   onTogglePin?: (isPinned: boolean) => void;
   onDelete?: () => void;
 }) {
-  const label = session.session_title || session.summary || "Untitled session";
+  const label = getSessionDisplayTitle(session);
+  const usageTotals = getSessionUsageTotals(session);
   const mode = session.session_mode || "ASK";
   const isArchived = session.is_archived;
   const isPinned = session.is_pinned;
@@ -97,7 +111,7 @@ function SessionItem({
 
   const handleRenameStart = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setEditValue(session.session_title || session.summary || "");
+    setEditValue(session.session_title || session.summary || (session.metadata?.title_preview as string) || "");
     setIsEditing(true);
   };
 
@@ -168,10 +182,20 @@ function SessionItem({
           <p className="text-[#C9D1D9] text-[12px] font-medium leading-snug truncate">{label}</p>
         )}
         {!isEditing && (
-          <div className="flex items-center justify-between mt-0.5">
-            <span className="text-[#8B949E] text-[10px] shrink-0">
-              {format(new Date(session.last_activity_at || session.updated_at), "MMM d, h:mm a")}
-            </span>
+          <div className="flex items-center justify-between mt-0.5 gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="text-[#8B949E] text-[10px] shrink-0">
+                {format(new Date(session.last_activity_at || session.updated_at), "MMM d, h:mm a")}
+              </span>
+              {usageTotals?.total_tokens != null && usageTotals.total_tokens > 0 && (
+                <span
+                  className="text-[#6E7681] text-[10px] font-mono shrink-0"
+                  title={`${formatTokenCount(usageTotals.prompt_tokens)} prompt · ${formatTokenCount(usageTotals.completion_tokens)} completion`}
+                >
+                  {formatTokenCount(usageTotals.total_tokens)} tok
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
               {onRename && (
                 <button
@@ -234,7 +258,7 @@ function FolderGroup({
   onArchiveSession,
   onRenameSession,
   onTogglePinSession,
-  onDeleteSession,
+  onRequestDelete,
 }: {
   title: string;
   sessions: ChatSession[];
@@ -243,7 +267,7 @@ function FolderGroup({
   onArchiveSession?: (id: string, isArchived: boolean) => void;
   onRenameSession?: (id: string, title: string) => void;
   onTogglePinSession?: (id: string, isPinned: boolean) => void;
-  onDeleteSession?: (id: string) => void;
+  onRequestDelete?: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
   if (sessions.length === 0) return null;
@@ -286,7 +310,7 @@ function FolderGroup({
               onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
               onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
               onTogglePin={onTogglePinSession ? (v) => onTogglePinSession(s.id, v) : undefined}
-              onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
+              onDelete={onRequestDelete ? () => onRequestDelete(s.id) : undefined}
             />
           ))}
         </div>
@@ -311,6 +335,7 @@ export function StudioSessionSidebar({
   const [searchQuery, setSearchQuery] = React.useState("");
   const [showArchived, setShowArchived] = React.useState(false);
   const [filterByRepo, setFilterByRepo] = React.useState(true);
+  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
 
   const archivedQuery = useChatSessions(50, 0, undefined, undefined, true);
   const archivedSessions: ChatSession[] = archivedQuery.data?.items ?? [];
@@ -322,17 +347,13 @@ export function StudioSessionSidebar({
     }
     if (!searchQuery.trim()) return list;
     const lq = searchQuery.toLowerCase();
-    return list.filter((s) =>
-      (s.session_title || s.summary || "").toLowerCase().includes(lq)
-    );
+    return list.filter((s) => getSessionDisplayTitle(s).toLowerCase().includes(lq));
   }, [sessions, searchQuery, filterByRepo, repositoryId]);
 
   const filteredArchived = React.useMemo(() => {
     if (!searchQuery.trim()) return archivedSessions;
     const lq = searchQuery.toLowerCase();
-    return archivedSessions.filter((s) =>
-      (s.session_title || s.summary || "").toLowerCase().includes(lq)
-    );
+    return archivedSessions.filter((s) => getSessionDisplayTitle(s).toLowerCase().includes(lq));
   }, [archivedSessions, searchQuery]);
 
   const { grouped: groupedByRepo, noRepo } = React.useMemo(
@@ -347,6 +368,11 @@ export function StudioSessionSidebar({
   const unpinnedSessions = React.useMemo(
     () => ({ grouped: groupedByRepo, noRepo }),
     [groupedByRepo, noRepo]
+  );
+
+  const pendingDeleteSession = React.useMemo(
+    () => [...sessions, ...archivedSessions].find((s) => s.id === pendingDeleteId) ?? null,
+    [sessions, archivedSessions, pendingDeleteId],
   );
 
   return (
@@ -436,7 +462,7 @@ export function StudioSessionSidebar({
                   onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
                   onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
                   onTogglePin={onTogglePin ? (v) => onTogglePin(s.id, v) : undefined}
-                  onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
+                  onDelete={() => setPendingDeleteId(s.id)}
                 />
               ))}
             </div>
@@ -454,7 +480,7 @@ export function StudioSessionSidebar({
             onArchiveSession={onArchiveSession}
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePin}
-            onDeleteSession={onDeleteSession}
+            onRequestDelete={(id) => setPendingDeleteId(id)}
           />
         ))}
         {unpinnedSessions.noRepo.filter((s) => !s.is_pinned).length > 0 && (
@@ -466,7 +492,7 @@ export function StudioSessionSidebar({
             onArchiveSession={onArchiveSession}
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePin}
-            onDeleteSession={onDeleteSession}
+            onRequestDelete={(id) => setPendingDeleteId(id)}
           />
         )}
 
@@ -505,7 +531,7 @@ export function StudioSessionSidebar({
                       onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
                       onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
                       onTogglePin={onTogglePin ? (v) => onTogglePin(s.id, v) : undefined}
-                      onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
+                      onDelete={() => setPendingDeleteId(s.id)}
                     />
                   ))
                 )}
@@ -514,6 +540,35 @@ export function StudioSessionSidebar({
           </div>
         )}
       </div>
+
+      <Dialog open={!!pendingDeleteId} onOpenChange={(open) => !open && setPendingDeleteId(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete session?</DialogTitle>
+            <DialogDescription>
+              {pendingDeleteSession
+                ? `“${getSessionDisplayTitle(pendingDeleteSession)}” will be removed from your session list. Messages are kept for now (soft delete).`
+                : "This session will be removed from your list (soft delete)."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDeleteId(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingDeleteId && onDeleteSession) {
+                  onDeleteSession(pendingDeleteId);
+                }
+                setPendingDeleteId(null);
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

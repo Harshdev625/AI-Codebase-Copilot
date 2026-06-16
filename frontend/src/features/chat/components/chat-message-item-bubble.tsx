@@ -11,6 +11,7 @@ import { CodeBlock } from '@/components/ui/code-block';
 import { PatchDiffViewer } from './patch-diff-viewer';
 import type { Source } from '@/features/chat/types/chat-types';
 import { getDisplayContent, normalizeRepoPath, normalizeSourcesFromMetadata } from '@/features/chat/utils/chat-message-utils';
+import { formatTokenCount, getMessageUsage } from '@/features/chat/utils/token-usage-utils';
 import { FileIcon } from '@/features/studio/components/file-icon';
 import { useStudioStore } from '@/features/studio/store/studio-store';
 
@@ -108,6 +109,7 @@ export function ChatMessageItemBubble({ message, mode, repositoryId: repositoryI
   
   const patchProposal = sources.find((src) => src.kind === 'patch_proposal');
   const normalSources = sources.filter((src) => src.kind !== 'patch_proposal');
+  const usage = isAssistant ? getMessageUsage(metadata) : null;
 
   const repositoryId = repositoryIdProp || selectedRepositoryId || '';
 
@@ -152,6 +154,19 @@ export function ChatMessageItemBubble({ message, mode, repositoryId: repositoryI
               className="px-1.5 py-0 text-[8px] font-bold bg-primary/15 border-primary/25 text-primary/70"
             >
               {intent}
+            </Badge>
+          )}
+          {usage?.total_tokens != null && usage.total_tokens > 0 && (
+            <Badge
+              variant="outline"
+              className="px-1.5 py-0 text-[8px] font-mono text-muted-foreground"
+              title={
+                usage.source === "estimated"
+                  ? `~${formatTokenCount(usage.total_tokens)} tokens (estimated)`
+                  : `${formatTokenCount(usage.prompt_tokens)} in · ${formatTokenCount(usage.completion_tokens)} out`
+              }
+            >
+              {formatTokenCount(usage.total_tokens)} tok
             </Badge>
           )}
         </div>

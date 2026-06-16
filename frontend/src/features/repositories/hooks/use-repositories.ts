@@ -3,7 +3,7 @@ import * as React from 'react';
 import { repositoryService } from '../services/repository-service';
 import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/core/api/errors';
-import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
+import type { AddRepositoryPayload, IndexRequestPayload, WorkspaceSearchPayload } from '@/features/repositories/types/repository-types';
 import { invalidateIndexingCaches } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 import {
@@ -197,6 +197,13 @@ export function useRepositoryRetrieveMutation(repositoryId: string) {
   return useMutation({
     mutationFn: (payload: { query: string; top_k?: number }) =>
       repositoryService.retrieveRepository(repositoryId, payload),
+  });
+}
+
+export function useRepositoryWorkspaceSearchMutation(repositoryId: string) {
+  return useMutation({
+    mutationFn: (payload: WorkspaceSearchPayload) =>
+      repositoryService.searchWorkspace(repositoryId, payload),
   });
 }
 

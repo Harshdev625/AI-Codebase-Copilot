@@ -141,7 +141,7 @@ def test_assign_repository_ids_and_chunk_ids(indexing_service):
 def test_generic_chunk_file(indexing_service):
     from pathlib import Path
     source = "\n".join([f"line {i}" for i in range(100)])
-    chunks = indexing_service.generic_chunk_file("repo1", "commit1", Path("test.py"), source)
+    chunks = indexing_service.generic_chunk_file("repo1", "commit1", "test.py", source, ".py")
     
     assert len(chunks) == 3
     assert chunks[0].start_line == 1
@@ -154,7 +154,7 @@ def test_generic_chunk_file(indexing_service):
 def test_generic_chunk_file_huge_minified(indexing_service):
     from pathlib import Path
     source = "a" * 20000
-    chunks = indexing_service.generic_chunk_file("repo1", "commit1", Path("test.py"), source)
+    chunks = indexing_service.generic_chunk_file("repo1", "commit1", "test.py", source, ".py")
     assert len(chunks) == 1
     assert len(chunks[0].content) <= 15020
 

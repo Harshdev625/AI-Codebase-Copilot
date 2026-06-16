@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,6 +33,7 @@ from app.models.api_models import (
 from app.services.query_service import QueryService
 from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT
+from app.llm.token_usage import extract_ollama_usage
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -79,6 +81,36 @@ def _is_unacceptable_answer(text: str) -> bool:
     return False
 
 
+def _session_usage_totals(service: QueryService, session_id: str | None) -> dict | None:
+    if not session_id:
+        return None
+    row = service.session.query(ChatSession).filter(ChatSession.id == session_id).first()
+    if not row:
+        return None
+    meta = dict(row.session_metadata or {})
+    return meta.get("usage_totals")
+
+
+def _done_payload(
+    *,
+    intent: str,
+    sources,
+    result: dict,
+    run_trace,
+    service: QueryService,
+    session_id: str | None,
+) -> dict:
+    return {
+        "type": "done",
+        "intent": intent,
+        "sources": sources,
+        "proposal": result.get("patch_proposal"),
+        "trace": run_trace,
+        "usage": (result.get("stats") or {}).get("usage"),
+        "session_usage": _session_usage_totals(service, session_id),
+    }
+
+
 def _statuses_from_trace(run_trace: list) -> list[str]:
     statuses: list[str] = []
     for entry in run_trace:
@@ -120,7 +152,10 @@ def list_sessions(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """Returns all chat sessions for the current user, optionally filtered by repository."""
-    query = session.query(ChatSession).filter(ChatSession.user_id == str(current_user["id"]))
+    query = session.query(ChatSession).filter(
+        ChatSession.user_id == str(current_user["id"]),
+        ChatSession.is_deleted.is_(False),
+    )
     if repository_id:
         query = query.filter(ChatSession.repository_id == repository_id)
     if is_archived is not None:
@@ -160,7 +195,11 @@ def get_session(
     """Returns a specific chat session."""
     r = (
         session.query(ChatSession)
-        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == str(current_user["id"]),
+            ChatSession.is_deleted.is_(False),
+        )
         .first()
     )
     if not r:
@@ -179,7 +218,11 @@ def update_session(
     """Updates session metadata like title, pinned status, and archived status."""
     chat_session = (
         session.query(ChatSession)
-        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == str(current_user["id"]),
+            ChatSession.is_deleted.is_(False),
+        )
         .first()
     )
     if not chat_session:
@@ -212,7 +255,11 @@ def get_session_messages(
     # Security check
     chat_session = (
         session.query(ChatSession)
-        .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
+        .filter(
+            ChatSession.id == session_id,
+            ChatSession.user_id == str(current_user["id"]),
+            ChatSession.is_deleted.is_(False),
+        )
         .first()
     )
     if not chat_session:
@@ -251,18 +298,21 @@ def delete_session(
     current_user: dict = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    """Deletes a chat session and all its messages."""
-    # PHASE 2 FIX: Check existence BEFORE attempting delete to avoid unnecessary rollback
-    exists = (
+    """Soft-deletes a chat session (hidden from lists; messages retained)."""
+    chat_session = (
         session.query(ChatSession)
         .filter(ChatSession.id == session_id, ChatSession.user_id == str(current_user["id"]))
         .first()
     )
-    if not exists:
+    if not chat_session or chat_session.is_deleted:
         raise HTTPException(status_code=404, detail="Session not found")
-    session.query(ChatSession).filter(ChatSession.id == session_id).delete(synchronize_session=False)
+
+    now = datetime.now(timezone.utc)
+    chat_session.is_deleted = True
+    chat_session.deleted_at = now
+    chat_session.is_archived = True
     session.commit()
-    return success_response({"deleted": True})
+    return success_response({"deleted": True, "soft": True})
 
 
 @router.post("/apply-patch")
@@ -507,11 +557,12 @@ async def chat_stream(
             used_non_stream_fallback = False
 
             async def _fallback_non_stream() -> str:
-                llm_answer = await service._get_llm_answer_with_timeout(
+                llm_answer, usage = await service._get_llm_answer_with_timeout(
                     req.query,
                     assembled_context,
                     mode="single",
                 )
+                result["stats"] = {"usage": usage}
                 if _is_unacceptable_answer(llm_answer):
                     return _INSUFFICIENT_CONTEXT_ANSWER
                 return llm_answer
@@ -607,6 +658,15 @@ async def chat_stream(
                 final_answer = _INSUFFICIENT_CONTEXT_ANSWER
                 generated_parts = [final_answer]
 
+            usage = service.model_router.consume_stream_usage()
+            if not usage.get("total_tokens"):
+                usage = extract_ollama_usage(
+                    {},
+                    prompt_text=f"{req.query}\n{assembled_context}",
+                    completion_text=final_answer,
+                )
+            result["stats"] = {"usage": usage}
+
             # H6 FIX: Finalize result with error recovery
             try:
                 result["answer"] = final_answer
@@ -624,13 +684,14 @@ async def chat_stream(
                 pass
 
             yield _event_success(
-                {
-                    "type": "done",
-                    "intent": intent,
-                    "sources": sources,
-                    "proposal": result.get("patch_proposal"),
-                    "trace": run_trace,
-                }
+                _done_payload(
+                    intent=intent,
+                    sources=sources,
+                    result=result,
+                    run_trace=run_trace,
+                    service=service,
+                    session_id=active_session_id,
+                )
             )
         except asyncio.CancelledError:
             logger.info("chat_stream - client disconnected, cancelling stream")
