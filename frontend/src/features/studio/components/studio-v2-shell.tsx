@@ -248,6 +248,10 @@ export function StudioV2Shell({
                 isRepositoriesLoading={isRepositoriesLoading}
                 chat={chat}
                 sessions={sessions}
+                onDeleteSession={sessionSidebarProps.onDeleteSession}
+                onRenameSession={sessionSidebarProps.onRenameSession}
+                onTogglePin={sessionSidebarProps.onTogglePin}
+                onArchiveSession={sessionSidebarProps.onArchiveSession}
               />
             )}
           </div>

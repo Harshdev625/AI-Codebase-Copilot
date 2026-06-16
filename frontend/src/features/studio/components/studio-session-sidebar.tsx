@@ -17,6 +17,7 @@ import {
   Pencil,
   Check,
   X,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -71,6 +72,7 @@ function SessionItem({
   onArchive,
   onRename,
   onTogglePin,
+  onDelete,
 }: {
   session: ChatSession;
   isActive: boolean;
@@ -78,6 +80,7 @@ function SessionItem({
   onArchive?: (isArchived: boolean) => void;
   onRename?: (title: string) => void;
   onTogglePin?: (isPinned: boolean) => void;
+  onDelete?: () => void;
 }) {
   const label = session.session_title || session.summary || "Untitled session";
   const mode = session.session_mode || "ASK";
@@ -203,6 +206,18 @@ function SessionItem({
                   {isArchived ? <ArchiveRestore className="w-2.5 h-2.5" /> : <Archive className="w-2.5 h-2.5" />}
                 </button>
               )}
+              {onDelete && (
+                <button
+                  title="Delete session"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="h-5 w-5 flex items-center justify-center text-[#8B949E] hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                >
+                  <Trash2 className="w-2.5 h-2.5" />
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -219,6 +234,7 @@ function FolderGroup({
   onArchiveSession,
   onRenameSession,
   onTogglePinSession,
+  onDeleteSession,
 }: {
   title: string;
   sessions: ChatSession[];
@@ -227,6 +243,7 @@ function FolderGroup({
   onArchiveSession?: (id: string, isArchived: boolean) => void;
   onRenameSession?: (id: string, title: string) => void;
   onTogglePinSession?: (id: string, isPinned: boolean) => void;
+  onDeleteSession?: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
   if (sessions.length === 0) return null;
@@ -269,6 +286,7 @@ function FolderGroup({
               onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
               onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
               onTogglePin={onTogglePinSession ? (v) => onTogglePinSession(s.id, v) : undefined}
+              onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
             />
           ))}
         </div>
@@ -282,6 +300,7 @@ export function StudioSessionSidebar({
   isLoading,
   currentSessionId,
   onSelectSession,
+  onDeleteSession,
   onNewSession,
   onRenameSession,
   onTogglePin,
@@ -291,17 +310,22 @@ export function StudioSessionSidebar({
 }: StudioSessionSidebarProps) {
   const [searchQuery, setSearchQuery] = React.useState("");
   const [showArchived, setShowArchived] = React.useState(false);
+  const [filterByRepo, setFilterByRepo] = React.useState(true);
 
   const archivedQuery = useChatSessions(50, 0, undefined, undefined, true);
   const archivedSessions: ChatSession[] = archivedQuery.data?.items ?? [];
 
   const filteredSessions = React.useMemo(() => {
-    if (!searchQuery.trim()) return sessions;
+    let list = sessions;
+    if (filterByRepo && repositoryId) {
+      list = list.filter((s) => s.repository_id === repositoryId);
+    }
+    if (!searchQuery.trim()) return list;
     const lq = searchQuery.toLowerCase();
-    return sessions.filter((s) =>
+    return list.filter((s) =>
       (s.session_title || s.summary || "").toLowerCase().includes(lq)
     );
-  }, [sessions, searchQuery]);
+  }, [sessions, searchQuery, filterByRepo, repositoryId]);
 
   const filteredArchived = React.useMemo(() => {
     if (!searchQuery.trim()) return archivedSessions;
@@ -342,7 +366,7 @@ export function StudioSessionSidebar({
       </div>
 
       {/* Search */}
-      <div className="px-3 pb-3 shrink-0">
+      <div className="px-3 pb-3 shrink-0 space-y-2">
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-[#8B949E] pointer-events-none" />
           <Input
@@ -352,6 +376,15 @@ export function StudioSessionSidebar({
             className="h-7 pl-7 pr-3 text-[12px] bg-[#1A1C23] border-[#2D313E] text-[#C9D1D9] focus-visible:ring-1 focus-visible:ring-[#3B82F6] rounded-md placeholder:text-[#8B949E]"
           />
         </div>
+        {repositoryId && (
+          <button
+            type="button"
+            onClick={() => setFilterByRepo((v) => !v)}
+            className="text-[10px] text-[#8B949E] hover:text-[#C9D1D9] px-1"
+          >
+            {filterByRepo ? "Showing this repo only · Show all" : "Showing all repos · Filter to this repo"}
+          </button>
+        )}
       </div>
 
       {!repositoryId && (
@@ -403,6 +436,7 @@ export function StudioSessionSidebar({
                   onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
                   onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
                   onTogglePin={onTogglePin ? (v) => onTogglePin(s.id, v) : undefined}
+                  onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
                 />
               ))}
             </div>
@@ -420,6 +454,7 @@ export function StudioSessionSidebar({
             onArchiveSession={onArchiveSession}
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePin}
+            onDeleteSession={onDeleteSession}
           />
         ))}
         {unpinnedSessions.noRepo.filter((s) => !s.is_pinned).length > 0 && (
@@ -431,6 +466,7 @@ export function StudioSessionSidebar({
             onArchiveSession={onArchiveSession}
             onRenameSession={onRenameSession}
             onTogglePinSession={onTogglePin}
+            onDeleteSession={onDeleteSession}
           />
         )}
 
@@ -469,6 +505,7 @@ export function StudioSessionSidebar({
                       onArchive={onArchiveSession ? (v) => onArchiveSession(s.id, v) : undefined}
                       onRename={onRenameSession ? (title) => onRenameSession(s.id, title) : undefined}
                       onTogglePin={onTogglePin ? (v) => onTogglePin(s.id, v) : undefined}
+                      onDelete={onDeleteSession ? () => onDeleteSession(s.id) : undefined}
                     />
                   ))
                 )}

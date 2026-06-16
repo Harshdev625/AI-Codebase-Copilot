@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { FolderTree } from "lucide-react";
+import { FolderTree, X } from "lucide-react";
 
 import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
 import { useStudioStore } from "@/features/studio/store/studio-store";
@@ -12,7 +12,7 @@ export function ScopeBar(): React.JSX.Element {
   const workbench = useStudioWorkbenchSessionOptional();
   const storeSessionId = useStudioStore((s) => s.activeSessionId);
   const sessionId = workbench?.activeSessionId ?? storeSessionId;
-  const { scopePaths } = useSessionScope(sessionId);
+  const { scopePaths, toggleScopePath } = useSessionScope(sessionId);
 
   if (scopePaths.length === 0) {
     return (
@@ -35,10 +35,18 @@ export function ScopeBar(): React.JSX.Element {
         {scopePaths.map((path) => (
           <span
             key={path}
-            className="truncate rounded border border-[#2D313E] bg-[#1A1C23] px-1.5 py-0.5 font-mono text-[10px] text-[#C9D1D9]"
+            className="inline-flex max-w-full items-center gap-0.5 truncate rounded border border-[#2D313E] bg-[#1A1C23] px-1.5 py-0.5 font-mono text-[10px] text-[#C9D1D9]"
             title={path}
           >
-            {path}
+            <span className="truncate">{path}</span>
+            <button
+              type="button"
+              className="shrink-0 rounded p-0.5 text-[#8B949E] hover:text-destructive hover:bg-destructive/10"
+              aria-label={`Remove ${path} from scope`}
+              onClick={() => toggleScopePath(path)}
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
           </span>
         ))}
       </div>

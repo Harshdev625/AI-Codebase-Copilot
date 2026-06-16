@@ -350,20 +350,18 @@ def get_patch(
 
     def _fetch_original(file_path: str) -> str:
         """Best-effort: read the file at base_commit_sha from the local repo cache."""
-        if not base_sha or not repo:
+        if not repo:
             return ""
         repo_id_str = repo.repo_id or repository_id
         cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
         if not cache_path:
             return ""
-        cmd = ["git", "-C", str(cache_path), "show", f"{base_sha}:{file_path}"]
-        try:
-            res = subprocess.run(cmd, capture_output=True, timeout=10)
-            if res.returncode == 0:
-                return res.stdout.decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        return ""
+        from app.services.repository_cache import read_repository_file
+
+        raw = read_repository_file(cache_path, file_path, base_sha or None)
+        if raw is None:
+            return ""
+        return raw.decode("utf-8", errors="replace")
 
     patch_files = [
         {
@@ -472,7 +470,7 @@ def get_file_content(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """
-    Return raw file content using git show {commit_sha}:{path}.
+    Return raw file content from the repository workspace (git show or working tree).
     """
     assert_scopes(current_user, {"repository:read"})
     ensure_repository_access_by_id(session, repository_id, current_user["id"])
@@ -495,9 +493,10 @@ def get_file_content(
             raise HTTPException(status_code=404, detail="No indexed commit found")
         target_commit = job.commit_sha
 
-    import subprocess
-    from pathlib import Path
-    from app.services.repository_cache import resolve_repository_workspace
+    from app.services.repository_cache import (
+        read_repository_file,
+        resolve_repository_workspace,
+    )
 
     repo_id_str = repo.repo_id or repository_id
     cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
@@ -505,22 +504,21 @@ def get_file_content(
     if not cache_path:
         raise HTTPException(status_code=404, detail="Repository cache not found on disk")
 
-    cmd = ["git", "-C", str(cache_path), "show", f"{target_commit}:{path}"]
-    res = subprocess.run(cmd, capture_output=True)
-    if res.returncode != 0:
-        err = res.stderr.decode("utf-8", errors="replace")
-        if "exists on disk, but not in" in err or "does not exist in" in err or "Not a valid object name" in err or "Path" in err:
-            raise HTTPException(status_code=404, detail=f"File '{path}' not found in commit {target_commit}")
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {err}")
+    raw = read_repository_file(cache_path, path, target_commit)
+    if raw is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File '{path}' not found in repository workspace",
+        )
 
-    content = res.stdout.decode("utf-8", errors="replace")
+    content = raw.decode("utf-8", errors="replace")
     ext = path.split(".")[-1] if "." in path else ""
 
     return success_response({
         "path": path,
         "content": content,
         "language": ext,
-        "size_bytes": len(res.stdout)
+        "size_bytes": len(raw)
     })
 
 # ---------------------------------------------------------------------------
@@ -882,7 +880,7 @@ def get_file_tree(
                     "status": "INDEXED"
                 })
 
-    items.sort(key=lambda x: x["path"])
+    items.sort(key=lambda x: (0 if x["type"] == "DIRECTORY" else 1, x["path"].split("/")[-1].lower()))
 
     next_cursor = None
     if len(rows) == limit:

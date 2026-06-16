@@ -1,10 +1,23 @@
 'use client';
 
 import * as React from 'react';
-import { Bell, CheckCheck, Trash2, X } from 'lucide-react';
+import Link from 'next/link';
+import {
+  Activity,
+  Bell,
+  CheckCheck,
+  FileDiff,
+  FolderGit2,
+  Mail,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn, formatDate } from '@/lib/utils';
+import type { NotificationKind } from '@/features/notifications/notification-copy';
+import type { Notification } from '@/store/notification-store';
 import {
   useNotificationStore,
   useUnreadNotificationCount,
@@ -23,12 +36,107 @@ function typeAccent(type: string): string {
   }
 }
 
+function kindIcon(kind?: NotificationKind): React.ReactNode {
+  const className = 'mt-0.5 h-4 w-4 shrink-0 text-muted-foreground';
+  switch (kind) {
+    case 'invite':
+      return <Mail className={className} />;
+    case 'indexing':
+      return <Activity className={className} />;
+    case 'repository':
+      return <FolderGit2 className={className} />;
+    case 'patch':
+      return <FileDiff className={className} />;
+    case 'studio':
+      return <Sparkles className={className} />;
+    default:
+      return <Bell className={className} />;
+  }
+}
+
+function NotificationItem({
+  notification,
+  onMarkRead,
+  onDismiss,
+}: {
+  notification: Notification;
+  onMarkRead: (id: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const hasAction = Boolean(notification.actionUrl && notification.actionLabel);
+
+  return (
+    <div
+      data-testid={`notification-item-${notification.id}`}
+      className={cn(
+        'border-b border-border/20 border-l-2 px-4 py-3 transition-colors',
+        typeAccent(notification.type),
+        !notification.read && 'bg-muted/20',
+      )}
+    >
+      <div className="flex items-start gap-2">
+        {kindIcon(notification.kind)}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-medium text-foreground">{notification.title}</p>
+            {!notification.read ? (
+              <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
+            ) : null}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{notification.message}</p>
+          <p className="mt-1 text-[10px] text-muted-foreground/70">
+            {formatDate(new Date(notification.timestamp).toISOString())}
+          </p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {hasAction ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 text-xs"
+                asChild
+                onClick={() => onMarkRead(notification.id)}
+              >
+                <Link href={notification.actionUrl!}>{notification.actionLabel}</Link>
+              </Button>
+            ) : null}
+            {!notification.read ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs"
+                onClick={() => onMarkRead(notification.id)}
+              >
+                Mark read
+              </Button>
+            ) : null}
+            {notification.dismissible !== false ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => onDismiss(notification.id)}
+              >
+                Dismiss
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function NotificationBell() {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
   const notifications = useNotificationStore((s) => s.notifications);
   const markAsRead = useNotificationStore((s) => s.markAsRead);
   const markAllAsRead = useNotificationStore((s) => s.markAllAsRead);
+  const removeNotification = useNotificationStore((s) => s.removeNotification);
   const clearAll = useNotificationStore((s) => s.clearAll);
   const unreadCount = useUnreadNotificationCount();
 
@@ -114,32 +222,16 @@ export function NotificationBell() {
           <div className="max-h-80 overflow-y-auto">
             {notifications.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                No notifications yet.
+                Activity from indexing, repositories, and invites will appear here.
               </p>
             ) : (
               notifications.map((notification) => (
-                <button
+                <NotificationItem
                   key={notification.id}
-                  type="button"
-                  data-testid={`notification-item-${notification.id}`}
-                  className={cn(
-                    'w-full border-b border-border/20 border-l-2 px-4 py-3 text-left transition-colors hover:bg-muted/30',
-                    typeAccent(notification.type),
-                    !notification.read && 'bg-muted/20',
-                  )}
-                  onClick={() => markAsRead(notification.id)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-foreground">{notification.title}</p>
-                    {!notification.read ? (
-                      <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
-                    ) : null}
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{notification.message}</p>
-                  <p className="mt-1 text-[10px] text-muted-foreground/70">
-                    {formatDate(new Date(notification.timestamp).toISOString())}
-                  </p>
-                </button>
+                  notification={notification}
+                  onMarkRead={markAsRead}
+                  onDismiss={removeNotification}
+                />
               ))
             )}
           </div>

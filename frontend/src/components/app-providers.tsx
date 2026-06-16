@@ -10,7 +10,17 @@ import { useLogout } from '@/features/auth/hooks/use-auth';
 import { useAuthStore } from '@/store/auth-store';
 import { useOnboardingStore } from '@/store/onboarding-store';
 import { globalEvents, EVENTS } from '@/lib/events';
+import {
+  sessionExpiredMessage,
+  sessionExpiredTitle,
+} from '@/features/notifications/notification-copy';
 import { notifyError } from '@/features/notifications/utils/notify';
+import { useIndexingNotifications } from '@/features/notifications/hooks/use-indexing-notifications';
+import { usePatchNotifications } from '@/features/notifications/hooks/use-patch-notifications';
+import { usePendingInviteNotifications } from '@/features/notifications/hooks/use-pending-invite-notifications';
+import { usePatches } from '@/features/repositories/hooks/use-repositories';
+import { useStudioStore } from '@/features/studio/store/studio-store';
+import { useNotificationStore } from '@/store/notification-store';
 
 function OnboardingInitializer() {
   const hydrated = useAuthStore((state) => state.hydrated);
@@ -27,6 +37,26 @@ function OnboardingInitializer() {
     }
     initializeForUser(userId ?? null);
   }, [hydrated, userId, userRole, initializeForUser]);
+
+  return null;
+}
+
+function NotificationInitializer() {
+  const hydrated = useAuthStore((state) => state.hydrated);
+  const userId = useAuthStore((state) => state.user?.id);
+  const selectedRepositoryId = useStudioStore((state) => state.selectedRepositoryId);
+  const patchesQuery = usePatches(selectedRepositoryId ?? '');
+  const patches = selectedRepositoryId ? (patchesQuery.data ?? []) : [];
+
+  React.useEffect(() => {
+    if (!hydrated) return;
+    useNotificationStore.getState().hydrateForUser(userId ?? null);
+  }, [hydrated, userId]);
+
+  usePendingInviteNotifications();
+  useIndexingNotifications();
+  useIndexingNotifications(selectedRepositoryId ?? undefined);
+  usePatchNotifications(selectedRepositoryId ?? undefined, patches);
 
   return null;
 }
@@ -48,8 +78,11 @@ function AuthEventHandler() {
       logout(isAdminArea ? 'admin' : 'user');
 
       if (!onAuthPage) {
-        toast.error("Session Expired", "Please log in again to continue.");
-        notifyError("Session Expired", "Please log in again to continue.");
+        toast.error(sessionExpiredTitle(), sessionExpiredMessage());
+        notifyError(sessionExpiredTitle(), sessionExpiredMessage(), {
+          kind: 'auth',
+          dedupeKey: 'auth:session-expired',
+        });
       }
     });
     return unsubscribe;
@@ -88,6 +121,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
           <ToastProvider>
             <AuthEventHandler />
             <OnboardingInitializer />
+            <NotificationInitializer />
             {children}
           </ToastProvider>
         </ThemeProvider>

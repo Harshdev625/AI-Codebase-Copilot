@@ -40,10 +40,11 @@ test.describe("Engineering Studio E2E Tests", () => {
       });
     });
 
-    await page.goto(`/studio?repository_id=${repositoryId}`);
+    await page.goto(`/studio?repository_id=${repositoryId}&panel=explorer`);
 
     await expect(page.locator('[data-studio-shell="v2"]')).toBeVisible();
-    await expect(page.getByText("Auth refactor")).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-studio-mode="editor"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="editor-workbench"]')).toBeVisible();
   });
 
   test("1. Dynamic Tree Explorer lazy loading and patch overlays", async ({ page }) => {

@@ -15,6 +15,7 @@ import { Virtuoso } from "react-virtuoso";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/shared/toast-provider";
+import { partialRetrievalTitle } from "@/features/notifications/notification-copy";
 import { notifyWarning } from "@/features/notifications/utils/notify";
 import type { useChat } from "@/features/chat/hooks/use-chat";
 import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
@@ -176,8 +177,8 @@ export function StudioCanvasChat({
         });
         if (failedRepos > 0) {
           const message = `${failedRepos} of ${selectedRepoIds.length} repositories failed retrieval.`;
-          toast.error("Partial Retrieval", message);
-          notifyWarning("Partial Retrieval", message);
+          toast.error(partialRetrievalTitle(), message);
+          notifyWarning(partialRetrievalTitle(), message, { kind: 'studio' });
         }
         if (idx === 0) {
           formattedContext += "(No matching snippets retrieved across repositories)\n\n";

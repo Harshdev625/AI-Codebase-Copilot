@@ -2,6 +2,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as React from 'react';
 
 import { useToast } from '@/components/shared/toast-provider';
+import {
+  indexingCompleteTitle,
+  indexingFailedTitle,
+  indexingMessage,
+} from '@/features/notifications/notification-copy';
+import { notifyIndexingTerminal } from '@/features/notifications/utils/notify-indexing';
 import { repositoryService } from '@/features/repositories/services/repository-service';
 import {
   invalidateIndexingCaches,
@@ -9,7 +15,6 @@ import {
 } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 import type { IndexProgress } from '@/features/repositories/types/repository-types';
-import { notifyError, notifySuccess } from '@/features/notifications/utils/notify';
 
 const PROGRESS_POLL_MS = 3000;
 
@@ -85,15 +90,23 @@ export function useIndexJobProgress<T extends Record<string, unknown>>(
     }
     lastStatusRef.current = status;
     invalidateIndexingCaches(queryClient);
+
+    const message = indexingMessage(
+      String(job.message ?? query.data?.message ?? 'Indexing job update.'),
+    );
+
     if (status === 'failed' || status === 'error') {
-      const message = String(job.message ?? query.data?.message ?? 'Indexing job failed.').trim();
-      toast.error('Indexing Failed', message);
-      notifyError('Indexing Failed', message);
+      toast.error(indexingFailedTitle(), message);
     } else if (status === 'completed' || status === 'complete' || status === 'success') {
-      const message = String(job.message ?? query.data?.message ?? 'Indexing completed.').trim();
-      notifySuccess('Indexing Complete', message);
+      toast.success(indexingCompleteTitle(), message);
     }
-  }, [status, queryClient, job.message, query.data?.message, toast]);
+
+    notifyIndexingTerminal({
+      id: jobId,
+      status,
+      message,
+    });
+  }, [status, queryClient, job.message, query.data?.message, toast, jobId]);
 
   return {
     job,

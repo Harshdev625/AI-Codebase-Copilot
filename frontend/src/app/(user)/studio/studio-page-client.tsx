@@ -36,12 +36,9 @@ export function StudioPageClient(): React.JSX.Element {
       return;
     }
 
-    if (panel && panel !== "explorer" && TOOL_PANELS.includes(panel)) {
+    if (panel && TOOL_PANELS.includes(panel)) {
       focusSidebar(panel);
-      return;
     }
-
-    focusSidebar("sessions");
   }, [searchParams, focusSidebar, setSidebarCollapsed]);
 
   return (

@@ -23,6 +23,7 @@ import {
   XCircle,
   Clock,
   Trash2,
+  Activity,
   Database,
 } from 'lucide-react';
 import { cn, formatDate } from '@/lib/utils';

@@ -5,6 +5,7 @@ import { SnapshotDiffDialog } from "./snapshot-diff-dialog";
 import { Loader2, ArrowRightLeft, Clock, History, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { RepositorySnapshot } from "../types/repository-types";
+import { useStudioStore } from "@/features/studio/store/studio-store";
 
 interface SnapshotTimelineProps {
   repositoryId: string;
@@ -13,11 +14,17 @@ interface SnapshotTimelineProps {
 export function SnapshotTimeline({ repositoryId }: SnapshotTimelineProps) {
   const { data, isLoading, isError, error } = useSnapshots(repositoryId);
   const updateMutation = useUpdateSnapshotMutation(repositoryId);
+  const { setSelectedSnapshotId, focusSidebar } = useStudioStore();
 
   // Compare selection state (store up to 2 snapshot IDs)
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [isDiffOpen, setIsDiffOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
+
+  const handleBrowseInExplorer = (snapshotId: string) => {
+    setSelectedSnapshotId(snapshotId);
+    focusSidebar("explorer");
+  };
 
   const handleSelectForCompare = (snapshotId: string) => {
     setSelectedIds((prev) => {
@@ -120,6 +127,7 @@ export function SnapshotTimeline({ repositoryId }: SnapshotTimelineProps) {
               onSelectForCompare={handleSelectForCompare}
               isSelectedForCompare={selectedIds.includes(snap.id)}
               compareCount={selectedIds.length}
+              onBrowseInExplorer={handleBrowseInExplorer}
             />
           ))
         ) : (

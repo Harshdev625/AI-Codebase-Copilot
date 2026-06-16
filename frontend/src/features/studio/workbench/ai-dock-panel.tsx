@@ -21,6 +21,10 @@ export interface AiDockPanelProps {
   isRepositoriesLoading?: boolean;
   chat: StudioChatState;
   sessions: ChatSession[];
+  onDeleteSession?: (id: string) => void | Promise<unknown>;
+  onRenameSession?: (id: string, title: string) => void | Promise<unknown>;
+  onTogglePin?: (id: string, isPinned: boolean) => void | Promise<unknown>;
+  onArchiveSession?: (id: string, isArchived: boolean) => void | Promise<unknown>;
   onClose?: () => void;
   className?: string;
 }
@@ -31,19 +35,25 @@ export function AiDockPanel({
   isRepositoriesLoading = false,
   chat,
   sessions,
+  onDeleteSession,
+  onRenameSession,
+  onTogglePin,
+  onArchiveSession,
   onClose,
   className,
 }: AiDockPanelProps): React.JSX.Element {
   const sidebarProps = {
     sessions,
-    sessionsLoading: false,
     isLoading: false,
     currentSessionId: chat.currentSessionId,
     repositories,
     repositoryId,
     onSelectSession: chat.selectSession,
-    onDeleteSession: async () => {},
+    onDeleteSession: onDeleteSession ?? (async () => {}),
     onNewSession: chat.clearMessages,
+    onRenameSession,
+    onTogglePin,
+    onArchiveSession,
   };
 
   return (

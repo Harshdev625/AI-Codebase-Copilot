@@ -1,12 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Search, Settings, LogOut, ChevronDown, Home } from "lucide-react";
+import { Search, Settings, LogOut, ChevronDown, Home, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/store/auth-store";
 import { useLogout } from "@/features/auth/hooks/use-auth";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { NotificationBell } from "@/features/notifications/components/notification-bell";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 
 /** Studio title bar — fixed 48px (no xl growth). */
@@ -15,7 +16,7 @@ const STUDIO_TITLE_BAR_CLASS = "h-12";
 export function GlobalTopBar() {
   const user = useAuthStore((state) => state.user);
   const logout = useLogout();
-  const { setSettingsOpen } = useStudioStore();
+  const { setSettingsOpen, focusSidebar, primarySidebar } = useStudioStore();
   const [profileOpen, setProfileOpen] = React.useState(false);
   const profileRef = React.useRef<HTMLDivElement>(null);
 
@@ -92,6 +93,26 @@ export function GlobalTopBar() {
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <div className="[&_button]:text-[#8B949E] [&_button:hover]:bg-[#1F242D] [&_button:hover]:text-[#C9D1D9]">
+          <NotificationBell />
+        </div>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-8 w-8 rounded-md lg:h-9 lg:w-9",
+            primarySidebar === "sessions"
+              ? "bg-[#1F242D] text-[#58A6FF]"
+              : "text-[#8B949E] hover:bg-[#1F242D] hover:text-[#C9D1D9]",
+          )}
+          title="Chat & Sessions"
+          aria-label="Open chat and sessions"
+          onClick={() => focusSidebar("sessions")}
+        >
+          <MessageSquare className="h-4 w-4 lg:h-[18px] lg:w-[18px]" />
+        </Button>
+
         <Button
           variant="ghost"
           size="icon"

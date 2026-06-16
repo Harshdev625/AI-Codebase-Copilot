@@ -12,6 +12,7 @@ import {
   markBrandNewUser,
   markPendingOnboardingEmail,
 } from "@/store/onboarding-store";
+import { useNotificationStore } from "@/store/notification-store";
 
 export const authKeys = {
   me: ["auth", "me"] as const,
@@ -77,6 +78,7 @@ export function useLoginMutation() {
     onSuccess: ({ tokenPayload, me }) => {
       const normalizedRole = String(me.role).toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
       setAuth({ ...me, role: normalizedRole }, tokenPayload.access_token);
+      useNotificationStore.getState().hydrateForUser(me.id);
       if (normalizedRole === "USER" && consumePendingOnboardingEmail(me.email)) {
         markBrandNewUser(me.id);
       }
@@ -127,6 +129,7 @@ export function useLogout() {
     (context?: LogoutContext) => {
       const role = useAuthStore.getState().user?.role;
       logoutStore();
+      useNotificationStore.getState().hydrateForUser(null);
       void queryClient.clear();
       const toAdmin = role === "ADMIN" || context === "admin";
       router.replace(toAdmin ? "/admin/login" : "/login");

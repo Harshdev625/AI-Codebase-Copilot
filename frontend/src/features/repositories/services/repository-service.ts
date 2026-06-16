@@ -82,12 +82,15 @@ export const repositoryService = {
     repositoryId: string,
     path?: string,
     snapshotId?: string,
-    patchId?: string
+    patchId?: string,
+    cursor?: string,
+    limit = 100,
   ): Promise<TreeResponse> {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { limit: String(limit) };
     if (path) params.path = path;
     if (snapshotId) params.snapshot_id = snapshotId;
     if (patchId) params.patch_id = patchId;
+    if (cursor) params.cursor = cursor;
 
     return apiClient<TreeResponse>(`/v1/repositories/${repositoryId}/tree`, {
       method: "GET",

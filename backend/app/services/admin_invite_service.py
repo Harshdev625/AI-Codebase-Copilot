@@ -88,3 +88,29 @@ def revoke_admin_invite(session: Session, *, invite_id: str) -> bool:
     session.delete(invite)
     session.commit()
     return True
+
+
+def list_pending_admin_invites_for_email(session: Session, *, email: str) -> list[AdminInvite]:
+    """Return unconsumed, unexpired admin invites for the given email."""
+    normalized_email = email.strip().lower()
+    if not normalized_email:
+        return []
+
+    now = datetime.now(timezone.utc)
+    rows = (
+        session.query(AdminInvite)
+        .filter(
+            AdminInvite.email == normalized_email,
+            AdminInvite.consumed_at.is_(None),
+        )
+        .order_by(AdminInvite.created_at.desc())
+        .all()
+    )
+    pending: list[AdminInvite] = []
+    for row in rows:
+        expires_at = row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at >= now:
+            pending.append(row)
+    return pending

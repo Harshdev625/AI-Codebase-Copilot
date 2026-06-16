@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/shared/toast-provider';
+import { notifyInfo } from '@/features/notifications/utils/notify';
 import { adminService } from '@/features/admin/services/admin-service';
 import { toApiError } from '@/core/api/errors';
 import { Badge } from '@/components/ui/badge';
@@ -43,7 +44,7 @@ export function AdminInvitesPanel() {
 
   const invites = invitesQuery.data ?? [];
 
-  const copyInviteLink = async (invitePath?: string | null, inviteToken?: string | null) => {
+  const copyInviteLink = async (inviteEmail: string, invitePath?: string | null, inviteToken?: string | null) => {
     const path = invitePath ?? (inviteToken ? `/admin/register?invite=${inviteToken}` : '');
     if (!path) {
       return;
@@ -51,6 +52,11 @@ export function AdminInvitesPanel() {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     await navigator.clipboard.writeText(`${origin}${path}`);
     toast.info('Link copied', 'Share this invite link with the new admin.');
+    notifyInfo('Share invite link', `Share this link with ${inviteEmail} so they can register before signing in.`, {
+      kind: 'invite',
+      dismissible: true,
+      dedupeKey: `admin-share:${inviteEmail}:${path}`,
+    });
   };
 
   return (
@@ -61,6 +67,7 @@ export function AdminInvitesPanel() {
       </div>
       <p className="mb-4 text-xs text-muted-foreground">
         Invite new admins with a one-time link instead of sharing the deployment secret key.
+        Invitees must open this link to register before signing in.
       </p>
 
       <form
@@ -119,7 +126,7 @@ export function AdminInvitesPanel() {
                     size="sm"
                     variant="outline"
                     className="gap-1.5"
-                    onClick={() => void copyInviteLink(invite.invite_path, invite.invite_token)}
+                    onClick={() => void copyInviteLink(invite.email, invite.invite_path, invite.invite_token)}
                   >
                     <Copy className="h-3.5 w-3.5" />
                     Copy link

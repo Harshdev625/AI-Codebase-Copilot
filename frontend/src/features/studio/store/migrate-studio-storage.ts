@@ -14,7 +14,7 @@
  *   patch_id=     → open patch tab
  */
 
-import type { EditorTab, PrimarySidebar } from "../types/studio-types";
+import type { EditorTab, MarkdownViewMode, MobileStudioTab, PrimarySidebar } from "../types/studio-types";
 import { WELCOME_TAB_ID } from "../types/studio-types";
 
 export const STUDIO_STORAGE_V2_KEY = "studio-storage-v2";
@@ -35,6 +35,7 @@ export interface StudioPersistV2 {
   selectedRepositoryId: string | null;
   activeSessionId: string | null;
   activePatchId: string | null;
+  selectedSnapshotId: string | null;
   primarySidebar: PrimarySidebar;
   aiPanelOpen: boolean;
   sidebarCollapsed: boolean;
@@ -43,7 +44,9 @@ export interface StudioPersistV2 {
   activeTabId: string;
   editorWordWrap: boolean;
   editorMinimap: boolean;
+  defaultMarkdownView: MarkdownViewMode;
   density: "comfortable" | "compact";
+  mobileTab: MobileStudioTab;
 }
 
 const VALID_SIDEBARS: PrimarySidebar[] = [
@@ -62,7 +65,27 @@ function normalizeSidebar(raw?: string): PrimarySidebar {
   if (raw === "settings") {
     return "explorer";
   }
-  return "sessions";
+  return "explorer";
+}
+
+function hasOnlyWelcomeTab(tabs: EditorTab[]): boolean {
+  return tabs.length === 1 && tabs[0]?.id === WELCOME_TAB_ID;
+}
+
+/** Migrate chat-first idle layout to explorer-first without disturbing active chats. */
+export function migrateExplorerFirstIfIdle(state: StudioPersistV2): StudioPersistV2 {
+  if (
+    state.primarySidebar === "sessions" &&
+    !state.activeSessionId &&
+    hasOnlyWelcomeTab(state.editorTabs)
+  ) {
+    return {
+      ...state,
+      primarySidebar: "explorer",
+      aiPanelOpen: false,
+    };
+  }
+  return state;
 }
 
 export function createDefaultPersistV2(): StudioPersistV2 {
@@ -71,15 +94,18 @@ export function createDefaultPersistV2(): StudioPersistV2 {
     selectedRepositoryId: null,
     activeSessionId: null,
     activePatchId: null,
-    primarySidebar: "sessions",
-    aiPanelOpen: true,
+    selectedSnapshotId: null,
+    primarySidebar: "explorer",
+    aiPanelOpen: false,
     sidebarCollapsed: false,
     settingsOpen: false,
     editorTabs: [{ id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" }],
     activeTabId: WELCOME_TAB_ID,
     editorWordWrap: true,
     editorMinimap: false,
+    defaultMarkdownView: "source",
     density: "comfortable",
+    mobileTab: "files",
   };
 }
 
@@ -110,9 +136,14 @@ export function parsePersistV2(raw: string | null): StudioPersistV2 | null {
     const parsed = JSON.parse(raw);
     const state = parsed?.state ?? parsed;
     if (state?.version === 2) {
-      return state as StudioPersistV2;
+      const v2 = {
+        ...createDefaultPersistV2(),
+        ...state,
+        mobileTab: state.mobileTab ?? "files",
+      } as StudioPersistV2;
+      return migrateExplorerFirstIfIdle(v2);
     }
-    return migrateV1ToV2(state as StudioPersistV1);
+    return migrateExplorerFirstIfIdle(migrateV1ToV2(state as StudioPersistV1));
   } catch {
     return null;
   }

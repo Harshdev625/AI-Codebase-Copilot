@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Pin, Calendar, Tag, HardDrive, CheckCircle2, AlertTriangle, GitCommit, ArrowRightLeft } from "lucide-react";
+import { Pin, Calendar, HardDrive, ArrowRightLeft, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ interface SnapshotTimelineItemProps {
   onSelectForCompare: (snapshotId: string) => void;
   isSelectedForCompare: boolean;
   compareCount: number;
+  onBrowseInExplorer?: (snapshotId: string) => void;
 }
 
 export function SnapshotTimelineItem({
@@ -20,7 +21,8 @@ export function SnapshotTimelineItem({
   isPinPending,
   onSelectForCompare,
   isSelectedForCompare,
-  compareCount
+  compareCount,
+  onBrowseInExplorer,
 }: SnapshotTimelineItemProps) {
   return (
     <div 
@@ -72,6 +74,17 @@ export function SnapshotTimelineItem({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            {snapshot.index_status === "COMPLETE" && onBrowseInExplorer && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onBrowseInExplorer(snapshot.id)}
+                className="h-7 text-[10px] px-2 border-border/50 gap-1"
+              >
+                <FolderOpen className="w-3 h-3" />
+                Browse
+              </Button>
+            )}
             {/* Compare Toggle Button */}
             <Button
               size="sm"

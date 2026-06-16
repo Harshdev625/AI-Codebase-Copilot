@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { X, FileCode2, GitPullRequestDraft, Home } from "lucide-react";
+import { X, FileCode2, GitPullRequestDraft, Home, MoreHorizontal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
@@ -19,8 +19,42 @@ function tabIcon(tab: EditorTab): React.ReactNode {
   }
 }
 
+function tabTooltip(tab: EditorTab): string {
+  if (tab.kind === "file" && tab.filePath) return tab.filePath;
+  if (tab.kind === "patch" && tab.patchId) return `Patch ${tab.patchId}`;
+  return tab.title;
+}
+
 export function EditorTabBar(): React.JSX.Element {
-  const { editorTabs, activeTabId, setActiveTabId, closeTab } = useStudioStore();
+  const {
+    editorTabs,
+    activeTabId,
+    setActiveTabId,
+    closeTab,
+    closeOtherTabs,
+    closeAllTabs,
+  } = useStudioStore();
+
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const closableTabs = editorTabs.filter((t) => t.id !== WELCOME_TAB_ID);
+  const tabRefs = React.useRef<Record<string, HTMLDivElement | null>>({});
+
+  React.useEffect(() => {
+    const el = tabRefs.current[activeTabId];
+    el?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+
+  React.useEffect(() => {
+    if (!menuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
 
   return (
     <div
@@ -34,9 +68,13 @@ export function EditorTabBar(): React.JSX.Element {
         return (
           <div
             key={tab.id}
+            ref={(el) => {
+              tabRefs.current[tab.id] = el;
+            }}
             role="tab"
             aria-selected={active}
             tabIndex={active ? 0 : -1}
+            title={tabTooltip(tab)}
             className={cn(
               "group flex max-w-[200px] min-w-[120px] cursor-pointer items-center gap-1.5 border-r border-[#1E212B] px-3 text-xs transition-colors xl:text-sm",
               active
@@ -69,6 +107,44 @@ export function EditorTabBar(): React.JSX.Element {
           </div>
         );
       })}
+
+      {closableTabs.length > 0 && (
+        <div className="relative flex shrink-0 items-center px-1" ref={menuRef}>
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center rounded text-[#8B949E] hover:bg-[#1A1C23] hover:text-[#C9D1D9]"
+            aria-label="Tab actions"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {menuOpen && (
+            <div className="absolute right-1 top-full z-50 mt-1 min-w-[160px] rounded-md border border-[#2D313E] bg-[#1C1F26] py-1 shadow-lg">
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left text-xs text-[#C9D1D9] hover:bg-[#2D313E]"
+                onClick={() => { closeTab(activeTabId); setMenuOpen(false); }}
+              >
+                Close active tab
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left text-xs text-[#C9D1D9] hover:bg-[#2D313E]"
+                onClick={() => { closeOtherTabs(activeTabId); setMenuOpen(false); }}
+              >
+                Close other tabs
+              </button>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left text-xs text-[#C9D1D9] hover:bg-[#2D313E]"
+                onClick={() => { closeAllTabs(); setMenuOpen(false); }}
+              >
+                Close all tabs
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,8 @@
 
 export type EditorTabKind = "welcome" | "file" | "patch";
 
+export type MarkdownViewMode = "source" | "preview" | "split";
+
 export interface EditorTab {
   id: string;
   kind: EditorTabKind;
@@ -12,6 +14,7 @@ export interface EditorTab {
   initialLine?: number;
   commitSha?: string;
   patchId?: string;
+  viewMode?: MarkdownViewMode;
 }
 
 /** Activity bar sidebar views. */

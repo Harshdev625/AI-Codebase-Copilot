@@ -6,7 +6,18 @@ import { toApiError } from '@/core/api/errors';
 import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
 import { invalidateIndexingCaches } from '@/features/repositories/utils/indexing-cache';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
-import { notifyInfo, notifySuccess, notifyError } from '@/features/notifications/utils/notify';
+import {
+  indexingMessage,
+  indexingStartedTitle,
+  patchAppliedTitle,
+  patchFailedTitle,
+  patchMessage,
+  repositoryAddedTitle,
+  repositoryDeletedTitle,
+  repositoryMessage,
+} from '@/features/notifications/notification-copy';
+import { notifyError, notifyInfo, notifySuccess } from '@/features/notifications/utils/notify';
+import { patchActionUrl } from '@/features/notifications/hooks/use-patch-notifications';
 
 
 export function useRepositories(limit = 100, offset = 0) {
@@ -41,7 +52,11 @@ export function useAddRepository() {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Repository Added', 'Source has been linked successfully.');
-      notifySuccess('Repository Added', 'Source has been linked successfully.');
+      notifySuccess(
+        repositoryAddedTitle(),
+        repositoryMessage('Repository', 'Source has been linked successfully.'),
+        { kind: 'repository' },
+      );
     },
     onError: (error) => {
       toast.error('Failed to Add Repository', toApiError(error));
@@ -59,7 +74,11 @@ export function useDeleteRepository() {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Repository Deleted', 'The repository has been successfully removed.');
-      notifySuccess('Repository Deleted', 'The repository has been successfully removed.');
+      notifySuccess(
+        repositoryDeletedTitle(),
+        repositoryMessage('Repository', 'The repository has been successfully removed.'),
+        { kind: 'repository' },
+      );
     },
     onError: (error) => {
       toast.error('Failed to Delete Repository', toApiError(error));
@@ -96,7 +115,11 @@ export function useIndexRepository() {
       }
 
       toast.info('Indexing Started', 'The repository is being processed.');
-      notifyInfo('Indexing Started', 'The repository is being processed.');
+      notifyInfo(
+        indexingStartedTitle(),
+        indexingMessage('The repository is being processed.'),
+        { kind: 'indexing' },
+      );
     },
     onError: (error) => {
       toast.error('Indexing Failed', toApiError(error));
@@ -304,9 +327,29 @@ export function useApplyPatchMutation(repositoryId: string) {
       void queryClient.invalidateQueries({ queryKey: ['snapshots'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Patch Applied', 'The patch has been successfully applied to the repository.');
+      notifySuccess(
+        patchAppliedTitle(),
+        patchMessage(patchId, 'Successfully applied to the repository.'),
+        {
+          kind: 'patch',
+          actionLabel: 'Review patch',
+          actionUrl: patchActionUrl(repositoryId, patchId),
+          dedupeKey: `patch:${patchId}:APPLIED`,
+        },
+      );
     },
-    onError: (error) => {
+    onError: (error, patchId) => {
       toast.error('Apply Error', toApiError(error));
+      notifyError(
+        patchFailedTitle(),
+        patchMessage(patchId, toApiError(error)),
+        {
+          kind: 'patch',
+          actionLabel: 'Review patch',
+          actionUrl: patchActionUrl(repositoryId, patchId),
+          dedupeKey: `patch:${patchId}:FAILED`,
+        },
+      );
     },
   });
 }

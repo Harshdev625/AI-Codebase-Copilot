@@ -470,9 +470,24 @@ export function AuthForm({ mode }: AuthFormProps) {
           )}
 
           {mode === 'admin-register' && inviteToken ? (
-            <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-              You are registering with a one-time admin invite. The secret key is not required.
-            </p>
+            <div className="space-y-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">Admin invite active</p>
+              <p>No secret key is required when registering from your invite link.</p>
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>Complete the form below with your invited email.</li>
+                <li>Sign in at Admin Login after registration.</li>
+              </ol>
+            </div>
+          ) : null}
+
+          {mode === 'admin-register' && !inviteToken && email.trim() ? (
+            <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-3 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">Waiting for invite link from administrator</p>
+              <p>
+                Open the registration link your administrator sent you, or enter the Admin Secret Key
+                below. Contact your administrator if you do not have the link or secret key.
+              </p>
+            </div>
           ) : null}
 
           <SubmitButton

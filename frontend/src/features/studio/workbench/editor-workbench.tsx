@@ -6,7 +6,7 @@ import { useStudioStore } from "@/features/studio/store/studio-store";
 import { PatchReviewEditor } from "@/features/studio/panels/patch-review-editor";
 import { EditorTabBar } from "./editor-tab-bar";
 import { WelcomeTab } from "./welcome-tab";
-import { MonacoEditorHost } from "./monaco-editor-host";
+import { FileTabContent } from "./file-tab-content";
 
 export function EditorWorkbench(): React.JSX.Element {
   const { editorTabs, activeTabId, setActiveTabId, closeTab } = useStudioStore();
@@ -18,10 +18,12 @@ export function EditorWorkbench(): React.JSX.Element {
       <div className="relative min-h-0 flex-1">
         {(!activeTab || activeTab.kind === "welcome") && <WelcomeTab />}
         {activeTab?.kind === "file" && activeTab.filePath && (
-          <MonacoEditorHost
+          <FileTabContent
+            tabId={activeTab.id}
             filePath={activeTab.filePath}
             commitSha={activeTab.commitSha}
             initialLine={activeTab.initialLine}
+            viewMode={activeTab.viewMode}
           />
         )}
         {activeTab?.kind === "patch" && activeTab.patchId && (

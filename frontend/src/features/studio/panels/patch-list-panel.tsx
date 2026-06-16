@@ -1,18 +1,47 @@
 import React from 'react';
 import { useStudioStore } from '@/features/studio/store/studio-store';
 import { usePatches, useDeletePatchMutation } from '@/features/repositories/hooks/use-repositories';
-import { GitPullRequestDraft, Trash2, PlayCircle, CheckCircle2, XCircle, RefreshCw, Loader2 } from 'lucide-react';
+import { GitPullRequestDraft, Trash2, PlayCircle, CheckCircle2, XCircle, RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
 interface PatchListPanelProps {
-  /**
-   * Optional click handler override.
-   * When provided (e.g. in Studio canvas), called with the patch ID instead of
-   * opening patch-review canvas mode via useStudioStore.
-   */
   onPatchClick?: (patchId: string) => void;
+}
+
+function normalisePatchStatus(status: string) {
+  return {
+    isDraft: status === 'DRAFT',
+    isReview: status === 'REVIEW' || status === 'VALIDATING',
+    isApproved: status === 'APPROVED' || status === 'READY',
+    isRejected: status === 'REJECTED',
+    isApplying: status === 'APPLYING',
+    isApplied: status === 'APPLIED',
+    isFailed: status === 'FAILED',
+    isConflicted: status === 'CONFLICTED',
+  };
+}
+
+function patchStatusLabel(status: string): string {
+  const n = normalisePatchStatus(status);
+  if (n.isReview) return 'Validating';
+  if (n.isApproved) return 'Ready';
+  if (n.isApplying) return 'Applying';
+  if (n.isApplied) return 'Applied';
+  if (n.isFailed) return 'Failed';
+  if (n.isRejected) return 'Rejected';
+  if (n.isConflicted) return 'Conflicted';
+  if (n.isDraft) return 'Draft';
+  return status;
+}
+
+function patchStatusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
+  const n = normalisePatchStatus(status);
+  if (n.isApplied) return 'default';
+  if (n.isFailed || n.isRejected || n.isConflicted) return 'destructive';
+  if (n.isApproved) return 'secondary';
+  return 'outline';
 }
 
 export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
@@ -54,7 +83,7 @@ export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
             if (onPatchClick) {
               onPatchClick(patch.id);
             } else {
-              openPatchTab(patch.id);
+              openPatchTab(patch.id, patch.title || patch.summary);
             }
           }}
         />
@@ -65,44 +94,45 @@ export function PatchListPanel({ onPatchClick }: PatchListPanelProps = {}) {
 
 function PatchCard({ patch, onClick }: { patch: any, onClick: () => void }) {
   const deleteMutation = useDeletePatchMutation(patch.repository_id);
-  
-  const isApplied = patch.status === 'APPLIED';
-  const isFailed = patch.status === 'FAILED';
-  const isReady = patch.status === 'READY';
-  const isValidating = patch.status === 'VALIDATING' || patch.status === 'APPLYING';
+  const n = normalisePatchStatus(patch.status);
 
   let Icon = GitPullRequestDraft;
   let iconClass = "text-muted-foreground";
-  if (isApplied) {
+  if (n.isApplied) {
     Icon = CheckCircle2;
     iconClass = "text-success";
-  } else if (isFailed) {
-    Icon = XCircle;
+  } else if (n.isFailed || n.isRejected || n.isConflicted) {
+    Icon = n.isConflicted ? AlertTriangle : XCircle;
     iconClass = "text-destructive";
-  } else if (isReady) {
+  } else if (n.isApproved) {
     Icon = PlayCircle;
     iconClass = "text-primary";
-  } else if (isValidating) {
+  } else if (n.isReview || n.isApplying) {
     Icon = RefreshCw;
     iconClass = "text-blue-500 animate-spin";
   }
 
+  const title = patch.title || patch.summary || `Patch ${patch.id.split('-')[0]}`;
+
   return (
-    <div 
+    <div
       className="rounded-lg border bg-card p-4 shadow-sm space-y-3 cursor-pointer hover:border-primary/50 transition-colors"
       onClick={onClick}
     >
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Icon className={`w-4 h-4 ${iconClass}`} />
-          <h4 className="font-semibold text-sm truncate max-w-[150px]">
-            {patch.id.split('-')[0]}
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon className={`w-4 h-4 shrink-0 ${iconClass}`} />
+          <h4 className="font-semibold text-sm truncate" title={title}>
+            {title}
           </h4>
-          <Badge variant={isApplied ? 'default' : isFailed ? 'destructive' : isReady ? 'secondary' : 'outline'} className="text-[10px] h-5 px-1.5 ml-2 uppercase">
-            {patch.status}
+          <Badge
+            variant={patchStatusVariant(patch.status)}
+            className="text-[10px] h-5 px-1.5 ml-1 uppercase shrink-0"
+          >
+            {patchStatusLabel(patch.status)}
           </Badge>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <span className="text-xs text-muted-foreground">
             {patch.created_at ? formatDistanceToNow(new Date(patch.created_at), { addSuffix: true }) : ''}
           </span>
@@ -119,6 +149,9 @@ function PatchCard({ patch, onClick }: { patch: any, onClick: () => void }) {
           </Button>
         </div>
       </div>
+      {patch.summary && patch.title && (
+        <p className="text-xs text-muted-foreground line-clamp-2">{patch.summary}</p>
+      )}
     </div>
   );
 }

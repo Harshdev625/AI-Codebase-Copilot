@@ -309,7 +309,7 @@ export function ContextPanel({ repositoryId }: ContextPanelProps) {
   const selectedRepository = repositories.find((r) => r.id === repoId);
   const { data: insights, isLoading: insightsLoading } = useRepositoryInsights(repoId);
 
-  const { scopePaths } = useSessionScope(activeSessionId);
+  const { scopePaths, toggleScopePath } = useSessionScope(activeSessionId);
 
   // Derived values from real data
   const repoName     = selectedRepository?.repo_id || repoId || "NO REPOSITORY";
@@ -468,9 +468,20 @@ export function ContextPanel({ repositoryId }: ContextPanelProps) {
               scopePaths.map((p) => (
                 <div key={p} className="flex items-center gap-2 text-[#C9D1D9] group">
                   <Folder className="w-3.5 h-3.5 text-[#8B949E] shrink-0" />
-                  <span className="text-[11px] font-mono truncate" title={p}>
+                  <span className="text-[11px] font-mono truncate flex-1" title={p}>
                     {p}
                   </span>
+                  {activeSessionId && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-5 w-5 shrink-0 opacity-0 group-hover:opacity-100 text-[#8B949E] hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => toggleScopePath(p)}
+                      title="Remove from scope"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                  )}
                 </div>
               ))
             )}

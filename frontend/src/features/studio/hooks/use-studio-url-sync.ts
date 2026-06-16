@@ -3,6 +3,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useStudioStore } from "../store/studio-store";
 import type { PrimarySidebar } from "../types/studio-types";
 
+const TOOL_PANELS: PrimarySidebar[] = [
+  "explorer",
+  "search",
+  "snapshots",
+  "patches",
+  "tasks",
+];
+
+function isToolPanel(panel: string | null): panel is PrimarySidebar {
+  return Boolean(panel && TOOL_PANELS.includes(panel as PrimarySidebar));
+}
+
 /**
  * URL → store on mount; store → URL on explicit navigation (debounced).
  */
@@ -14,11 +26,9 @@ export function useStudioUrlSync() {
     selectedRepositoryId,
     activeSessionId,
     primarySidebar,
-    aiPanelOpen,
     setSelectedRepositoryId,
     setActiveSessionId,
     focusSidebar,
-    setAiPanelOpen,
     openFileTab,
     openPatchTab,
   } = useStudioStore();
@@ -28,37 +38,39 @@ export function useStudioUrlSync() {
   React.useEffect(() => {
     const repositoryId = searchParams.get("repository_id");
     const sessionId = searchParams.get("session_id");
-    const panel = searchParams.get("panel") as PrimarySidebar | null;
+    const panel = searchParams.get("panel");
     const aiOpen = searchParams.get("ai") === "open";
     const file = searchParams.get("file");
     const patchId = searchParams.get("patch_id");
 
+    const hasEditorIntent = Boolean(file || patchId);
+    const hasToolPanel = isToolPanel(panel);
+
     if (repositoryId && repositoryId !== selectedRepositoryId) {
       setSelectedRepositoryId(repositoryId);
     }
-    if (sessionId && sessionId !== activeSessionId) {
-      setActiveSessionId(sessionId);
-      focusSidebar("sessions");
-    } else if (!sessionId && activeSessionId && !hydratedRef.current) {
-      /* keep persisted session */
-    }
-    if (panel && panel !== "explorer") {
-      focusSidebar(panel);
-    } else if (panel === "explorer" && (file || patchId)) {
-      focusSidebar("explorer");
-    }
-    if (aiOpen) {
-      focusSidebar("sessions");
-    }
+
     if (file) {
       const lineRaw = searchParams.get("line");
       const line = lineRaw ? parseInt(lineRaw, 10) : undefined;
       openFileTab(file, Number.isFinite(line) ? line : undefined);
-      focusSidebar("explorer");
-    }
-    if (patchId) {
+      focusSidebar(hasToolPanel ? (panel as PrimarySidebar) : "explorer");
+    } else if (patchId) {
       openPatchTab(patchId);
-      focusSidebar("explorer");
+      focusSidebar(hasToolPanel ? (panel as PrimarySidebar) : "explorer");
+    } else if (hasToolPanel) {
+      focusSidebar(panel as PrimarySidebar);
+    }
+
+    if (sessionId && sessionId !== activeSessionId) {
+      setActiveSessionId(sessionId);
+      if (!hasEditorIntent && !hasToolPanel) {
+        focusSidebar("sessions");
+      }
+    }
+
+    if (aiOpen && !hasEditorIntent && !hasToolPanel) {
+      focusSidebar("sessions");
     }
 
     hydratedRef.current = true;
@@ -66,12 +78,9 @@ export function useStudioUrlSync() {
     searchParams,
     selectedRepositoryId,
     activeSessionId,
-    primarySidebar,
-    aiPanelOpen,
     setSelectedRepositoryId,
     setActiveSessionId,
     focusSidebar,
-    setAiPanelOpen,
     openFileTab,
     openPatchTab,
   ]);
@@ -87,6 +96,7 @@ export function useStudioUrlSync() {
     if (activeSessionId) {
       params.set("session_id", activeSessionId);
     }
+
     const activeTab = useStudioStore.getState().editorTabs.find(
       (t) => t.id === useStudioStore.getState().activeTabId,
     );
@@ -94,11 +104,9 @@ export function useStudioUrlSync() {
     const hasOpenPatch = activeTab?.kind === "patch" && activeTab.patchId;
 
     if (primarySidebar && primarySidebar !== "sessions") {
-      if (primarySidebar !== "explorer" || hasOpenFile || hasOpenPatch) {
-        params.set("panel", primarySidebar);
-      }
+      params.set("panel", primarySidebar);
     }
-    if (primarySidebar === "sessions" || aiPanelOpen) {
+    if (primarySidebar === "sessions") {
       params.set("ai", "open");
     }
 
@@ -121,7 +129,7 @@ export function useStudioUrlSync() {
 
     if (newUrl === currentPath) return;
     router.replace(newUrl);
-  }, [selectedRepositoryId, activeSessionId, primarySidebar, aiPanelOpen, router]);
+  }, [selectedRepositoryId, activeSessionId, primarySidebar, router]);
 
   React.useEffect(() => {
     const timeoutId = setTimeout(updateUrl, 300);

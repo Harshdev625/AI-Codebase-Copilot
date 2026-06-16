@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTheme } from 'next-themes';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
@@ -6,19 +7,16 @@ import { Monitor, Moon, Sun, MonitorSmartphone, Code2 } from 'lucide-react';
 import { useStudioStore } from '@/features/studio/store/studio-store';
 
 export function SettingsPanel() {
-  const [theme, setTheme] = React.useState<'light' | 'dark' | 'system'>('system');
-  const { editorWordWrap, editorMinimap, setEditorWordWrap, setEditorMinimap } = useStudioStore();
-
-  React.useEffect(() => {
-    const root = window.document.documentElement;
-    root.classList.remove('light', 'dark');
-    if (theme === 'system') {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-      root.classList.add(systemTheme);
-    } else {
-      root.classList.add(theme);
-    }
-  }, [theme]);
+  const { theme, setTheme } = useTheme();
+  const {
+    editorWordWrap,
+    editorMinimap,
+    defaultMarkdownView,
+    setEditorWordWrap,
+    setEditorMinimap,
+    setDefaultMarkdownView,
+  } = useStudioStore();
+  const activeTheme = theme ?? 'system';
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-y-auto custom-scrollbar bg-surface">
@@ -34,7 +32,7 @@ export function SettingsPanel() {
               <Label className="text-xs text-foreground/80">Theme</Label>
               <div className="flex items-center gap-2">
                 <Button
-                  variant={theme === 'light' ? 'default' : 'outline'}
+                  variant={activeTheme === 'light' ? 'default' : 'outline'}
                   size="sm"
                   className="w-full text-xs"
                   onClick={() => setTheme('light')}
@@ -42,7 +40,7 @@ export function SettingsPanel() {
                   <Sun className="w-3 h-3 mr-2" /> Light
                 </Button>
                 <Button
-                  variant={theme === 'dark' ? 'default' : 'outline'}
+                  variant={activeTheme === 'dark' ? 'default' : 'outline'}
                   size="sm"
                   className="w-full text-xs"
                   onClick={() => setTheme('dark')}
@@ -50,7 +48,7 @@ export function SettingsPanel() {
                   <Moon className="w-3 h-3 mr-2" /> Dark
                 </Button>
                 <Button
-                  variant={theme === 'system' ? 'default' : 'outline'}
+                  variant={activeTheme === 'system' ? 'default' : 'outline'}
                   size="sm"
                   className="w-full text-xs"
                   onClick={() => setTheme('system')}
@@ -83,6 +81,26 @@ export function SettingsPanel() {
                 <p className="text-[10px] text-muted-foreground">Display code minimap on the right side.</p>
               </div>
               <Switch checked={editorMinimap} onCheckedChange={setEditorMinimap} />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs text-foreground/80">Default Markdown View</Label>
+              <p className="text-[10px] text-muted-foreground">
+                How new markdown files open in the editor.
+              </p>
+              <div className="flex items-center gap-2">
+                {(["source", "preview", "split"] as const).map((mode) => (
+                  <Button
+                    key={mode}
+                    variant={defaultMarkdownView === mode ? "default" : "outline"}
+                    size="sm"
+                    className="flex-1 text-xs capitalize"
+                    onClick={() => setDefaultMarkdownView(mode)}
+                  >
+                    {mode}
+                  </Button>
+                ))}
+              </div>
             </div>
           </div>
         </section>

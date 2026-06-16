@@ -87,3 +87,87 @@ def test_hash_invite_token_is_stable():
     token = "sample-token"
     assert hash_invite_token(token) == hash_invite_token(token)
     assert len(generate_invite_token()) > 20
+
+
+def test_pending_invites_for_matching_user(client: TestClient, admin_headers, monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.admin_registration_secret_key", "")
+
+    invited_email = "pending-user@example.com"
+    create = client.post(
+        "/v1/admin/invites",
+        json={"email": invited_email},
+        headers=admin_headers,
+    )
+    assert create.status_code == 201
+
+    register = client.post(
+        "/v1/auth/register",
+        json={
+            "email": invited_email,
+            "password": "Password123!",
+            "full_name": "Pending User",
+        },
+    )
+    assert register.status_code == 201
+
+    login = client.post(
+        "/v1/auth/login",
+        json={"email": invited_email, "password": "Password123!"},
+    )
+    assert login.status_code == 200
+    token = login.json()["data"]["access_token"]
+
+    pending = client.get(
+        "/v1/auth/me/pending-invites",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pending.status_code == 200
+    items = pending.json()["data"]
+    assert len(items) == 1
+    assert items[0]["email"] == invited_email
+    assert items[0]["kind"] == "admin"
+    assert items[0]["has_account"] is True
+
+
+def test_expired_invite_not_in_pending_list(client, admin_headers, db_session, monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.admin_registration_secret_key", "")
+
+    invited_email = "expired-user@example.com"
+    create = client.post(
+        "/v1/admin/invites",
+        json={"email": invited_email},
+        headers=admin_headers,
+    )
+    assert create.status_code == 201
+
+    register = client.post(
+        "/v1/auth/register",
+        json={
+            "email": invited_email,
+            "password": "Password123!",
+            "full_name": "Expired User",
+        },
+    )
+    assert register.status_code == 201
+
+    login = client.post(
+        "/v1/auth/login",
+        json={"email": invited_email, "password": "Password123!"},
+    )
+    assert login.status_code == 200
+    token = login.json()["data"]["access_token"]
+
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import AdminInvite
+
+    invite = db_session.query(AdminInvite).filter(AdminInvite.email == invited_email).one()
+    invite.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    db_session.commit()
+
+    pending = client.get(
+        "/v1/auth/me/pending-invites",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert pending.status_code == 200
+    assert pending.json()["data"] == []

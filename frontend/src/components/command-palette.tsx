@@ -4,7 +4,8 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useStudioStore } from "@/features/studio/store/studio-store";
-import { Command, Search, Database, MessageSquarePlus, Camera, GitPullRequestDraft, ArrowRight, Sparkles, ListTodo } from "lucide-react";
+import { useRepositoryRetrieveMutation, useRepositories } from "@/features/repositories/hooks/use-repositories";
+import { Command, Search, Database, MessageSquarePlus, Camera, GitPullRequestDraft, ArrowRight, Sparkles, ListTodo, FileSearch } from "lucide-react";
 
 function navigateToStudio(router: ReturnType<typeof useRouter>, action: () => void) {
   action();
@@ -17,7 +18,11 @@ export function CommandPalette() {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const router = useRouter();
-  
+  const { selectedRepositoryId, setSearchQuery, focusSidebar } = useStudioStore();
+  const { repositories } = useRepositories();
+  const selectedRepository = repositories.find((r) => r.id === selectedRepositoryId);
+  const searchMutation = useRepositoryRetrieveMutation(selectedRepository?.id || "");
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -44,6 +49,20 @@ export function CommandPalette() {
     runCommand(() => navigateToStudio(router, action));
   };
 
+  const runCodeSearch = () => {
+    if (!query.trim() || !selectedRepository) return;
+    goStudio(() => {
+      setSearchQuery(query.trim());
+      focusSidebar("search");
+      useStudioStore.getState().setHasSearched(true);
+      searchMutation.mutateAsync({ query: query.trim(), top_k: 20 }).then((res) => {
+        useStudioStore.getState().setSearchResults(res.items || []);
+      }).catch(() => {
+        useStudioStore.getState().setSearchResults([]);
+      });
+    });
+  };
+
   const groups = [
     {
       heading: "Navigation",
@@ -67,6 +86,11 @@ export function CommandPalette() {
     }
   ];
 
+  const showCodeSearch =
+    query.trim().length >= 2 &&
+    selectedRepository &&
+    !groups.some((g) => g.items.some((i) => i.label.toLowerCase() === query.toLowerCase()));
+
   const filteredGroups = groups.map(group => ({
     ...group,
     items: group.items.filter(item => item.label.toLowerCase().includes(query.toLowerCase()))
@@ -82,20 +106,46 @@ export function CommandPalette() {
 
         <div className="flex items-center border-b border-border/40 px-5 py-4 bg-background/40">
           <Search className="w-5 h-5 mr-3 text-muted-foreground/60" />
-          <input 
+          <input
             className="flex-1 bg-transparent border-0 outline-none text-base placeholder:text-muted-foreground/50 focus:ring-0 text-foreground"
-            placeholder="Type a command or search..."
+            placeholder="Type a command or search codebase..."
             value={query}
             onChange={e => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && showCodeSearch) {
+                e.preventDefault();
+                runCodeSearch();
+              }
+            }}
             autoFocus
           />
           <kbd className="hidden sm:inline-flex h-6 items-center gap-1 rounded-md border border-border/50 bg-muted/40 px-2 font-mono text-[11px] font-bold text-muted-foreground shadow-sm">
             ESC
           </kbd>
         </div>
-        
+
         <div className="max-h-[60vh] overflow-y-auto p-3 custom-scrollbar space-y-5 bg-background/20">
-          {filteredGroups.length === 0 ? (
+          {showCodeSearch && (
+            <div className="space-y-2">
+              <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">
+                Code Search
+              </div>
+              <button
+                className="flex w-full items-center gap-4 rounded-xl px-3 py-3 text-left transition-all duration-200 hover:bg-primary/10 border border-transparent hover:border-primary/20"
+                onClick={runCodeSearch}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-background border border-border/50">
+                  <FileSearch className="w-4 h-4 text-primary" />
+                </div>
+                <span className="flex-1 text-sm font-medium">
+                  Search codebase for &quot;{query.trim()}&quot;
+                </span>
+                <ArrowRight className="w-4 h-4 text-primary" />
+              </button>
+            </div>
+          )}
+
+          {filteredGroups.length === 0 && !showCodeSearch ? (
             <div className="py-14 text-center flex flex-col items-center">
               <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/30 border border-border/40 mb-4 shadow-inner">
                 <Command className="w-8 h-8 text-muted-foreground/40" />

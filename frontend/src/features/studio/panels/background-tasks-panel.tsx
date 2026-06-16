@@ -1,4 +1,5 @@
 import React from 'react';
+import Link from 'next/link';
 import { useStudioStore } from '@/features/studio/store/studio-store';
 import { useIndexingJobs } from '@/features/repositories/hooks/use-repositories';
 import {
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
 
 export function BackgroundTasksPanel() {
@@ -49,6 +51,21 @@ export function BackgroundTasksPanel() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div className="flex items-center justify-between gap-2 pb-2 border-b border-border/40">
+        <p className="text-[11px] text-muted-foreground">
+          Indexing jobs for this repository
+        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+            <Link href="/dashboard">View on dashboard</Link>
+          </Button>
+          <Button variant="secondary" size="sm" className="h-7 text-xs" asChild>
+            <Link href={`/dashboard?repository_id=${selectedRepositoryId}&action=reindex`}>
+              Re-index
+            </Link>
+          </Button>
+        </div>
+      </div>
       {jobs.map((job) => (
         <TaskCard key={job.id} job={job} />
       ))}

@@ -218,3 +218,35 @@ def me(current_user: dict = Depends(get_current_user)) -> UserResponse:
             is_active=bool(current_user["is_active"]),
         ).model_dump()
     )
+
+
+@router.get("/auth/me/pending-invites")
+def my_pending_invites(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Pending admin invites for the authenticated user's email."""
+    if normalize_role(current_user["role"]) == ROLE_ADMIN:
+        return success_response([])
+
+    from app.services.admin_invite_service import list_pending_admin_invites_for_email
+
+    rows = list_pending_admin_invites_for_email(session, email=str(current_user["email"]))
+    items = [
+        {
+            "id": row.id,
+            "kind": "admin",
+            "email": row.email,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "register_path": "/admin/register",
+            "has_account": True,
+        }
+        for row in rows
+    ]
+    logger.info(
+        "auth_pending_invites - user_id=%s count=%s",
+        current_user["id"],
+        len(items),
+    )
+    return success_response(items)

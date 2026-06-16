@@ -54,11 +54,20 @@ describe("studio-store", () => {
   });
 
   it("focusSidebar uncollapses and sets panel", () => {
-    useStudioStore.setState({ sidebarCollapsed: true, primarySidebar: "explorer" });
+    useStudioStore.setState({ sidebarCollapsed: true, primarySidebar: "explorer", aiPanelOpen: false });
     useStudioStore.getState().focusSidebar("search");
     const state = useStudioStore.getState();
     expect(state.primarySidebar).toBe("search");
     expect(state.sidebarCollapsed).toBe(false);
+    expect(state.aiPanelOpen).toBe(false);
+  });
+
+  it("focusSidebar clears aiPanelOpen when switching to explorer", () => {
+    useStudioStore.setState({ primarySidebar: "sessions", aiPanelOpen: true });
+    useStudioStore.getState().focusSidebar("explorer");
+    const state = useStudioStore.getState();
+    expect(state.primarySidebar).toBe("explorer");
+    expect(state.aiPanelOpen).toBe(false);
   });
 
   it("setPrimarySidebar uncollapses sidebar", () => {

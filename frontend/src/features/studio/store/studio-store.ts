@@ -6,12 +6,14 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { getStoredUser } from "@/lib/auth";
 import {
   createDefaultPersistV2,
+  migrateExplorerFirstIfIdle,
   migrateV1ToV2,
   parsePersistV2,
   STUDIO_STORAGE_V2_KEY,
 } from "./migrate-studio-storage";
 import type {
   EditorTab,
+  MarkdownViewMode,
   MobileStudioTab,
   PrimarySidebar,
   StudioDensity,
@@ -63,13 +65,18 @@ export interface StudioStoreState {
   openFileTab: (path: string, initialLine?: number, commitSha?: string) => void;
   openPatchTab: (patchId: string, title?: string) => void;
   closeTab: (tabId: string) => void;
+  closeOtherTabs: (tabId: string) => void;
+  closeAllTabs: () => void;
   setActiveTabId: (tabId: string) => void;
+  setTabViewMode: (tabId: string, viewMode: MarkdownViewMode) => void;
   /** @deprecated Use openFileTab */
   openFileInEditor: (path: string, initialLine?: number, commitSha?: string) => void;
   editorWordWrap: boolean;
   editorMinimap: boolean;
+  defaultMarkdownView: MarkdownViewMode;
   setEditorWordWrap: (enabled: boolean) => void;
   setEditorMinimap: (enabled: boolean) => void;
+  setDefaultMarkdownView: (mode: MarkdownViewMode) => void;
 }
 
 const userScopedStorage = {
@@ -89,6 +96,10 @@ const userScopedStorage = {
     localStorage.removeItem(`${name}-${userId}`);
   },
 };
+
+function isMarkdownPath(path: string): boolean {
+  return path.toLowerCase().endsWith(".md");
+}
 
 function fileTabId(path: string): string {
   return `file:${path}`;
@@ -157,7 +168,7 @@ const studioStoreBase = create<StudioStoreState>()(
       sidebarCollapsed: defaults.sidebarCollapsed,
       aiPanelOpen: defaults.aiPanelOpen,
       settingsOpen: defaults.settingsOpen,
-      mobileTab: "ai",
+      mobileTab: defaults.mobileTab,
       density: defaults.density,
 
       editorTabs: defaults.editorTabs,
@@ -167,9 +178,17 @@ const studioStoreBase = create<StudioStoreState>()(
       activeFileCommitSha: undefined,
 
       setPrimarySidebar: (panel) =>
-        set({ primarySidebar: panel, sidebarCollapsed: false }),
+        set({
+          primarySidebar: panel,
+          sidebarCollapsed: false,
+          aiPanelOpen: panel === "sessions",
+        }),
       focusSidebar: (panel) => {
-        set({ primarySidebar: panel, sidebarCollapsed: false });
+        set({
+          primarySidebar: panel,
+          sidebarCollapsed: false,
+          aiPanelOpen: panel === "sessions",
+        });
       },
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -210,6 +229,7 @@ const studioStoreBase = create<StudioStoreState>()(
       openFileTab: (path, initialLine, commitSha) => {
         const id = fileTabId(path);
         const title = path.split("/").pop() ?? path;
+        const defaultView = get().defaultMarkdownView;
         const tab: EditorTab = {
           id,
           kind: "file",
@@ -217,6 +237,7 @@ const studioStoreBase = create<StudioStoreState>()(
           filePath: path,
           initialLine,
           commitSha,
+          viewMode: isMarkdownPath(path) ? defaultView : undefined,
         };
         set((state) => {
           const existing = state.editorTabs.find((t) => t.id === id);
@@ -237,6 +258,9 @@ const studioStoreBase = create<StudioStoreState>()(
             activeFileInitialLine: initialLine,
             activeFileCommitSha: commitSha,
             activePatchId: null,
+            primarySidebar: "explorer",
+            sidebarCollapsed: false,
+            aiPanelOpen: false,
           };
         });
       },
@@ -261,6 +285,9 @@ const studioStoreBase = create<StudioStoreState>()(
             activeFilePath: null,
             activeFileInitialLine: undefined,
             activeFileCommitSha: undefined,
+            primarySidebar: "explorer",
+            sidebarCollapsed: false,
+            aiPanelOpen: false,
           };
         });
       },
@@ -287,6 +314,36 @@ const studioStoreBase = create<StudioStoreState>()(
         });
       },
 
+      closeOtherTabs: (tabId) => {
+        set((state) => {
+          const keep = state.editorTabs.filter(
+            (t) => t.id === tabId || t.id === WELCOME_TAB_ID,
+          );
+          const nextTabs: EditorTab[] =
+            keep.length > 0
+              ? keep
+              : [{ id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" }];
+          const activeTab = nextTabs.find((t) => t.id === tabId) ?? nextTabs[nextTabs.length - 1];
+          const nextActive = activeTab?.id ?? WELCOME_TAB_ID;
+          return {
+            editorTabs: nextTabs,
+            activeTabId: nextActive,
+            ...syncActiveFileFromTab(activeTab),
+            activePatchId: activeTab?.kind === "patch" ? activeTab.patchId ?? null : null,
+          };
+        });
+      },
+
+      closeAllTabs: () => {
+        const welcome: EditorTab = { id: WELCOME_TAB_ID, kind: "welcome", title: "Welcome" };
+        set({
+          editorTabs: [welcome],
+          activeTabId: WELCOME_TAB_ID,
+          ...syncActiveFileFromTab(welcome),
+          activePatchId: null,
+        });
+      },
+
       setActiveTabId: (tabId) => {
         const tab = get().editorTabs.find((t) => t.id === tabId);
         if (!tab) return;
@@ -297,14 +354,24 @@ const studioStoreBase = create<StudioStoreState>()(
         });
       },
 
+      setTabViewMode: (tabId, viewMode) => {
+        set((state) => ({
+          editorTabs: state.editorTabs.map((tab) =>
+            tab.id === tabId ? { ...tab, viewMode } : tab,
+          ),
+        }));
+      },
+
       openFileInEditor: (path, initialLine, commitSha) => {
         get().openFileTab(path, initialLine, commitSha);
       },
 
       editorWordWrap: defaults.editorWordWrap,
       editorMinimap: defaults.editorMinimap,
+      defaultMarkdownView: defaults.defaultMarkdownView,
       setEditorWordWrap: (enabled) => set({ editorWordWrap: enabled }),
       setEditorMinimap: (enabled) => set({ editorMinimap: enabled }),
+      setDefaultMarkdownView: (mode) => set({ defaultMarkdownView: mode }),
     }),
     {
       name: STUDIO_STORAGE_V2_KEY,
@@ -314,12 +381,16 @@ const studioStoreBase = create<StudioStoreState>()(
         selectedRepositoryId: state.selectedRepositoryId,
         activeSessionId: state.activeSessionId,
         activePatchId: state.activePatchId,
+        selectedSnapshotId: state.selectedSnapshotId,
+        primarySidebar: state.primarySidebar,
+        sidebarCollapsed: state.sidebarCollapsed,
         aiPanelOpen: state.aiPanelOpen,
+        mobileTab: state.mobileTab,
         editorTabs: state.editorTabs,
         activeTabId: state.activeTabId,
         editorWordWrap: state.editorWordWrap,
         editorMinimap: state.editorMinimap,
-        density: state.density,
+        defaultMarkdownView: state.defaultMarkdownView,
       }),
       merge: (persisted, current) => {
         const parsed = parsePersistV2(
@@ -328,20 +399,23 @@ const studioStoreBase = create<StudioStoreState>()(
             : null
         );
         if (!parsed) return current;
+        const migrated = migrateExplorerFirstIfIdle(parsed);
         return {
           ...current,
-          selectedRepositoryId: parsed.selectedRepositoryId,
-          activeSessionId: parsed.activeSessionId,
-          activePatchId: parsed.activePatchId,
-          primarySidebar: "sessions",
-          aiPanelOpen: true,
-          sidebarCollapsed: false,
+          selectedRepositoryId: migrated.selectedRepositoryId,
+          activeSessionId: migrated.activeSessionId,
+          activePatchId: migrated.activePatchId,
+          selectedSnapshotId: migrated.selectedSnapshotId ?? null,
+          primarySidebar: migrated.primarySidebar ?? "explorer",
+          aiPanelOpen: migrated.aiPanelOpen ?? false,
+          sidebarCollapsed: migrated.sidebarCollapsed ?? false,
           settingsOpen: false,
-          editorTabs: parsed.editorTabs,
-          activeTabId: parsed.activeTabId,
-          editorWordWrap: parsed.editorWordWrap,
-          editorMinimap: parsed.editorMinimap,
-          density: parsed.density,
+          mobileTab: migrated.mobileTab ?? "files",
+          editorTabs: migrated.editorTabs,
+          activeTabId: migrated.activeTabId,
+          editorWordWrap: migrated.editorWordWrap,
+          editorMinimap: migrated.editorMinimap,
+          defaultMarkdownView: migrated.defaultMarkdownView ?? "source",
         };
       },
       onRehydrateStorage: () => (state, error) => {
@@ -364,16 +438,10 @@ const studioStoreBase = create<StudioStoreState>()(
         if (tab) {
           studioStoreBase.setState(syncActiveFileFromTab(tab));
         }
-        // Default to chat-first layout unless a file/patch tab is open
-        const hasEditorContent =
-          tab && (tab.kind === "file" || tab.kind === "patch");
-        if (!hasEditorContent) {
-          studioStoreBase.setState({
-            primarySidebar: "sessions",
-            sidebarCollapsed: false,
-            aiPanelOpen: true,
-          });
-        }
+        // Keep aiPanelOpen aligned with primary sidebar after rehydrate
+        studioStoreBase.setState({
+          aiPanelOpen: state.primarySidebar === "sessions",
+        });
       },
     }
   )
