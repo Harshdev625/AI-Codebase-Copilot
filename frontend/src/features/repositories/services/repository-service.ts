@@ -156,6 +156,20 @@ export const repositoryService = {
     });
   },
 
+  searchFiles(
+    repositoryId: string,
+    q: string,
+    limit = 20,
+  ): Promise<{ items: Array<{ path: string; type: string; extension?: string | null }> }> {
+    return apiClient<{ items: Array<{ path: string; type: string; extension?: string | null }> }>(
+      `/v1/repositories/${repositoryId}/files/search`,
+      {
+        method: "GET",
+        params: { q, limit: String(limit) },
+      },
+    );
+  },
+
   getContextTokens(repositoryId: string, payload: { scope_paths?: string[]; attached_files?: string[]; retrieval_query?: string }): Promise<{ attached_tokens: number; scope_tokens: number; retrieval_tokens: number; total_tokens: number; repository_total_tokens: number; max_tokens: number }> {
     return apiClient<{ attached_tokens: number; scope_tokens: number; retrieval_tokens: number; total_tokens: number; repository_total_tokens: number; max_tokens: number }>(`/v1/repositories/${repositoryId}/context-tokens`, {
       method: "POST",
@@ -166,6 +180,25 @@ export const repositoryService = {
   getInsights(repositoryId: string): Promise<any> {
     return apiClient<any>(`/v1/repositories/${repositoryId}/insights`, {
       method: "GET",
+    });
+  },
+
+  listSkippedFiles(
+    repositoryId: string,
+    params?: { limit?: number; offset?: number; reason?: string },
+  ): Promise<{
+    items: Array<{ path: string; skip_reason: string; size_bytes?: number | null; extension?: string | null }>;
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const query: Record<string, string> = {};
+    if (params?.limit != null) query.limit = String(params.limit);
+    if (params?.offset != null) query.offset = String(params.offset);
+    if (params?.reason) query.reason = params.reason;
+    return apiClient(`/v1/repositories/${repositoryId}/files/skipped`, {
+      method: "GET",
+      params: query,
     });
   },
 

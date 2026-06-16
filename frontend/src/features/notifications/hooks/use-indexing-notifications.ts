@@ -33,9 +33,13 @@ export function useIndexingNotifications(repositoryId?: string): void {
       const status = String(job.status ?? '').toLowerCase();
       const prev = prevStatusesRef.current.get(jobId);
       if (prev === status) continue;
+
+      const isInitialSeed = prev === undefined;
       prevStatusesRef.current.set(jobId, status);
 
-      if (!prev || isActiveIndexingStatus(prev)) {
+      if (isInitialSeed) continue;
+
+      if (isActiveIndexingStatus(prev)) {
         notifyIndexingTerminal(job);
       }
     }

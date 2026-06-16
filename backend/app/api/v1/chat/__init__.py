@@ -234,6 +234,8 @@ def update_session(
         chat_session.is_pinned = req.is_pinned
     if req.is_archived is not None:
         chat_session.is_archived = req.is_archived
+    if req.session_mode is not None:
+        chat_session.session_mode = req.session_mode
     if req.metadata is not None:
         current_meta = _session_metadata(chat_session)
         current_meta.update(req.metadata)
@@ -372,6 +374,7 @@ async def chat(
             session_id=req.session_id,
             federated=False,
             scope_paths=req.scope_paths,
+            attached_files=req.attached_files,
             chat_mode=req.mode,
         )
     except NoContextError as exc:
@@ -440,6 +443,7 @@ async def chat_stream(
             session_id=active_session_id,
             federated=False,
             scope_paths=req.scope_paths,
+            attached_files=req.attached_files,
             chat_mode=req.mode,
         )
     except NoContextError as exc:

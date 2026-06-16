@@ -2,39 +2,30 @@
 
 import * as React from "react";
 import Link from "next/link";
-import {
-  Loader2,
-  Send,
-  StopCircle,
-  Database,
-  GitBranch,
-  ChevronDown,
-  Check,
-} from "lucide-react";
+import { FilePlus, Loader2, Send, StopCircle } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/shared/toast-provider";
-import { partialRetrievalTitle } from "@/features/notifications/notification-copy";
-import { notifyWarning } from "@/features/notifications/utils/notify";
 import type { useChat } from "@/features/chat/hooks/use-chat";
+import { useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
 import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
+import { useComposerMentions } from "@/features/chat/hooks/use-composer-mentions";
 import { ChatMessageItemBubble } from "@/features/chat/components/chat-message-item-bubble";
 import { ModeSelector } from "@/features/chat/components/mode-selector";
 import { RepositoryContextHeader } from "@/features/chat/components/repository-context-header";
-import { ScopeSelector } from "@/features/chat/components/scope-selector";
+import { ComposerAttachments } from "@/features/chat/components/composer-attachments";
+import { ComposerMentionMenu } from "@/features/chat/components/composer-mention-menu";
+import {
+  extractMentionPaths,
+  mergeUnique,
+  partitionMentionPaths,
+  stripMentionTokens,
+} from "@/features/chat/utils/composer-mention-utils";
 import { cn } from "@/lib/utils";
 import type { Repository } from "@/features/repositories/types/repository-types";
-import { MultiRepositorySelect } from "@/features/chat/components/multi-repository-select";
-import { repositoryService } from "@/features/repositories/services/repository-service";
-import { buildFederatedChatQuery, normalizeRepoPath, FEDERATED_CONTEXT_PREFIX } from "@/features/chat/utils/chat-message-utils";
 import type { ChatMode, ChatSession } from "@/features/chat/types/chat-types";
 import { useStudioStore } from "@/features/studio/store/studio-store";
-import { useAuthStore } from "@/store/auth-store";
-import {
-  readFederatedRepoIds,
-  writeFederatedRepoIds,
-} from "@/features/studio/utils/federated-scope-storage";
 
 type StudioChatState = ReturnType<typeof useChat>;
 
@@ -48,35 +39,32 @@ interface StudioCanvasChatProps {
   variant?: "canvas" | "dock";
 }
 
-function sendLabelForMode(mode: ChatMode): string {
-  switch (mode) {
-    case "ACT":
-      return "Act";
-    case "PLAN":
-      return "Plan";
-    default:
-      return "Ask";
-  }
+function normalizeSessionMode(raw?: string | null): ChatMode {
+  const upper = (raw ?? "ASK").toUpperCase();
+  if (upper === "PLAN" || upper === "ACT") return upper;
+  return "ASK";
 }
 
 /** Studio chat surface — used in AI dock (V2) or legacy canvas. */
 export function StudioCanvasChat({
   repositoryId,
-  repositories = [],
+  repositories: _repositories = [],
   isRepositoriesLoading = false,
   chat,
   sessions,
   variant = "canvas",
 }: StudioCanvasChatProps) {
   const toast = useToast();
-  const userId = useAuthStore((s) => s.user?.id);
-  const { setSelectedRepositoryId } = useStudioStore();
+  const updateSession = useUpdateSessionMutation();
+  const activeFilePath = useStudioStore((s) => s.activeFilePath);
+  const editorTabs = useStudioStore((s) => s.editorTabs);
+  const activeTabId = useStudioStore((s) => s.activeTabId);
+
   const [query, setQuery] = React.useState("");
   const [mode, setMode] = React.useState<ChatMode>("ASK");
-  const [selectedRepoIds, setSelectedRepoIds] = React.useState<string[]>([]);
-  const [repoPickerOpen, setRepoPickerOpen] = React.useState(false);
-  const repoPickerRef = React.useRef<HTMLDivElement>(null);
+  const [caretIndex, setCaretIndex] = React.useState(0);
   const inputAreaRef = React.useRef<HTMLDivElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const [inputHeight, setInputHeight] = React.useState(180);
 
   const {
@@ -89,23 +77,35 @@ export function StudioCanvasChat({
     currentSessionId,
   } = chat;
 
-  const { scopePaths, setScopePaths } = useSessionScope(currentSessionId);
+  const {
+    scopePaths,
+    attachedFiles,
+    toggleScopePath,
+    toggleAttachedFile,
+    addMentionPath,
+    updateScopeMetadata,
+  } = useSessionScope(currentSessionId);
 
-  const selectedRepo = repositories.find((r) => r.id === repositoryId);
-  const branchLabel = selectedRepo?.default_branch || "main";
+  const activeSession = sessions.find((s) => s.id === currentSessionId);
 
   React.useEffect(() => {
-    if (!userId) return;
-    const stored = readFederatedRepoIds(userId);
-    if (stored.length > 0) {
-      setSelectedRepoIds(stored);
+    if (activeSession?.session_mode) {
+      setMode(normalizeSessionMode(activeSession.session_mode));
     }
-  }, [userId]);
+  }, [activeSession?.id, activeSession?.session_mode]);
 
-  React.useEffect(() => {
-    if (!userId) return;
-    writeFederatedRepoIds(userId, selectedRepoIds);
-  }, [userId, selectedRepoIds]);
+  const handleModeChange = React.useCallback(
+    (next: ChatMode) => {
+      setMode(next);
+      if (currentSessionId) {
+        updateSession.mutate({
+          sessionId: currentSessionId,
+          payload: { session_mode: next },
+        });
+      }
+    },
+    [currentSessionId, updateSession],
+  );
 
   React.useEffect(() => {
     const el = inputAreaRef.current;
@@ -118,77 +118,60 @@ export function StudioCanvasChat({
     return () => observer.disconnect();
   }, []);
 
-  React.useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (repoPickerRef.current && !repoPickerRef.current.contains(event.target as Node)) {
-        setRepoPickerOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
   const historyErrorMessage =
     historyError instanceof Error ? historyError.message : historyError ? "Unable to load history." : "";
 
-  const canSend = (Boolean(repositoryId) || selectedRepoIds.length > 0) && query.trim().length > 0 && !isSending;
+  const canSend = Boolean(repositoryId) && query.trim().length > 0 && !isSending;
 
-  const handleFederatedChange = (ids: string[]) => {
-    setSelectedRepoIds(ids);
-    if (ids.length > 0 && !repositoryId) {
-      setSelectedRepositoryId(ids[0]);
-    }
-  };
+  const {
+    mention,
+    suggestions,
+    isLoading: mentionsLoading,
+    selectSuggestion,
+    moveSelection,
+    dismiss,
+  } = useComposerMentions(query, caretIndex, repositoryId);
+
+  const handleMentionSelect = React.useCallback(
+    (suggestion: { path: string; type: "FILE" | "DIRECTORY" }) => {
+      const { nextText, nextCaret } = selectSuggestion(suggestion);
+      setQuery(nextText);
+      setCaretIndex(nextCaret);
+      addMentionPath(suggestion.path, suggestion.type === "FILE");
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(nextCaret, nextCaret);
+        }
+      });
+    },
+    [selectSuggestion, addMentionPath],
+  );
 
   const handleSend = async () => {
     if (!canSend) return;
     const trimmed = query.trim();
     setQuery("");
+    setCaretIndex(0);
+
+    const mentionPaths = extractMentionPaths(trimmed);
+    const { scopePaths: mentionScope, attachedFiles: mentionAttached } =
+      partitionMentionPaths(mentionPaths);
+    const finalScopePaths = mergeUnique(scopePaths, mentionScope);
+    const finalAttachedFiles = mergeUnique(attachedFiles, mentionAttached);
+
+    if (mentionPaths.length > 0) {
+      updateScopeMetadata(finalScopePaths, finalAttachedFiles);
+    }
+
+    const displayContent = stripMentionTokens(trimmed) || trimmed;
+
     try {
-      const needsClientFederatedContext =
-        selectedRepoIds.length > 1 ||
-        (selectedRepoIds.length === 1 && selectedRepoIds[0] !== repositoryId);
-
-      if (needsClientFederatedContext) {
-        toast.info("Retrieving Federated Context", `Querying ${selectedRepoIds.length} repositories...`);
-        const allResults = await Promise.allSettled(
-          selectedRepoIds.map((rid) =>
-            repositoryService.retrieveRepository(rid, { query: trimmed, top_k: 4 })
-          )
-        );
-
-        let formattedContext = FEDERATED_CONTEXT_PREFIX;
-        let idx = 0;
-        let failedRepos = 0;
-        allResults.forEach((result) => {
-          if (result.status === "fulfilled") {
-            result.value.items?.forEach((item) => {
-              idx++;
-              const displayScore = item.rerank_score !== undefined ? item.rerank_score : item.score;
-              const displayPath = normalizeRepoPath(item.path);
-              formattedContext += `[Source #${idx}] File: ${displayPath} (Repository: ${item.repository_id})\n`;
-              formattedContext += `Symbol: ${item.symbol || "unknown"}\n`;
-              formattedContext += `Score: ${(displayScore * 100).toFixed(1)}%\n`;
-              formattedContext += "```\n" + item.content + "\n```\n\n";
-            });
-          } else {
-            failedRepos += 1;
-          }
-        });
-        if (failedRepos > 0) {
-          const message = `${failedRepos} of ${selectedRepoIds.length} repositories failed retrieval.`;
-          toast.error(partialRetrievalTitle(), message);
-          notifyWarning(partialRetrievalTitle(), message, { kind: 'studio' });
-        }
-        if (idx === 0) {
-          formattedContext += "(No matching snippets retrieved across repositories)\n\n";
-        }
-
-        const finalQuery = buildFederatedChatQuery(formattedContext, trimmed);
-        await sendMessage(finalQuery, mode, scopePaths, { displayContent: trimmed });
-      } else {
-        await sendMessage(trimmed, mode, scopePaths);
-      }
+      await sendMessage(trimmed, mode, finalScopePaths, {
+        displayContent,
+        attachedFiles: finalAttachedFiles.length ? finalAttachedFiles : undefined,
+      });
     } catch (error) {
       if ((error as { name?: string }).name !== "AbortError") {
         const message = error instanceof Error ? error.message : "Unable to send message.";
@@ -197,8 +180,30 @@ export function StudioCanvasChat({
     }
   };
 
+  const handleAddOpenFile = React.useCallback(() => {
+    const activeTab = editorTabs.find((t) => t.id === activeTabId);
+    const path = activeTab?.kind === "file" ? activeTab.filePath : activeFilePath;
+    if (!path) {
+      toast.info("No file open", "Open a file in the editor to add it to context.");
+      return;
+    }
+    addMentionPath(path, true);
+    textareaRef.current?.focus();
+  }, [editorTabs, activeTabId, activeFilePath, addMentionPath, toast]);
+
+  const handleComposerDrop = React.useCallback(
+    (event: React.DragEvent) => {
+      const path =
+        event.dataTransfer.getData("application/x-studio-path") ||
+        event.dataTransfer.getData("text/plain");
+      if (!path || path.includes("\n")) return;
+      event.preventDefault();
+      addMentionPath(path, path.includes("."));
+    },
+    [addMentionPath],
+  );
+
   const isDock = variant === "dock";
-  const sendLabel = sendLabelForMode(mode);
 
   return (
     <main
@@ -214,13 +219,14 @@ export function StudioCanvasChat({
         mode={mode}
         scopePaths={scopePaths}
         sessionTitle={
-          sessions.find((s) => s.id === currentSessionId)?.session_title ||
-          sessions.find((s) => s.id === currentSessionId)?.summary ||
-          undefined
+          activeSession?.session_title || activeSession?.summary || undefined
+        }
+        sessionTimestamp={
+          activeSession?.last_activity_at || activeSession?.updated_at || activeSession?.created_at
         }
       />
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-x-hidden">
         {currentSessionId && isHistoryLoading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50 backdrop-blur-sm">
             <div className="flex items-center gap-3 rounded-full border border-border/60 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm">
@@ -240,21 +246,19 @@ export function StudioCanvasChat({
           <div className="pointer-events-none absolute inset-0 flex justify-center overflow-y-auto p-6 md:p-8">
             <div className="mt-10 flex w-full max-w-4xl flex-col gap-6 pb-8">
               <div className="mt-20 flex flex-col items-center justify-center text-center">
-                <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#2D313E] bg-[#1A1C23] shadow-lg">
-                  <Database className="h-8 w-8 text-[#58A6FF]" />
-                </div>
                 <h2 className="mb-2 text-2xl font-semibold tracking-tight text-[#E2E8F0]">
                   How can I help you build today?
                 </h2>
                 <p className="max-w-md text-[15px] text-[#8B949E]">
-                  Describe your task, ask a question, or select a mode to get started.
+                  Ask a question, plan a change, or use Act mode to generate patches.
+                  Type <span className="font-mono text-[#58A6FF]">@</span> to reference files.
                 </p>
                 {!repositoryId && !isRepositoriesLoading && (
                   <Link
                     href="/dashboard"
                     className="pointer-events-auto mt-4 text-sm font-medium text-[#58A6FF] hover:underline"
                   >
-                    Add a repository on the dashboard →
+                    Open a repository in Studio →
                   </Link>
                 )}
               </div>
@@ -264,7 +268,7 @@ export function StudioCanvasChat({
 
         {messages.length === 0 && !isHistoryLoading && isDock && (
           <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-[#8B949E]">
-            Start a conversation — ask about your codebase, plan a change, or run Act mode.
+            Start a conversation — type @ to reference files from the explorer.
           </div>
         )}
 
@@ -274,11 +278,13 @@ export function StudioCanvasChat({
             <ChatMessageItemBubble
               key={message.id}
               message={message}
-              mode={mode}
               repositoryId={repositoryId}
             />
           )}
-          className={cn("h-full w-full custom-scrollbar px-3", !isDock && "md:px-6")}
+          className={cn(
+            "h-full w-full min-w-0 overflow-x-hidden custom-scrollbar px-3 py-1",
+            !isDock && "md:px-6",
+          )}
           alignToBottom
           followOutput="smooth"
           components={{
@@ -294,117 +300,125 @@ export function StudioCanvasChat({
           !isDock && "md:px-8",
         )}
       >
-        <div className="relative flex w-full flex-col gap-2">
-          {isSending && (
-            <div className="mb-2 flex justify-center">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={stopGeneration}
-                className="h-8 rounded-full border-[#2D313E] bg-[#1A1C23] text-xs font-semibold text-[#C9D1D9] shadow-sm transition-all hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
-              >
-                <StopCircle className="mr-1.5 h-3.5 w-3.5" />
-                Stop generating
-              </Button>
-            </div>
-          )}
-
-          <div
-            className={cn(
-              "group relative mx-auto flex w-full flex-col gap-0 overflow-hidden rounded-xl border bg-[#161822] shadow-2xl transition-all",
-              "border-[#2D313E] focus-within:border-[#3B82F6]/50 focus-within:ring-2 focus-within:ring-[#3B82F6]/10"
+        {!repositoryId ? (
+          <div className="mx-auto rounded-xl border border-[#2D313E] bg-[#161822] px-4 py-6 text-center text-sm text-[#8B949E]">
+            Open a repository in Studio to chat.{" "}
+            <Link href="/dashboard" className="text-[#58A6FF] hover:underline">
+              Go to dashboard
+            </Link>
+          </div>
+        ) : (
+          <div className="relative flex w-full flex-col gap-2">
+            {isSending && (
+              <div className="mb-2 flex justify-center">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={stopGeneration}
+                  className="h-8 rounded-full border-[#2D313E] bg-[#1A1C23] text-xs font-semibold text-[#C9D1D9] shadow-sm transition-all hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                >
+                  <StopCircle className="mr-1.5 h-3.5 w-3.5" />
+                  Stop generating
+                </Button>
+              </div>
             )}
-          >
-            <div className="flex flex-col gap-2 p-2 pt-3">
-              <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
-                <ModeSelector mode={mode} onModeChange={setMode} />
 
-                <div className="ml-2 flex flex-wrap items-center gap-2">
-                  <div className="relative" ref={repoPickerRef}>
-                    <button
-                      type="button"
-                      onClick={() => setRepoPickerOpen((v) => !v)}
-                      className="flex items-center gap-1.5 rounded-md border border-[#2D313E] bg-[#1A1C23] px-2 py-1 text-[11px] font-medium text-[#C9D1D9] transition-colors hover:border-[#444D56]"
-                      title="Select primary repository"
-                    >
-                      <Database className="h-3 w-3 text-[#8B949E]" />
-                      {selectedRepo?.repo_id?.split("/").pop() || "No repo"}
-                      <ChevronDown className="h-3 w-3 text-[#8B949E]" />
-                    </button>
-                    {repoPickerOpen && (
-                      <div className="absolute bottom-full left-0 z-50 mb-1 max-h-[220px] w-[260px] overflow-y-auto rounded-lg border border-[#2D313E] bg-[#161B22] py-1 shadow-xl">
-                        {repositories.length === 0 ? (
-                          <p className="px-3 py-2 text-xs text-[#8B949E]">No repositories available.</p>
-                        ) : (
-                          repositories.map((repo) => (
-                            <button
-                              key={repo.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedRepositoryId(repo.id);
-                                setRepoPickerOpen(false);
-                              }}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-[#C9D1D9] hover:bg-[#1F242D]"
-                            >
-                              {repositoryId === repo.id ? (
-                                <Check className="h-3.5 w-3.5 shrink-0 text-[#58A6FF]" />
-                              ) : (
-                                <span className="w-3.5 shrink-0" />
-                              )}
-                              <span className="truncate">{repo.repo_id}</span>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
+            <div
+              className={cn(
+                "group relative mx-auto flex w-full flex-col gap-0 rounded-xl border bg-[#161822] shadow-2xl transition-all",
+                "border-[#2D313E] focus-within:border-[#3B82F6]/50 focus-within:ring-2 focus-within:ring-[#3B82F6]/10",
+              )}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes("application/x-studio-path")) {
+                  e.preventDefault();
+                }
+              }}
+              onDrop={handleComposerDrop}
+            >
+              <div className="flex flex-col gap-1 p-2 pt-2">
+                <ModeSelector mode={mode} onModeChange={handleModeChange} variant="compact" />
 
-                  <MultiRepositorySelect
-                    repositories={repositories}
-                    selectedIds={selectedRepoIds}
-                    onChange={handleFederatedChange}
-                  />
-
-                  <div className="flex items-center gap-1.5 rounded-md border border-[#2D313E] bg-[#1A1C23] px-2 py-1 text-[11px] font-medium text-[#C9D1D9]">
-                    <GitBranch className="h-3 w-3 text-[#8B949E]" /> {branchLabel}
-                  </div>
-
-                  <ScopeSelector scopePaths={scopePaths} onChange={setScopePaths} />
-                </div>
-              </div>
-
-              <div className="relative flex items-end gap-2 px-1 pb-1 pt-1">
-                <div className="absolute left-3 top-2 flex items-center justify-center text-[#8B949E]">
-                  <div className="flex h-5 w-5 items-center justify-center rounded border border-[#2D313E] bg-[#1A1C23] text-[10px] font-bold text-[#58A6FF]">
-                    {sendLabel.slice(0, 1)}
-                  </div>
-                </div>
-                <textarea
-                  value={query}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    event.target.style.height = "auto";
-                    event.target.style.height = `${Math.min(event.target.scrollHeight, 300)}px`;
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void handleSend();
-                    }
-                  }}
-                  placeholder="Describe the changes, ask a question, or reference files..."
-                  rows={1}
-                  className="max-h-[300px] min-h-[44px] flex-1 resize-none border-0 bg-transparent py-2.5 pl-11 pr-3 text-[14px] leading-relaxed text-[#E2E8F0] shadow-none placeholder:text-[#8B949E] focus-visible:outline-none focus:ring-0 custom-scrollbar"
+                <ComposerAttachments
+                  scopePaths={scopePaths}
+                  attachedFiles={attachedFiles}
+                  onRemoveScope={toggleScopePath}
+                  onRemoveAttached={toggleAttachedFile}
                 />
-              </div>
 
-              <div className="mt-1 flex items-center justify-end border-t border-[#2D313E]/50 px-2 pb-1 pt-2">
-                <div className="flex items-center gap-3">
-                  <div className="hidden items-center gap-1.5 text-[10px] text-[#8B949E] sm:flex">
-                    <kbd className="rounded border border-[#2D313E] bg-[#1A1C23] px-1.5 py-0.5 font-sans font-semibold">
-                      ↵
-                    </kbd>{" "}
-                    Send
+                <div className="relative overflow-visible px-1">
+                  <ComposerMentionMenu
+                    open={mention.active}
+                    suggestions={suggestions}
+                    selectedIndex={mention.selectedIndex}
+                    isLoading={mentionsLoading}
+                    onSelect={handleMentionSelect}
+                    className="left-2 right-2 w-auto"
+                  />
+                  <textarea
+                    ref={textareaRef}
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setCaretIndex(event.target.selectionStart ?? 0);
+                      event.target.style.height = "auto";
+                      event.target.style.height = `${Math.min(event.target.scrollHeight, 300)}px`;
+                    }}
+                    onSelect={(event) => {
+                      setCaretIndex(event.currentTarget.selectionStart ?? 0);
+                    }}
+                    onKeyDown={(event) => {
+                      if (mention.active && suggestions.length > 0) {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          moveSelection(1);
+                          return;
+                        }
+                        if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          moveSelection(-1);
+                          return;
+                        }
+                        if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                          event.preventDefault();
+                          const picked = suggestions[mention.selectedIndex];
+                          if (picked) handleMentionSelect(picked);
+                          return;
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          dismiss();
+                          return;
+                        }
+                      }
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder="Ask a question or type @ to reference files…"
+                    rows={1}
+                    disabled={!repositoryId}
+                    className="max-h-[300px] min-h-[44px] w-full resize-none border-0 bg-transparent px-2 py-2.5 text-[14px] leading-relaxed text-[#E2E8F0] shadow-none placeholder:text-[#8B949E] focus-visible:outline-none focus:ring-0 custom-scrollbar"
+                  />
+                </div>
+
+                <div className="mt-1 flex items-center justify-between border-t border-[#2D313E]/50 px-2 pb-1 pt-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleAddOpenFile}
+                      disabled={!repositoryId}
+                      className="h-7 gap-1 px-2 text-[10px] text-[#8B949E] hover:text-[#C9D1D9]"
+                      title="Add currently open editor file to context"
+                    >
+                      <FilePlus className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Add open file</span>
+                    </Button>
+                    <span className="hidden text-[10px] text-[#6E7681] md:inline">
+                      @ files · Shift+Enter new line
+                    </span>
                   </div>
                   <Button
                     onClick={() => void handleSend()}
@@ -413,13 +427,13 @@ export function StudioCanvasChat({
                     className="h-8 rounded-md border-none bg-[#5CD4C2] px-5 font-bold tracking-wide text-black transition-colors hover:bg-[#4bc2b0]"
                   >
                     <Send className="mr-1.5 h-3.5 w-3.5" />
-                    {sendLabel}
+                    Send
                   </Button>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </main>
   );

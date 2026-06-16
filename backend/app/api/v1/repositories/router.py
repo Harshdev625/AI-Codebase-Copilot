@@ -903,6 +903,77 @@ def get_file_tree(
     })
 
 
+@router.get("/repositories/{repository_id}/files/search")
+def search_repository_files(
+    repository_id: str,
+    q: str = "",
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Fuzzy path search for @-mention autocomplete in the composer."""
+    assert_scopes(current_user, {"repository:read"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+
+    limit = max(1, min(limit, 50))
+    query = (q or "").strip().lower()
+
+    if not query:
+        rows = session.execute(
+            text(
+                """
+                SELECT path, type, extension
+                FROM repository_files
+                WHERE repository_id = :repository_id
+                  AND status = 'INDEXED'
+                ORDER BY path ASC
+                LIMIT :limit
+                """
+            ),
+            {"repository_id": repository_id, "limit": limit},
+        ).mappings().all()
+        items = [
+            {"path": str(row["path"]), "type": "FILE", "extension": row.get("extension")}
+            for row in rows
+        ]
+        return success_response({"items": items})
+
+    like_pattern = f"%{query}%"
+    rows = session.execute(
+        text(
+            """
+            SELECT path, type, extension
+            FROM repository_files
+            WHERE repository_id = :repository_id
+              AND status = 'INDEXED'
+              AND LOWER(path) LIKE :like_pattern
+            ORDER BY path ASC
+            LIMIT :limit
+            """
+        ),
+        {"repository_id": repository_id, "like_pattern": like_pattern, "limit": limit},
+    ).mappings().all()
+
+    items: list[dict[str, Any]] = []
+    seen_dirs: set[str] = set()
+    for row in rows:
+        path = str(row["path"])
+        items.append({
+            "path": path,
+            "type": "FILE",
+            "extension": row.get("extension"),
+        })
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            dir_path = "/".join(parts[:i])
+            if query in dir_path.lower() and dir_path not in seen_dirs:
+                seen_dirs.add(dir_path)
+                items.append({"path": dir_path, "type": "DIRECTORY", "extension": None})
+
+    items.sort(key=lambda x: (0 if x["type"] == "DIRECTORY" else 1, x["path"].lower()))
+    return success_response({"items": items[:limit]})
+
+
 @router.get("/repositories/{repository_id}/snapshots/{snapshot_id}/diff")
 def get_snapshot_diff(
     repository_id: str,
@@ -977,6 +1048,28 @@ def get_snapshot_diff(
         "modified": sorted(modified),
         "renamed": renamed
     })
+
+
+@router.get("/repositories/{repository_id}/files/skipped")
+def list_skipped_files(
+    repository_id: str,
+    limit: int = 200,
+    offset: int = 0,
+    reason: str | None = None,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """List files excluded from indexing with skip reasons."""
+    assert_scopes(current_user, {"repository:read"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+    result = service.list_skipped_repository_files(
+        session,
+        repository_id,
+        limit=limit,
+        offset=offset,
+        reason=reason,
+    )
+    return success_response(result)
 
 
 @router.get("/repositories/{repository_id}/insights")

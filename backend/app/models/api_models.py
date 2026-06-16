@@ -38,6 +38,7 @@ class ChatRequest(StrictRequestModel):
     mode: ChatMode = Field(default=ChatMode.QUESTION, description="Chat workflow mode")
     include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
     scope_paths: list[str] | None = Field(default=None, description="Paths to restrict retrieval scope")
+    attached_files: list[str] | None = Field(default=None, description="Exact file paths to pin full content in context")
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
@@ -93,6 +94,7 @@ class ChatSessionUpdateRequest(StrictRequestModel):
     session_title: str | None = None
     is_pinned: bool | None = None
     is_archived: bool | None = None
+    session_mode: str | None = None
     metadata: dict[str, Any] | None = None
 
 

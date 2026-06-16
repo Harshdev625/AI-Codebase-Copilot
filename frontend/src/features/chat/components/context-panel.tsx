@@ -7,11 +7,14 @@ import {
   FileText,
   GitBranch,
   GitCommit,
+  Info,
   Loader2,
   Pin,
   Plus,
+  Search,
   Trash2,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,6 +26,7 @@ import {
   useRepositoryInsights,
   useContextTokens,
   useRepositories,
+  useSkippedFiles,
 } from "@/features/repositories/hooks/use-repositories";
 import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
 import {
@@ -35,7 +39,9 @@ import {
   getSessionUsageTotals,
   TOKEN_CALCULATION_HELP,
 } from "@/features/chat/utils/token-usage-utils";
-import { Info } from "lucide-react";
+import { repositoryService } from "@/features/repositories/services/repository-service";
+import { isLikelyFilePath } from "@/features/chat/utils/composer-mention-utils";
+import { formatSkipReason } from "@/features/repositories/utils/skip-reason-labels";
 
 // ---------------------------------------------------------------------------
 // Language display metadata
@@ -177,14 +183,17 @@ function StatTile({ label, value, loading }: { label: string; value: string; loa
 function TokenBudgetSection({
   repoId,
   scopePaths,
+  attachedFiles = [],
   defaultOpen,
 }: {
   repoId: string;
   scopePaths: string[];
+  attachedFiles?: string[];
   defaultOpen?: boolean;
 }) {
   const { data: budget, isLoading } = useContextTokens(repoId, {
     scope_paths: scopePaths,
+    attached_files: attachedFiles,
   });
 
   const pct = budget ? Math.min(100, Math.round((budget.total_tokens / budget.max_tokens) * 100)) : 0;
@@ -340,59 +349,183 @@ function ContextEntriesSection({ sessionId }: { sessionId: string }) {
 // ---------------------------------------------------------------------------
 
 function ScopeSection({
+  repoId,
   scopePaths,
+  attachedFiles,
   activeSessionId,
   activeFilePath,
   toggleScopePath,
-  setScopePaths,
+  toggleAttachedFile,
+  addMentionPath,
 }: {
+  repoId: string;
   scopePaths: string[];
+  attachedFiles: string[];
   activeSessionId: string | null;
   activeFilePath: string | null;
   toggleScopePath: (path: string) => void;
-  setScopePaths: (paths: string[]) => void;
+  toggleAttachedFile: (path: string) => void;
+  addMentionPath: (path: string, isFile: boolean) => void;
 }) {
   const openFileTab = useStudioStore((s) => s.openFileTab);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [searchOpen, setSearchOpen] = React.useState(false);
+  const searchRef = React.useRef<HTMLDivElement>(null);
+
   const canAddCurrent =
-    !!activeSessionId && !!activeFilePath && !scopePaths.includes(activeFilePath);
+    !!activeSessionId &&
+    !!activeFilePath &&
+    !scopePaths.includes(activeFilePath) &&
+    !attachedFiles.includes(activeFilePath);
+
+  const [results, setResults] = React.useState<Array<{ path: string; type: string }>>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!searchQuery.trim() || !repoId) {
+      setResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setLoading(true);
+      repositoryService
+        .searchFiles(repoId, searchQuery.trim(), 12)
+        .then((res) => setResults(res.items ?? []))
+        .catch(() => setResults([]))
+        .finally(() => setLoading(false));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery, repoId]);
+
+  React.useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const allPaths = React.useMemo(() => {
+    const seen = new Set<string>();
+    const items: Array<{ path: string; pinned: boolean; isDir: boolean }> = [];
+    for (const p of attachedFiles) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        items.push({ path: p, pinned: true, isDir: false });
+      }
+    }
+    for (const p of scopePaths) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        items.push({
+          path: p,
+          pinned: false,
+          isDir: isScopeDirectory(p),
+        });
+      }
+    }
+    return items;
+  }, [scopePaths, attachedFiles]);
+
+  const handleAddSearchResult = (path: string, type: string) => {
+    if (!activeSessionId) return;
+    const isFile = type === "FILE" || isLikelyFilePath(path);
+    addMentionPath(path, isFile);
+    setSearchQuery("");
+    setSearchOpen(false);
+  };
+
+  const handleRemove = (path: string) => {
+    if (attachedFiles.includes(path)) toggleAttachedFile(path);
+    if (scopePaths.includes(path)) toggleScopePath(path);
+  };
 
   return (
     <Section
-      title="Scope"
+      title="Context files"
       defaultOpen
       badge={
-        scopePaths.length > 0 ? (
+        allPaths.length > 0 ? (
           <span className="rounded bg-[#2D313E] px-1.5 py-0.5 font-mono text-[10px] text-[#8B949E]">
-            {scopePaths.length}
+            {allPaths.length}
           </span>
         ) : null
       }
     >
       <div className="space-y-2">
-        {canAddCurrent && (
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-md border border-dashed border-[#2D313E] px-2 py-1.5 text-left text-[11px] text-[#58A6FF] transition-colors hover:border-[#58A6FF]/40 hover:bg-[#58A6FF]/5"
-            onClick={() => setScopePaths([...scopePaths, activeFilePath!])}
-          >
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">Add open file: {activeFilePath!.split("/").pop()}</span>
-          </button>
-        )}
-
-        {scopePaths.length === 0 ? (
+        {!activeSessionId ? (
           <p className="text-[11px] leading-relaxed text-[#8B949E]">
-            No scope set. Right-click files in Explorer or use the + button to add paths the AI
-            should prioritize.
+            Start a chat session to add files and folders for the AI to prioritize.
           </p>
         ) : (
-          <div className="max-h-[200px] space-y-0.5 overflow-y-auto custom-scrollbar">
-            {scopePaths.map((p) => {
-              const isDir = isScopeDirectory(p);
-              const isActive = activeFilePath === p;
+          <>
+            <div className="relative" ref={searchRef}>
+              <div className="flex items-center gap-1.5 rounded-md border border-[#2D313E] bg-[#0D1117] px-2 py-1.5">
+                <Search className="h-3.5 w-3.5 shrink-0 text-[#6E7681]" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  onFocus={() => setSearchOpen(true)}
+                  placeholder="Search files to add…"
+                  className="min-w-0 flex-1 bg-transparent text-[11px] text-[#C9D1D9] placeholder:text-[#6E7681] focus:outline-none"
+                />
+              </div>
+              {searchOpen && searchQuery.trim() && (
+                <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[180px] overflow-y-auto rounded-md border border-[#2D313E] bg-[#161B22] py-1 shadow-xl custom-scrollbar">
+                  {loading ? (
+                    <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-[#8B949E]">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Searching…
+                    </div>
+                  ) : results.length === 0 ? (
+                    <p className="px-3 py-2 text-[11px] text-[#8B949E]">No matching paths</p>
+                  ) : (
+                    results.map((item) => (
+                      <button
+                        key={`${item.type}-${item.path}`}
+                        type="button"
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-[#C9D1D9] hover:bg-[#1F242D]"
+                        onClick={() => handleAddSearchResult(item.path, item.type)}
+                      >
+                        <FileIcon path={item.path} isDirectory={item.type === "DIRECTORY"} className="h-3.5 w-3.5" />
+                        <span className="truncate font-mono">{item.path}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {canAddCurrent && (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-md border border-dashed border-[#2D313E] px-2 py-1.5 text-left text-[11px] text-[#58A6FF] transition-colors hover:border-[#58A6FF]/40 hover:bg-[#58A6FF]/5"
+                onClick={() => addMentionPath(activeFilePath!, true)}
+              >
+                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">Add open file: {activeFilePath!.split("/").pop()}</span>
+              </button>
+            )}
+          </>
+        )}
+
+        {allPaths.length === 0 ? (
+          <p className="text-[11px] leading-relaxed text-[#8B949E]">
+            No files in context. Search above, add the open file, or right-click in Explorer.
+          </p>
+        ) : (
+          <div className="max-h-[220px] space-y-0.5 overflow-y-auto custom-scrollbar">
+            {allPaths.map(({ path, pinned, isDir }) => {
+              const isActive = activeFilePath === path;
               return (
                 <div
-                  key={p}
+                  key={path}
                   className={cn(
                     "group flex items-center gap-2 rounded-md px-1.5 py-1",
                     isActive ? "bg-[#37373D]" : "hover:bg-[#1C1F26]",
@@ -402,20 +535,25 @@ function ScopeSection({
                     type="button"
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     onClick={() => {
-                      if (!isDir) openFileTab(p);
+                      if (!isDir) openFileTab(path);
                     }}
-                    title={p}
+                    title={path}
                   >
-                    <FileIcon path={p} isDirectory={isDir} className="h-3.5 w-3.5" />
-                    <span className="truncate font-mono text-[11px] text-[#C9D1D9]">{p}</span>
+                    <FileIcon path={path} isDirectory={isDir} className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate font-mono text-[11px] text-[#C9D1D9]">{path}</span>
+                    {pinned && (
+                      <span className="shrink-0 rounded bg-[#58A6FF]/15 px-1 py-0 text-[8px] font-bold uppercase text-[#58A6FF]">
+                        pinned
+                      </span>
+                    )}
                   </button>
                   {activeSessionId && (
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-6 w-6 shrink-0 opacity-0 text-[#8B949E] transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
-                      onClick={() => toggleScopePath(p)}
-                      title="Remove from scope"
+                      onClick={() => handleRemove(path)}
+                      title="Remove from context"
                     >
                       <Trash2 className="h-3 w-3" />
                     </Button>
@@ -426,6 +564,114 @@ function ScopeSection({
           </div>
         )}
       </div>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Skipped / excluded files
+// ---------------------------------------------------------------------------
+
+function SkippedFilesSection({
+  repoId,
+  filesSkipped,
+  skipBreakdown,
+}: {
+  repoId: string;
+  filesSkipped: number;
+  skipBreakdown?: Record<string, number>;
+}) {
+  const [filterReason, setFilterReason] = React.useState<string | undefined>();
+  const { data, isLoading } = useSkippedFiles(repoId, filterReason);
+  const openFileTab = useStudioStore((s) => s.openFileTab);
+
+  if (filesSkipped <= 0) return null;
+
+  const reasons = Object.entries(skipBreakdown ?? {}).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <Section
+      title="Excluded from index"
+      defaultOpen={filesSkipped <= 40}
+      badge={
+        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] text-amber-500">
+          {filesSkipped}
+        </span>
+      }
+    >
+      <p className="mb-2 text-[11px] leading-relaxed text-[#8B949E]">
+        {filesSkipped} file{filesSkipped === 1 ? "" : "s"} were not indexed. These paths are
+        excluded from semantic search but may still exist in the repo.
+      </p>
+
+      {reasons.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1">
+          <button
+            type="button"
+            onClick={() => setFilterReason(undefined)}
+            className={cn(
+              "rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+              !filterReason
+                ? "border-[#58A6FF]/40 bg-[#58A6FF]/10 text-[#58A6FF]"
+                : "border-[#2D313E] text-[#8B949E] hover:border-[#444D56]",
+            )}
+          >
+            All ({filesSkipped})
+          </button>
+          {reasons.map(([reason, count]) => (
+            <button
+              key={reason}
+              type="button"
+              onClick={() => setFilterReason(reason)}
+              className={cn(
+                "rounded border px-1.5 py-0.5 text-[10px] transition-colors",
+                filterReason === reason
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+                  : "border-[#2D313E] text-[#8B949E] hover:border-[#444D56]",
+              )}
+              title={formatSkipReason(reason)}
+            >
+              {formatSkipReason(reason)} ({count})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-[#8B949E]">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          <span className="text-[11px]">Loading excluded files…</span>
+        </div>
+      ) : !data?.items?.length ? (
+        <p className="text-[11px] text-[#8B949E]">No excluded files match this filter.</p>
+      ) : (
+        <div className="max-h-[280px] space-y-0.5 overflow-y-auto custom-scrollbar">
+          {data.items.map((file) => (
+            <div
+              key={file.path}
+              className="group flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-[#1C1F26]"
+            >
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500/80" />
+              <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  className="block w-full truncate text-left font-mono text-[11px] text-[#C9D1D9] hover:text-[#58A6FF]"
+                  title={file.path}
+                  onClick={() => openFileTab(file.path)}
+                >
+                  {file.path}
+                </button>
+                <p className="text-[10px] text-amber-500/90">{formatSkipReason(file.skip_reason)}</p>
+              </div>
+            </div>
+          ))}
+          {data.total > data.items.length && (
+            <p className="pt-1 text-center text-[10px] text-[#6E7681]">
+              Showing {data.items.length} of {data.total} excluded files
+            </p>
+          )}
+        </div>
+      )}
     </Section>
   );
 }
@@ -608,7 +854,8 @@ export function ContextPanel({
   const repoId = repositoryId || selectedRepositoryId || "";
   const selectedRepository = repositories.find((r) => r.id === repoId);
   const { data: insights, isLoading: insightsLoading } = useRepositoryInsights(repoId);
-  const { scopePaths, toggleScopePath, setScopePaths } = useSessionScope(activeSessionId);
+  const { scopePaths, attachedFiles, toggleScopePath, toggleAttachedFile, addMentionPath } =
+    useSessionScope(activeSessionId);
 
   const repoName = selectedRepository?.repo_id || repoId || "Repository";
   const repoShortName = repoName.split("/").pop() || repoName;
@@ -617,7 +864,9 @@ export function ContextPanel({
     insights?.latest_commit ||
     (selectedRepository?.latest_job_stats?.commit_sha as string | undefined);
   const lastCommit = commitSha ? commitSha.substring(0, 7) : "—";
-  const filesIndexed = insights?.files_indexed ?? selectedRepository?.latest_job_stats?.total_files ?? 0;
+  const filesIndexed = insights?.files_indexed ?? 0;
+  const filesTotal = insights?.files_total ?? 0;
+  const filesSkipped = insights?.files_skipped ?? 0;
   const chunksIndexed =
     insights?.chunk_count ?? selectedRepository?.latest_indexed_chunks ?? 0;
 
@@ -671,8 +920,8 @@ export function ContextPanel({
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <StatTile
-            label="Files"
-            value={`${Number(filesIndexed).toLocaleString()}`}
+            label="Indexed"
+            value={`${Number(filesIndexed).toLocaleString()} / ${Number(filesTotal).toLocaleString()}`}
             loading={insightsLoading}
           />
           <StatTile
@@ -682,9 +931,9 @@ export function ContextPanel({
           />
         </div>
 
-        {insights?.files_skipped != null && insights.files_skipped > 0 && (
-          <p className="mt-2 text-[10px] text-[#6E7681]">
-            {insights.files_skipped.toLocaleString()} files skipped during indexing
+        {filesSkipped > 0 && (
+          <p className="mt-2 text-[10px] text-amber-500/90">
+            {filesSkipped.toLocaleString()} excluded — see list below for reasons
           </p>
         )}
       </div>
@@ -692,14 +941,31 @@ export function ContextPanel({
       {/* Sections */}
       <div className="min-h-0 flex-1">
         <ScopeSection
+          repoId={repoId}
           scopePaths={scopePaths}
+          attachedFiles={attachedFiles}
           activeSessionId={activeSessionId}
           activeFilePath={activeFilePath}
           toggleScopePath={toggleScopePath}
-          setScopePaths={setScopePaths}
+          toggleAttachedFile={toggleAttachedFile}
+          addMentionPath={addMentionPath}
         />
 
-        {repoId && <TokenBudgetSection repoId={repoId} scopePaths={scopePaths} />}
+        {repoId && filesSkipped > 0 && (
+          <SkippedFilesSection
+            repoId={repoId}
+            filesSkipped={filesSkipped}
+            skipBreakdown={insights?.skip_reason_breakdown}
+          />
+        )}
+
+        {repoId && (
+          <TokenBudgetSection
+            repoId={repoId}
+            scopePaths={scopePaths}
+            attachedFiles={attachedFiles}
+          />
+        )}
 
         {activeSessionId && <SessionUsageSection sessionId={activeSessionId} />}
 

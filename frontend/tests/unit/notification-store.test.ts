@@ -6,6 +6,9 @@ describe('notification-store', () => {
     localStorage.removeItem('tm.notifications.items:user:guest');
     localStorage.removeItem('tm.notifications.items:user:user-a');
     localStorage.removeItem('tm.notifications.items:user:user-b');
+    localStorage.removeItem('tm.notifications.dismissed:user:guest');
+    localStorage.removeItem('tm.notifications.dismissed:user:user-a');
+    localStorage.removeItem('tm.notifications.dismissed:user:user-b');
     useNotificationStore.setState({ activeUserId: null, notifications: [] });
   });
 
@@ -132,6 +135,43 @@ describe('notification-store', () => {
     });
     const id = useNotificationStore.getState().notifications[0].id;
     useNotificationStore.getState().removeNotification(id);
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it('does not re-add a dismissed dedupeKey', () => {
+    useNotificationStore.getState().addNotification({
+      title: 'Indexing complete',
+      message: 'Done',
+      type: 'success',
+      dedupeKey: 'indexing:job-1:completed',
+    });
+    const id = useNotificationStore.getState().notifications[0].id;
+    useNotificationStore.getState().removeNotification(id);
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+    useNotificationStore.getState().addNotification({
+      title: 'Indexing complete',
+      message: 'Done again',
+      type: 'success',
+      dedupeKey: 'indexing:job-1:completed',
+    });
+    expect(useNotificationStore.getState().notifications).toHaveLength(0);
+  });
+
+  it('clearAll prevents dismissed notifications from returning', () => {
+    useNotificationStore.getState().addNotification({
+      title: 'One',
+      message: 'A',
+      type: 'info',
+      dedupeKey: 'patch:1:APPLIED',
+    });
+    useNotificationStore.getState().clearAll();
+    useNotificationStore.getState().addNotification({
+      title: 'One',
+      message: 'A',
+      type: 'info',
+      dedupeKey: 'patch:1:APPLIED',
+    });
     expect(useNotificationStore.getState().notifications).toHaveLength(0);
   });
 });

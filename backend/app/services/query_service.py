@@ -28,7 +28,7 @@ from app.core.exceptions import (
     WorkflowError,
 )
 from app.core.resilience import retry, circuit_breaker
-from app.db.models import ChatSession
+from app.db.models import ChatSession, Repository
 
 
 logger = logging.getLogger(__name__)
@@ -52,6 +52,7 @@ class QueryService:
         session_id: str | None = None,
         federated: bool = False,
         scope_paths: list[str] | None = None,
+        attached_files: list[str] | None = None,
         chat_mode: str = "ASK",
     ) -> dict:
         logger.info(
@@ -75,6 +76,7 @@ class QueryService:
             session_id=active_session_id,
             federated=federated,
             scope_paths=scope_paths,
+            attached_files=attached_files,
             chat_mode=chat_mode,
         )
         if from_cache:
@@ -210,6 +212,7 @@ class QueryService:
         session_id: str | None = None,
         federated: bool = False,
         scope_paths: list[str] | None = None,
+        attached_files: list[str] | None = None,
         chat_mode: str = "ASK",
     ) -> tuple[dict, str, str, bool]:
         logger.debug(
@@ -227,7 +230,8 @@ class QueryService:
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
         mode_key = "federated" if federated else "single"
         scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
-        scope_key = f"{repository_id}{scope_suffix}"
+        attached_suffix = f":{'-'.join(sorted(attached_files))}" if attached_files else ""
+        scope_key = f"{repository_id}{scope_suffix}{attached_suffix}"
         cache_key = f"chat:v3:{mode_key}:{scope_key}:{query_hash}:{history_hash}"
         cached = self.cache.get_json(cache_key)
         if cached is not None:
@@ -249,6 +253,11 @@ class QueryService:
         proposal = self._build_patch_proposal_from_state(result)
         if proposal:
             result["patch_proposal"] = proposal
+
+        attached_snippets = self._load_attached_file_snippets(repository_id, attached_files)
+        if attached_snippets:
+            existing = list(result.get("retrieved_context") or [])
+            result["retrieved_context"] = attached_snippets + existing
 
         if not result.get("retrieved_context"):
             retrieved = self.retrieval_service.retrieve_repository(
@@ -288,6 +297,54 @@ class QueryService:
             len(assembled_context),
         )
         return result, assembled_context, cache_key, False
+
+    def _load_attached_file_snippets(
+        self,
+        repository_id: str | None,
+        attached_files: list[str] | None,
+    ) -> list[dict]:
+        if not repository_id or not attached_files:
+            return []
+
+        from app.services.repository_cache import (
+            normalize_repository_file_path,
+            read_repository_file,
+            resolve_repository_workspace,
+        )
+
+        repo = self.session.query(Repository).filter(Repository.id == repository_id).first()
+        if not repo:
+            return []
+
+        repo_id_str = repo.repo_id or repository_id
+        cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
+        if not cache_path:
+            return []
+
+        snippets: list[dict] = []
+        max_chars = 50_000
+        for raw_path in attached_files:
+            norm = normalize_repository_file_path(
+                raw_path,
+                workspace=cache_path,
+                local_path=repo.local_path,
+            )
+            if not norm or ".." in norm.split("/"):
+                continue
+            content_bytes = read_repository_file(cache_path, norm)
+            if not content_bytes:
+                continue
+            content = content_bytes.decode("utf-8", errors="replace")
+            if len(content) > max_chars:
+                content = content[:max_chars] + "\n...(truncated)..."
+            snippets.append({
+                "path": norm,
+                "symbol": "attached",
+                "content": content,
+                "score": 1.0,
+                "pinned": True,
+            })
+        return snippets
 
     def _build_patch_proposal_from_state(self, state: dict) -> dict | None:
         patch_text = str(state.get("patch") or "").strip()

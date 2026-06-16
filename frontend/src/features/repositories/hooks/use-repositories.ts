@@ -184,6 +184,15 @@ export function useRepositoryInsights(repositoryId: string) {
   });
 }
 
+export function useSkippedFiles(repositoryId: string, reason?: string) {
+  return useQuery({
+    queryKey: ['repositories', repositoryId, 'skipped-files', reason],
+    queryFn: () => repositoryService.listSkippedFiles(repositoryId, { limit: 300, reason }),
+    enabled: !!repositoryId,
+    staleTime: 120_000,
+  });
+}
+
 export function useContextTokens(repositoryId: string, payload: { scope_paths?: string[]; attached_files?: string[]; retrieval_query?: string }) {
   return useQuery({
     queryKey: ['repositories', repositoryId, 'context-tokens', payload.scope_paths, payload.attached_files, payload.retrieval_query],

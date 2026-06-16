@@ -750,6 +750,68 @@ def get_repository_insights(session: Session, repository_id: str) -> dict[str, A
         "indexing_duration_seconds": indexing_duration
     }
 
+
+def list_skipped_repository_files(
+    session: Session,
+    repository_id: str,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Return skipped files with paths and skip reasons for the context panel."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    params: dict[str, Any] = {"rid": repository_id, "limit": limit, "offset": offset}
+    reason_filter = ""
+    if reason:
+        reason_filter = "AND skip_reason = :reason"
+        params["reason"] = reason
+
+    rows = session.execute(
+        text(
+            f"""
+            SELECT path, skip_reason, size_bytes, extension
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'SKIPPED'
+            {reason_filter}
+            ORDER BY path ASC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        params,
+    ).mappings().all()
+
+    total_row = session.execute(
+        text(
+            f"""
+            SELECT COUNT(*) as total
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'SKIPPED'
+            {reason_filter}
+            """
+        ),
+        params,
+    ).mappings().first()
+
+    items = [
+        {
+            "path": str(r["path"]),
+            "skip_reason": r.get("skip_reason") or "UNKNOWN",
+            "size_bytes": r.get("size_bytes"),
+            "extension": r.get("extension"),
+        }
+        for r in rows
+    ]
+    return {
+        "items": items,
+        "total": int(total_row["total"] or 0) if total_row else 0,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 def soft_delete_repository(session: Session, *, repository_id: str, user_id: str) -> None:
     is_sqlite = _is_sqlite_session(session)
     timestamp_sql = _timestamp_sql(sqlite=is_sqlite)

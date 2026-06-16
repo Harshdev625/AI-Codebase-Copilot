@@ -60,6 +60,7 @@ export function usePendingInviteNotifications(): void {
     let changed = false;
 
     for (const invite of query.data) {
+      const dedupeKey = `invite:${invite.id}`;
       if (seen.has(invite.id)) continue;
 
       const email = invite.email || userEmail || 'your email';

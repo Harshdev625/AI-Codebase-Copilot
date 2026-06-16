@@ -105,7 +105,7 @@ export function useUpdateSessionMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean; metadata?: Record<string, any> } }) => 
+    mutationFn: ({ sessionId, payload }: { sessionId: string; payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean; session_mode?: string; metadata?: Record<string, any> } }) => 
       chatService.updateSession(sessionId, payload),
     onSuccess: (_data, variables) => {
       void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
@@ -210,7 +210,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       content: string,
       mode: ChatMode = "ASK",
       scopePaths?: string[],
-      options?: { displayContent?: string },
+      options?: { displayContent?: string; attachedFiles?: string[] },
     ) => {
       if (isSendingRef.current) return;
       if (!content.trim()) return;
@@ -219,13 +219,18 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       const assistantMessageId = uuidv4();
       let localSessionId = currentSessionId;
       const visibleContent = options?.displayContent?.trim() || content;
+      const attachedFiles = options?.attachedFiles;
+
+      const metadata: Record<string, unknown> = {};
+      if (scopePaths?.length) metadata.scope_paths = scopePaths;
+      if (attachedFiles?.length) metadata.attached_files = attachedFiles;
 
       const newUserMessage: ChatMessage = {
         id: userMessageId,
         role: "user",
         content: visibleContent,
         created_at: new Date().toISOString(),
-        metadata: scopePaths?.length ? { scope_paths: scopePaths } : {},
+        metadata,
       };
 
       const placeholderAssistantMessage: ChatMessage = {
@@ -248,6 +253,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         mode,
         session_id: localSessionId || undefined,
         scope_paths: scopePaths,
+        attached_files: attachedFiles,
       };
 
       if (repositoryId) {

@@ -31,12 +31,46 @@ interface NotificationStore {
 const MAX_NOTIFICATIONS = 50;
 const LEGACY_STORAGE_KEY = 'tm.notifications.items';
 const STORAGE_KEY_PREFIX = 'tm.notifications.items:user:';
+const DISMISSED_KEYS_PREFIX = 'tm.notifications.dismissed:user:';
 
 const isBrowser = () => typeof window !== 'undefined';
 
 function storageKeyForUser(userId: string | null): string {
   return `${STORAGE_KEY_PREFIX}${userId ?? 'guest'}`;
 }
+
+function dismissedKeysStorageKey(userId: string | null): string {
+  return `${DISMISSED_KEYS_PREFIX}${userId ?? 'guest'}`;
+}
+
+const readDismissedKeys = (userId: string | null): Set<string> => {
+  if (!isBrowser()) return new Set();
+  const raw = window.localStorage.getItem(dismissedKeysStorageKey(userId));
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
+  } catch {
+    return new Set();
+  }
+};
+
+const writeDismissedKeys = (userId: string | null, keys: Set<string>) => {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(
+    dismissedKeysStorageKey(userId),
+    JSON.stringify([...keys].slice(-500)),
+  );
+};
+
+const markDedupeKeyDismissed = (userId: string | null, dedupeKey: string) => {
+  const keys = readDismissedKeys(userId);
+  keys.add(dedupeKey);
+  writeDismissedKeys(userId, keys);
+};
+
+const isDedupeKeyDismissed = (userId: string | null, dedupeKey: string): boolean =>
+  readDismissedKeys(userId).has(dedupeKey);
 
 const readStoredNotifications = (userId: string | null): Notification[] => {
   if (!isBrowser()) return [];
@@ -91,6 +125,11 @@ export const useNotificationStore = create<NotificationStoreInternal>((set, get)
 
     addNotification: (n) =>
       set((state) => {
+        const userId = get().activeUserId;
+        if (n.dedupeKey && isDedupeKeyDismissed(userId, n.dedupeKey)) {
+          return state;
+        }
+
         if (n.dedupeKey) {
           const existing = state.notifications.find((item) => item.dedupeKey === n.dedupeKey);
           if (existing) {
@@ -105,7 +144,7 @@ export const useNotificationStore = create<NotificationStoreInternal>((set, get)
                   }
                 : item,
             );
-            writeStoredNotifications(get().activeUserId, updated);
+            writeStoredNotifications(userId, updated);
             return { notifications: updated };
           }
         }
@@ -142,13 +181,24 @@ export const useNotificationStore = create<NotificationStoreInternal>((set, get)
 
     removeNotification: (id) =>
       set((state) => {
+        const userId = get().activeUserId;
+        const target = state.notifications.find((notif) => notif.id === id);
+        if (target?.dedupeKey) {
+          markDedupeKeyDismissed(userId, target.dedupeKey);
+        }
         const next = state.notifications.filter((notif) => notif.id !== id);
-        writeStoredNotifications(get().activeUserId, next);
+        writeStoredNotifications(userId, next);
         return { notifications: next };
       }),
 
     clearAll: () => {
-      writeStoredNotifications(get().activeUserId, []);
+      const userId = get().activeUserId;
+      const dismissed = readDismissedKeys(userId);
+      get().notifications.forEach((notif) => {
+        if (notif.dedupeKey) dismissed.add(notif.dedupeKey);
+      });
+      writeDismissedKeys(userId, dismissed);
+      writeStoredNotifications(userId, []);
       set({ notifications: [] });
     },
   };

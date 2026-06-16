@@ -70,9 +70,12 @@ export function StatusBar() {
       <div className="flex items-center gap-3 shrink-0">
         {selectedRepository && !isRunning && insights && (
           <>
-            <div className="hidden sm:flex items-center gap-1" title="Files indexed">
+            <div className="hidden sm:flex items-center gap-1" title={`${insights.files_indexed} indexed, ${insights.files_skipped ?? 0} excluded, ${insights.files_total} total`}>
               <FileCode2 className="w-3 h-3 opacity-70" />
               <span>{insights.files_indexed}/{insights.files_total}</span>
+              {(insights.files_skipped ?? 0) > 0 && (
+                <span className="text-amber-400/90">· {insights.files_skipped} excl.</span>
+              )}
             </div>
             {typeof selectedRepository.latest_indexed_chunks === 'number' && (
               <div className="hidden md:flex items-center gap-1" title="Chunks">

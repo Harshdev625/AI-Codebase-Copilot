@@ -30,6 +30,7 @@ export type ChatRequestPayload = {
   mode?: ChatMode;
   include_patch?: boolean;
   scope_paths?: string[];
+  attached_files?: string[];
 };
 
 export type Source = {

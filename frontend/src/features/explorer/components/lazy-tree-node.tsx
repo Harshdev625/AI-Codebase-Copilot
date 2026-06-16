@@ -132,6 +132,12 @@ export function LazyTreeNode({
       <div
         onClick={handleClick}
         onContextMenu={handleContextMenu}
+        draggable={type === "FILE" || type === "DIRECTORY"}
+        onDragStart={(e) => {
+          e.dataTransfer.setData("application/x-studio-path", path);
+          e.dataTransfer.setData("text/plain", path);
+          e.dataTransfer.effectAllowed = "copy";
+        }}
         style={{ paddingLeft: depth * INDENT_PX }}
         className={cn(
           "group flex cursor-pointer items-center justify-between rounded-[3px] py-[3px] pr-1.5 text-[13px] leading-tight transition-colors",
