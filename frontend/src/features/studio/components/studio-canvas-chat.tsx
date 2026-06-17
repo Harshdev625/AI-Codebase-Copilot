@@ -208,7 +208,7 @@ export function StudioCanvasChat({
   return (
     <main
       className={cn(
-        "relative z-0 flex min-h-0 flex-1 flex-col bg-[#0B0D14]",
+        "relative z-0 flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-[#0B0D14]",
         isDock && "h-full",
       )}
       aria-live="polite"
@@ -272,31 +272,32 @@ export function StudioCanvasChat({
           </div>
         )}
 
-        <Virtuoso
-          data={messages}
-          itemContent={(_, message) => (
-            <ChatMessageItemBubble
-              key={message.id}
-              message={message}
-              repositoryId={repositoryId}
-            />
-          )}
-          className={cn(
-            "h-full w-full min-w-0 overflow-x-hidden custom-scrollbar px-3 py-1",
-            !isDock && "md:px-6",
-          )}
-          alignToBottom
-          followOutput="smooth"
-          components={{
-            Footer: () => <div style={{ height: Math.max(inputHeight, 120) }} aria-hidden />,
-          }}
-        />
+        <div className="h-full w-full min-w-0 overflow-x-hidden">
+          <Virtuoso
+            data={messages}
+            itemContent={(_, message) => (
+              <ChatMessageItemBubble
+                key={message.id}
+                message={message}
+                repositoryId={repositoryId}
+              />
+            )}
+            className={cn(
+              "h-full w-full min-w-0 overflow-x-hidden custom-scrollbar",
+            )}
+            alignToBottom
+            followOutput="smooth"
+            components={{
+              Footer: () => <div style={{ height: Math.max(inputHeight, 120) }} aria-hidden />,
+            }}
+          />
+        </div>
       </div>
 
       <div
         ref={inputAreaRef}
         className={cn(
-          "shrink-0 border-t border-[#1E212B]/80 bg-[#0B0D14] px-3 pb-3 pt-2",
+          "shrink-0 min-w-0 border-t border-[#1E212B]/80 bg-[#0B0D14] px-3 pb-3 pt-2",
           !isDock && "md:px-8",
         )}
       >

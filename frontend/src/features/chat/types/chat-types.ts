@@ -1,3 +1,54 @@
+export type TraceNodeName =
+  | "planner"
+  | "retrieval"
+  | "reasoning"
+  | "tool_execution"
+  | "answer"
+  | "llm";
+
+export type TraceStepStatus = "running" | "done" | "error";
+export type TraceStage = "pipeline" | "llm";
+
+export type TraceSourcePreview = {
+  path: string;
+  score?: number;
+};
+
+export type TraceStepDetail = {
+  intent?: string;
+  retrieved_count?: number;
+  confidence?: number;
+  scope_paths?: string[];
+  source_preview?: TraceSourcePreview[];
+  tool_name?: string;
+  error?: string;
+};
+
+export type TraceStep = {
+  node: TraceNodeName;
+  label: string;
+  ts?: number;
+  stage?: TraceStage;
+  status?: TraceStepStatus;
+  detail?: TraceStepDetail;
+};
+
+export type AssistantMessageMetadata = {
+  intent?: string;
+  statuses?: string[];
+  trace?: TraceStep[];
+  traceSteps?: TraceStep[];
+  sources?: Source[];
+  source_index?: Source[];
+  usage?: TokenUsage;
+  session_usage?: SessionUsageTotals;
+  patch_proposal?: unknown;
+  patches?: string[];
+  scope_paths?: string[];
+  attached_files?: string[];
+  isStreaming?: boolean;
+};
+
 export type ChatMode = "ASK" | "PLAN" | "ACT";
 
 export type ChatSession = {
@@ -26,6 +77,7 @@ export type ChatRequestPayload = {
   repository_id?: string;
   repo_id?: string;
   query: string;
+  display_query?: string;
   session_id?: string;
   mode?: ChatMode;
   include_patch?: boolean;
@@ -92,6 +144,7 @@ export type SessionUsageTotals = {
 };
 
 export type ChatStreamStatus = { type: "status"; step: string; stage?: string };
+export type ChatStreamTraceStep = { type: "trace_step"; step: TraceStep };
 export type ChatStreamSource = { type: "source"; source: Source };
 export type ChatStreamProgress = { type: "progress"; stage: string; percent: number };
 export type ChatStreamError = { type: "error"; error: string };
@@ -103,6 +156,7 @@ export type ChatStreamEvent =
   | ChatStreamChunk 
   | ChatStreamDone
   | ChatStreamStatus
+  | ChatStreamTraceStep
   | ChatStreamSource
   | ChatStreamProgress
   | ChatStreamError

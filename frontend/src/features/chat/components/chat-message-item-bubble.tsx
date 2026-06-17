@@ -15,6 +15,7 @@ import { formatChatTimestamp } from '@/features/chat/utils/chat-timestamp-utils'
 import { formatTokenCount, getMessageUsage } from '@/features/chat/utils/token-usage-utils';
 import { FileIcon } from '@/features/studio/components/file-icon';
 import { useStudioStore } from '@/features/studio/store/studio-store';
+import { LiveThinkingStrip } from './live-thinking-strip';
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
@@ -81,7 +82,7 @@ function SourceExplorerV2({ sources }: { sources: Source[] }) {
       <div className="mt-2 grid min-w-0 grid-cols-1 gap-1.5">
         {sources.map((src, idx) => {
           const score = typeof src.rerank_score === 'number' ? src.rerank_score : (typeof src.score === 'number' ? src.score : null);
-          const scoreDisplay = score !== null ? (score * 100).toFixed(1) + '%' : 'N/A';
+          const scoreDisplay = score !== null ? (score * 100).toFixed(0) : '—';
           const displayPath = normalizeRepoPath(src.path);
           return (
             <button
@@ -95,7 +96,7 @@ function SourceExplorerV2({ sources }: { sources: Source[] }) {
                   <FileIcon path={src.path} className="h-3 w-3 shrink-0" />
                   <span className="truncate text-[11px] font-semibold" title={src.path}>{displayPath}</span>
                 </span>
-                <Badge variant="outline" className="shrink-0 border-[#5CD4C2]/30 text-[8px] px-1 py-0 h-3.5">{scoreDisplay}</Badge>
+                <Badge variant="outline" className="shrink-0 border-[#5CD4C2]/30 text-[8px] px-1 py-0 h-3.5" title="Relevance score">{scoreDisplay}</Badge>
               </div>
             </button>
           );
@@ -119,33 +120,41 @@ export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp 
 
   const repositoryId = repositoryIdProp || selectedRepositoryId || '';
   const timestamp = message.created_at ? formatChatTimestamp(message.created_at) : 'Just now';
+  const isStreaming = Boolean(metadata.isStreaming);
+
+  const sortedSources = React.useMemo(() => {
+    return [...normalSources].sort((a, b) => {
+      const scoreA =
+        typeof a.rerank_score === 'number' ? a.rerank_score : typeof a.score === 'number' ? a.score : 0;
+      const scoreB =
+        typeof b.rerank_score === 'number' ? b.rerank_score : typeof b.score === 'number' ? b.score : 0;
+      return scoreB - scoreA;
+    });
+  }, [normalSources]);
 
   return (
-    <div
-      className={cn(
-        'group flex w-full min-w-0 px-2 py-1.5 overflow-x-hidden',
-        isAssistant ? 'justify-end' : 'justify-start',
-      )}
-    >
+    <div className="group w-full min-w-0 box-border px-3 py-2">
       <div
         className={cn(
-          'flex min-w-0 max-w-[96%] flex-row items-end gap-2.5',
-          isAssistant ? 'ml-auto' : 'mr-auto',
+          'flex w-full min-w-0 items-end gap-2',
+          isAssistant ? 'justify-end' : 'justify-start',
         )}
       >
-        <div
-          className={cn(
-            'mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
-            isAssistant ? ASSISTANT_AVATAR : USER_AVATAR,
-          )}
-        >
-          {isAssistant ? <Bot className="h-4 w-4" /> : <UserRound className="h-3.5 w-3.5" />}
-        </div>
+        {!isAssistant && (
+          <div
+            className={cn(
+              'mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
+              USER_AVATAR,
+            )}
+          >
+            <UserRound className="h-3.5 w-3.5" />
+          </div>
+        )}
 
         <div
           className={cn(
-            'min-w-0 max-w-full overflow-hidden rounded-2xl border px-4 py-3',
-            isAssistant ? cn(ASSISTANT_BUBBLE, 'rounded-bl-md') : cn(USER_BUBBLE, 'rounded-bl-md'),
+            'min-w-0 max-w-[min(88%,48rem)] overflow-hidden rounded-2xl border px-4 py-3',
+            isAssistant ? cn(ASSISTANT_BUBBLE, 'rounded-br-md') : cn(USER_BUBBLE, 'rounded-bl-md'),
           )}
         >
           <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -165,24 +174,8 @@ export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp 
             )}
           </div>
 
-          {isAssistant && (
-            (Array.isArray(metadata.statuses) && metadata.statuses.length > 0) ||
-            (Array.isArray(metadata.trace) && metadata.trace.length > 0)
-          ) && (
-            <details className="group mb-2 min-w-0">
-              <summary className="cursor-pointer text-[11px] font-semibold text-[#5CD4C2]/80 flex items-center gap-1.5 hover:text-[#5CD4C2] select-none">
-                <span className="group-open:rotate-90 transition-transform text-[8px]">▶</span>
-                Thinking Process
-              </summary>
-              <div className="mt-1.5 pl-3 border-l-2 border-[#5CD4C2]/30 flex flex-col gap-1">
-                {Array.isArray(metadata.statuses) && metadata.statuses.map((status: string, idx: number) => (
-                  <div key={`status-${idx}`} className="text-[10px] opacity-80 flex items-center gap-1.5 break-words">
-                    <span className="w-1 h-1 rounded-full bg-[#5CD4C2]/60 shrink-0" />
-                    {status}
-                  </div>
-                ))}
-              </div>
-            </details>
+          {isAssistant && isStreaming && (
+            <LiveThinkingStrip metadata={metadata} sources={sortedSources as Source[]} />
           )}
 
           <div className="min-w-0 overflow-x-hidden text-[14px] leading-relaxed">
@@ -239,14 +232,25 @@ export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp 
             </div>
           )}
 
-          {isAssistant && normalSources.length > 0 && (
-            <SourceExplorerV2 sources={normalSources as Source[]} />
+          {isAssistant && !isStreaming && sortedSources.length > 0 && (
+            <SourceExplorerV2 sources={sortedSources as Source[]} />
           )}
 
           <div className="mt-2 flex justify-end">
             <CopyButton text={displayContent} />
           </div>
         </div>
+
+        {isAssistant && (
+          <div
+            className={cn(
+              'mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
+              ASSISTANT_AVATAR,
+            )}
+          >
+            <Bot className="h-4 w-4" />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -363,16 +363,22 @@ def get_patch(
             return ""
         return raw.decode("utf-8", errors="replace")
 
-    patch_files = [
-        {
-            "path": f.file_path,
-            "action": f.action,
-            "original_content": _fetch_original(f.file_path) if f.action != "create" else "",
-            "modified_content": f.file_diff,
-            "file_diff": f.file_diff,
-        }
-        for f in patch.patch_files
-    ]
+    from app.utils.diff_utils import apply_unified_diff
+
+    patch_files = []
+    for f in patch.patch_files:
+        original = _fetch_original(f.file_path) if f.action != "create" else ""
+        file_diff = f.file_diff or ""
+        modified = apply_unified_diff(original, file_diff) if original and file_diff else file_diff
+        patch_files.append(
+            {
+                "path": f.file_path,
+                "action": f.action,
+                "original_content": original,
+                "modified_content": modified,
+                "file_diff": file_diff,
+            }
+        )
 
     return success_response({
         "id": patch.id,

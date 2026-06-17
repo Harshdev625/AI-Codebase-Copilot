@@ -389,7 +389,9 @@ export function PatchReviewEditor({
               <div className="absolute inset-0">
                 <MonacoDiffViewer
                   originalContent={selectedFile.original_content || ''}
-                  modifiedContent={selectedFile.file_diff || ''}
+                  modifiedContent={
+                    selectedFile.modified_content || selectedFile.file_diff || ''
+                  }
                   filePath={selectedFile.path}
                 />
               </div>

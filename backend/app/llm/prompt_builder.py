@@ -56,6 +56,18 @@ def build_context_packet(
             "Do not deviate from this template. Do not write a casual response."
         )
 
+    if chat_mode.upper() == "ACT":
+        packets.append(
+            "*** ACT MODE ENFORCEMENT ***\n"
+            "You are in ACT mode. Output a valid unified diff patch that can be applied with git apply.\n"
+            "Rules:\n"
+            "1. Start with `diff --git a/<path> b/<path>` for each changed file.\n"
+            "2. Include ---/+++ headers and @@ hunk markers.\n"
+            "3. Wrap the full patch in a ```diff fenced block.\n"
+            "4. Keep prose minimal (1-2 sentence summary max before the diff).\n"
+            "5. Only modify files supported by the retrieved context.\n"
+        )
+
     total_chars = sum(len(part) for part in packets)
     for idx, snippet in enumerate(snippets, start=1):
         source_id = f"S{idx}"

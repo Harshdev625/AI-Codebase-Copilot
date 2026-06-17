@@ -66,8 +66,32 @@ def _make_chat_test_app(monkeypatch: pytest.MonkeyPatch, fake_query_service_cls)
 
     monkeypatch.setattr(chat_module, "ensure_repository_access", lambda *_args, **_kwargs: {"id": "r1"})
     monkeypatch.setattr(chat_module, "QueryService", fake_query_service_cls)
+    monkeypatch.setattr(chat_module, "_session_usage_totals", lambda _service, _session_id: None)
 
     return TestClient(app)
+
+
+def _pipeline_from_prepare(prepare_coro):
+    async def stream_generation_pipeline(self, repository_id, repo_id, query, **kwargs):
+        result, assembled_context, cache_key, from_cache = await prepare_coro(
+            self, repository_id, repo_id, query, **kwargs
+        )
+        if not from_cache:
+            for entry in result.get("run_trace", []):
+                if isinstance(entry, dict):
+                    yield {"type": "trace_step", "entry": entry}
+            for source in list(result.get("retrieved_context") or [])[:8]:
+                if isinstance(source, dict):
+                    yield {"type": "source", "source": source}
+        yield {
+            "type": "complete",
+            "result": result,
+            "assembled_context": assembled_context,
+            "cache_key": cache_key,
+            "from_cache": from_cache,
+        }
+
+    return stream_generation_pipeline
 
 
 def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,18 +99,20 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
         def __init__(self, session):
             self.session = session
 
-        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None, attached_files=None):
             _ = repository_id
             return (
                 {
                     "answer": "cached-answer",
                     "intent": "explain",
-                    "retrieved_context": [{"path": "x"}],
+                    "retrieved_context": [{"path": "x", "content": "body"}],
                 },
                 "",
                 "k",
                 True,
             )
+
+        stream_generation_pipeline = _pipeline_from_prepare(prepare_generation)
 
         async def _ensure_session(self, session_id, user_id, repository_id):
             return session_id or "new-session"
@@ -103,37 +129,59 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
     assert resp.status_code == 200
 
     events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
-    assert events[0]["data"]["type"] == "start"
-    assert any(e["data"].get("type") == "chunk" for e in events)
-    assert events[-1]["data"]["type"] == "done"
+    data_events = [e["data"] for e in events if e.get("success")]
+    assert data_events[0]["type"] == "start"
+    assert any(e.get("type") == "source" for e in data_events)
+    assert any(e.get("type") == "chunk" for e in data_events)
+    assert data_events[-1]["type"] == "done"
 
 
 def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.MonkeyPatch) -> None:
     finalized = {"called": 0}
 
     class FakeModelRouter:
-        def stream_chat(self, prompt: str, context: str = ""):
+        def stream_chat(self, prompt: str, context: str = "", system_prompt: str = ""):
             assert prompt == "hey"
             assert "File:" in context
             yield "a"
             yield "b"
+
+        def consume_stream_usage(self) -> dict:
+            return {}
 
     class FakeQueryService:
         def __init__(self, session):
             self.session = session
             self._router = FakeModelRouter()
 
-        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None):
+        async def prepare_generation(self, repository_id: str, repo_id: str, query: str, *, user_id=None, session_id=None, federated=False, scope_paths=None, chat_mode=None, attached_files=None):
             _ = repository_id
             return (
                 {
                     "intent": "explain",
                     "retrieved_context": [{"path": "a.py", "symbol": "m", "content": "x"}],
+                    "run_trace": [
+                        {
+                            "node": "planner",
+                            "label": "Planning intent: search",
+                            "detail": {"intent": "search"},
+                        },
+                        {
+                            "node": "retrieval",
+                            "label": "Retrieved 1 sources",
+                            "detail": {
+                                "retrieved_count": 1,
+                                "source_preview": [{"path": "a.py", "score": 0.9}],
+                            },
+                        },
+                    ],
                 },
                 "File: a.py | Symbol: m\nx",
                 "k",
                 False,
             )
+
+        stream_generation_pipeline = _pipeline_from_prepare(prepare_generation)
 
         async def _ensure_session(self, session_id, user_id, repository_id):
             return session_id or "new-session"
@@ -151,9 +199,12 @@ def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.Monkey
     assert resp.status_code == 200
 
     events = [json.loads(line[6:]) for line in resp.text.splitlines() if line.startswith("data: ")]
-    chunks = [e["data"]["delta"] for e in events if e["data"].get("type") == "chunk"]
+    data_events = [e["data"] for e in events if e.get("success")]
+    chunks = [e["delta"] for e in data_events if e.get("type") == "chunk"]
     assert "".join(chunks) == "ab"
-    assert events[-1]["data"]["type"] == "done"
+    assert any(e.get("type") == "trace_step" for e in data_events)
+    assert any(e.get("type") == "source" for e in data_events)
+    assert data_events[-1]["type"] == "done"
     assert finalized["called"] == 1
 
 
@@ -174,6 +225,8 @@ def test_chat_stream_llm_failure_emits_error_event(monkeypatch: pytest.MonkeyPat
                 "k",
                 False,
             )
+
+        stream_generation_pipeline = _pipeline_from_prepare(prepare_generation)
 
         async def _ensure_session(self, session_id, user_id, repository_id):
             return session_id or "new-session"

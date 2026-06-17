@@ -45,7 +45,7 @@ const customJestConfig = {
     "^react-diff-viewer-continued$": "<rootDir>/tests/__mocks__/react-diff-viewer-continued.tsx",
     "^react-markdown$": "<rootDir>/tests/__mocks__/react-markdown.tsx",
     "^remark-gfm$": "<rootDir>/tests/__mocks__/remark-gfm.ts",
-    "^uuid$": require.resolve("uuid"),
+    "^uuid$": "<rootDir>/tests/__mocks__/uuid.ts",
     "^@/(.*)$": "<rootDir>/src/$1"
   },
   testMatch: ["**/*.test.ts", "**/*.test.tsx"]

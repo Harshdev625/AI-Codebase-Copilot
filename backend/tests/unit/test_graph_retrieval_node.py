@@ -29,6 +29,7 @@ def test_retrieval_node_passes_scope_paths():
         query="tell me about the project",
         top_k=8,
         scope_paths=["README.md"],
+        intent=None,
     )
     assert len(result["retrieved_context"]) == 1
     assert result["run_trace"][-1]["node"] == "retrieval"

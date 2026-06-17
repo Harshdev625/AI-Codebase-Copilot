@@ -17,14 +17,25 @@ jest.mock("@/features/chat/components/chat-message-item-bubble", () => ({
 jest.mock("@/features/chat/hooks/use-session-scope", () => ({
   useSessionScope: jest.fn(() => ({
     scopePaths: [],
+    attachedFiles: [],
     setScopePaths: jest.fn(),
+    toggleScopePath: jest.fn(),
+    toggleAttachedFile: jest.fn(),
+    addMentionPath: jest.fn(),
+    updateScopeMetadata: jest.fn(),
   })),
 }));
 
 jest.mock("@/features/studio/store/studio-store", () => ({
-  useStudioStore: () => ({
-    setSelectedRepositoryId: jest.fn(),
-  }),
+  useStudioStore: (selector?: (state: Record<string, unknown>) => unknown) => {
+    const state = {
+      setSelectedRepositoryId: jest.fn(),
+      activeFilePath: null,
+      editorTabs: [],
+      activeTabId: null,
+    };
+    return typeof selector === "function" ? selector(state) : state;
+  },
 }));
 
 jest.mock("react-markdown", () => ({ children }: { children: React.ReactNode }) => (
@@ -95,11 +106,16 @@ describe("StudioCanvasChat", () => {
       { wrapper: TestProviders }
     );
 
-    const input = screen.getByPlaceholderText("Describe the changes, ask a question, or reference files...");
+    const input = screen.getByPlaceholderText("Ask a question or type @ to reference files…");
     fireEvent.change(input, { target: { value: "my query" } });
     fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
 
-    expect(sendMessageMock).toHaveBeenCalledWith("my query", "ASK", []);
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "my query",
+      "ASK",
+      [],
+      expect.objectContaining({ displayContent: "my query" }),
+    );
   });
 
   it("shows stop generating button", () => {

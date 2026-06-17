@@ -3,8 +3,17 @@ import * as React from "react";
 import { v4 as uuidv4 } from "uuid";
 
 import { chatService } from "@/features/chat/services/chat-service";
-import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source } from "@/features/chat/types/chat-types";
-import { normalizeChatMessage, normalizeMessageMetadata, stripPromptEchoFromAssistant } from "@/features/chat/utils/chat-message-utils";
+import type { ChatMessage, ChatRequestPayload, ChatStreamEvent, ChatMode, Source, TraceStep } from "@/features/chat/types/chat-types";
+import { normalizeChatMessage, normalizeMessageMetadata, stripPromptEchoFromAssistant, getDisplayContent } from "@/features/chat/utils/chat-message-utils";
+import {
+  ensureLlmStep,
+  finalizeTraceSteps,
+  inferNodeFromLabel,
+  markPreviousStepsDone,
+  mergeTraceFromDone,
+  normalizeTraceStep,
+  upsertTraceStep,
+} from "@/features/chat/utils/trace-utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 import { useStudioWorkbenchSessionOptional } from "@/features/studio/context/studio-workbench-context";
 
@@ -15,6 +24,80 @@ export const chatKeys = {
 };
 
 const HISTORY_SYNC_DEBOUNCE_MS = 500;
+
+function localUserText(msg: ChatMessage): string {
+  const meta = msg.metadata ?? {};
+  if (typeof meta.display_content === "string" && meta.display_content.trim()) {
+    return meta.display_content.trim();
+  }
+  return getDisplayContent(msg.content, msg.role, meta);
+}
+
+function serverUserText(msg: ChatMessage): string {
+  const meta = msg.metadata ?? {};
+  if (typeof meta.display_content === "string" && meta.display_content.trim()) {
+    return meta.display_content.trim();
+  }
+  return getDisplayContent(msg.content, msg.role, meta);
+}
+
+function usersMatch(local: ChatMessage, server: ChatMessage): boolean {
+  const localText = localUserText(local);
+  const serverText = serverUserText(server);
+  return (
+    localText === serverText ||
+    local.content.trim() === server.content.trim() ||
+    local.content.trim() === serverText
+  );
+}
+
+function mergeServerMessages(local: ChatMessage[], server: ChatMessage[]): ChatMessage[] {
+  const normalized = server.map((item) => normalizeChatMessage(item));
+  if (normalized.length === 0) return local;
+  if (local.length === 0) return normalized;
+
+  const localUsers = local.filter((msg) => msg.role === "user");
+  const serverUsers = normalized.filter((msg) => msg.role === "user");
+  const serverAssistants = normalized.filter((msg) => msg.role === "assistant");
+  const orphanUsers = localUsers.filter((lu) => !serverUsers.some((su) => usersMatch(lu, su)));
+
+  if (orphanUsers.length === 0 && normalized.length >= local.length) {
+    return normalized;
+  }
+
+  const merged: ChatMessage[] = [];
+  let assistantIdx = 0;
+
+  for (const localMsg of local) {
+    if (localMsg.role === "user") {
+      const serverMatch = serverUsers.find((su) => usersMatch(localMsg, su));
+      if (serverMatch && !merged.some((msg) => msg.id === serverMatch.id)) {
+        merged.push(serverMatch);
+      } else {
+        merged.push(localMsg);
+      }
+      continue;
+    }
+
+    if (localMsg.role === "assistant") {
+      const serverAssistant = serverAssistants[assistantIdx];
+      if (serverAssistant && !merged.some((msg) => msg.id === serverAssistant.id)) {
+        merged.push(serverAssistant);
+        assistantIdx += 1;
+      } else if (!localMsg.metadata?.isStreaming) {
+        merged.push(localMsg);
+      }
+    }
+  }
+
+  for (const serverMsg of normalized) {
+    if (!merged.some((msg) => msg.id === serverMsg.id)) {
+      merged.push(serverMsg);
+    }
+  }
+
+  return merged;
+}
 
 export function useChatSessions(limit = 20, offset = 0, repositoryId?: string, search?: string, isArchived?: boolean) {
   return useQuery({
@@ -152,7 +235,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
     if (Date.now() < skipHistorySyncUntilRef.current) {
       return;
     }
-    setMessages(items.map((item) => normalizeChatMessage(item)));
+    setMessages((prev) => mergeServerMessages(prev, items));
   }, [currentSessionId, messagesQuery.data?.items, isSending]);
 
   React.useEffect(() => {
@@ -175,6 +258,10 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   }, [setCurrentSessionId]);
 
   const selectSession = React.useCallback((sessionId: string) => {
+    if (sessionId === currentSessionId) {
+      void queryClient.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+      return;
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -183,7 +270,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
     }
     setCurrentSessionId(sessionId);
     setMessages([]);
-  }, [setCurrentSessionId]);
+  }, [setCurrentSessionId, currentSessionId, queryClient]);
 
   const stopGeneration = React.useCallback(() => {
     if (abortControllerRef.current) {
@@ -221,7 +308,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
       const visibleContent = options?.displayContent?.trim() || content;
       const attachedFiles = options?.attachedFiles;
 
-      const metadata: Record<string, unknown> = {};
+      const metadata: Record<string, unknown> = { display_content: visibleContent };
       if (scopePaths?.length) metadata.scope_paths = scopePaths;
       if (attachedFiles?.length) metadata.attached_files = attachedFiles;
 
@@ -238,7 +325,12 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         role: "assistant",
         content: "",
         created_at: new Date().toISOString(),
-        metadata: {},
+        metadata: {
+          isStreaming: true,
+          traceSteps: [],
+          statuses: [],
+          sources: [],
+        },
       };
 
       setMessages((prev) => [...prev, newUserMessage, placeholderAssistantMessage]);
@@ -255,6 +347,9 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         scope_paths: scopePaths,
         attached_files: attachedFiles,
       };
+      if (visibleContent !== content) {
+        payload.display_query = visibleContent;
+      }
 
       if (repositoryId) {
         payload.repository_id = repositoryId;
@@ -264,75 +359,140 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         await chatService.stream(
           payload,
           (event: ChatStreamEvent) => {
-            if (event.type === 'start' && event.session_id) {
-              if (localSessionId !== event.session_id) {
-                localSessionId = event.session_id;
-                setSessionIdSilent(event.session_id);
-                void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
-                void queryClient.invalidateQueries({ queryKey: chatKeys.session(event.session_id) });
-                void queryClient.invalidateQueries({ queryKey: ["admin", "metrics"] });
+            const updateAssistant = (
+              updater: (metadata: Record<string, unknown>, content: string) => Record<string, unknown> | void,
+              contentUpdater?: (content: string) => string,
+            ) => {
+              setMessages((prev) =>
+                prev.map((msg) => {
+                  if (msg.id !== assistantMessageId) return msg;
+                  const nextMetadata = { ...msg.metadata };
+                  const metadataResult = updater(nextMetadata, msg.content);
+                  const mergedMetadata =
+                    metadataResult && typeof metadataResult === "object"
+                      ? metadataResult
+                      : nextMetadata;
+                  return {
+                    ...msg,
+                    content: contentUpdater ? contentUpdater(msg.content) : msg.content,
+                    metadata: mergedMetadata,
+                  };
+                }),
+              );
+            };
+
+            if (event.type === "start") {
+              if (event.session_id) {
+                if (localSessionId !== event.session_id) {
+                  localSessionId = event.session_id;
+                  setSessionIdSilent(event.session_id);
+                  void queryClient.invalidateQueries({ queryKey: ["chat", "sessions"] });
+                  void queryClient.invalidateQueries({ queryKey: chatKeys.session(event.session_id) });
+                  void queryClient.invalidateQueries({ queryKey: ["admin", "metrics"] });
+                }
               }
-            } else if ((event.type === 'chunk' && event.delta) || (event.type === 'answer' && event.text)) {
-              const deltaStr = event.type === 'chunk' ? event.delta : event.text;
-              setMessages((prev) => 
-                prev.map((msg) => {
-                  if (msg.id === assistantMessageId) {
-                    const nextContent = stripPromptEchoFromAssistant(msg.content + deltaStr);
-                    return { ...msg, content: nextContent };
-                  }
-                  return msg;
-                })
+              if (event.intent && event.intent !== "unknown") {
+                updateAssistant((metadata) => {
+                  metadata.intent = event.intent;
+                  return metadata;
+                });
+              }
+            } else if ((event.type === "chunk" && event.delta) || (event.type === "answer" && event.text)) {
+              const deltaStr = event.type === "chunk" ? event.delta : event.text;
+              updateAssistant(
+                (metadata) => {
+                  const traceSteps = ensureLlmStep(
+                    (metadata.traceSteps as TraceStep[]) ?? [],
+                    "running",
+                  );
+                  metadata.traceSteps = traceSteps;
+                  metadata.isStreaming = true;
+                  return metadata;
+                },
+                (content) => stripPromptEchoFromAssistant(content + deltaStr),
               );
-            } else if (event.type === 'status') {
-              setMessages((prev) => 
+            } else if (event.type === "trace_step") {
+              const normalized = normalizeTraceStep(event.step);
+              if (!normalized) return;
+              updateAssistant((metadata) => {
+                const traceSteps = markPreviousStepsDone(
+                  upsertTraceStep((metadata.traceSteps as TraceStep[]) ?? [], {
+                    ...normalized,
+                    status: normalized.status ?? "done",
+                  }),
+                  normalized.node,
+                );
+                const statuses = (metadata.statuses as string[]) ?? [];
+                metadata.traceSteps = traceSteps;
+                metadata.statuses = statuses.includes(normalized.label)
+                  ? statuses
+                  : [...statuses, normalized.label];
+                if (normalized.detail?.intent) {
+                  metadata.intent = normalized.detail.intent;
+                }
+                metadata.isStreaming = true;
+                return metadata;
+              });
+            } else if (event.type === "status") {
+              updateAssistant((metadata) => {
+                const statuses = (metadata.statuses as string[]) ?? [];
+                const nextStatuses = statuses.includes(event.step)
+                  ? statuses
+                  : [...statuses, event.step];
+                metadata.statuses = nextStatuses;
+
+                const existingSteps = (metadata.traceSteps as TraceStep[]) ?? [];
+                const node =
+                  event.stage === "llm"
+                    ? "llm"
+                    : inferNodeFromLabel(event.step, existingSteps.length);
+                metadata.traceSteps = upsertTraceStep(existingSteps, {
+                  node,
+                  label: event.step,
+                  stage: event.stage === "llm" ? "llm" : "pipeline",
+                  status: event.stage === "llm" ? "running" : "done",
+                });
+                metadata.isStreaming = true;
+                return metadata;
+              });
+            } else if (event.type === "source") {
+              updateAssistant((metadata) => {
+                const sources = (metadata.sources as Source[]) ?? [];
+                metadata.sources = [...sources, event.source];
+                metadata.isStreaming = true;
+                return metadata;
+              });
+            } else if (event.type === "patch") {
+              updateAssistant((metadata) => {
+                const patches = (metadata.patches as string[]) ?? [];
+                metadata.patches = [...patches, event.diff];
+                return metadata;
+              });
+            } else if (event.type === "done") {
+              setMessages((prev) =>
                 prev.map((msg) => {
-                  if (msg.id === assistantMessageId) {
-                    const statuses = (msg.metadata.statuses as string[]) || [];
-                    return { ...msg, metadata: { ...msg.metadata, statuses: [...statuses, event.step] } };
-                  }
-                  return msg;
-                })
-              );
-            } else if (event.type === 'source') {
-              setMessages((prev) => 
-                prev.map((msg) => {
-                  if (msg.id === assistantMessageId) {
-                    const sources = (msg.metadata.sources as Source[]) || [];
-                    return { ...msg, metadata: { ...msg.metadata, sources: [...sources, event.source] } };
-                  }
-                  return msg;
-                })
-              );
-            } else if (event.type === 'patch') {
-              setMessages((prev) => 
-                prev.map((msg) => {
-                  if (msg.id === assistantMessageId) {
-                    const patches = (msg.metadata.patches as string[]) || [];
-                    return { ...msg, metadata: { ...msg.metadata, patches: [...patches, event.diff] } };
-                  }
-                  return msg;
-                })
-              );
-            } else if (event.type === 'done') {
-              setMessages((prev) => 
-                prev.map((msg) => {
-                  if (msg.id === assistantMessageId) {
-                    const newMetadata = normalizeMessageMetadata({
-                      ...msg.metadata,
-                      ...(event.intent ? { intent: event.intent } : {}),
-                      ...(event.sources ? { sources: event.sources } : {}),
-                      ...(event.proposal ? { patch_proposal: event.proposal } : {}),
-                      ...(event.trace ? { trace: event.trace } : {}),
-                      ...(event.usage ? { usage: event.usage } : {}),
-                    });
-                    return {
-                      ...msg,
-                      content: stripPromptEchoFromAssistant(msg.content),
-                      metadata: newMetadata,
-                    };
-                  }
-                  return msg;
-                })
+                  if (msg.id !== assistantMessageId) return msg;
+                  const mergedTrace = mergeTraceFromDone(
+                    finalizeTraceSteps((msg.metadata.traceSteps as TraceStep[]) ?? []),
+                    event.trace,
+                  );
+                  const newMetadata = normalizeMessageMetadata({
+                    ...msg.metadata,
+                    ...(event.intent ? { intent: event.intent } : {}),
+                    ...(event.sources ? { sources: event.sources } : {}),
+                    ...(event.proposal ? { patch_proposal: event.proposal } : {}),
+                    trace: mergedTrace,
+                    traceSteps: mergedTrace,
+                    ...(event.usage ? { usage: event.usage } : {}),
+                    ...(event.session_usage ? { session_usage: event.session_usage } : {}),
+                    isStreaming: false,
+                  });
+                  return {
+                    ...msg,
+                    content: stripPromptEchoFromAssistant(msg.content),
+                    metadata: newMetadata,
+                  };
+                }),
               );
               if (localSessionId) {
                 void queryClient.invalidateQueries({ queryKey: chatKeys.session(localSessionId) });

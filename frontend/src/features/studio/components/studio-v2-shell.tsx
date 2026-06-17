@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import * as React from "react";
 import { PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 
@@ -31,9 +32,13 @@ import { StudioNavRail } from "./studio-nav-rail";
 import { StudioPrimarySidebar } from "./studio-primary-sidebar";
 import { StudioSessionSidebar } from "./studio-session-sidebar";
 import { StudioCanvasChat } from "./studio-canvas-chat";
-import { EditorWorkbench } from "../workbench/editor-workbench";
 import { AiDockPanel } from "../workbench/ai-dock-panel";
 import { ScopeBar } from "../workbench/scope-bar";
+
+const EditorWorkbench = dynamic(
+  () => import("../workbench/editor-workbench").then((m) => m.EditorWorkbench),
+  { ssr: false },
+);
 
 export interface StudioV2ShellProps {
   repositoryId?: string;
@@ -164,9 +169,10 @@ export function StudioV2Shell({
     () => ({
       activeSessionId: activeSessionId ?? chat.currentSessionId,
       setActiveSessionId: (id: string | null) => {
+        if (id === activeSessionId) return;
         setActiveSessionId(id);
-        if (id) chat.selectSession(id);
-        else chat.clearMessages();
+        if (id && id !== chat.currentSessionId) chat.selectSession(id);
+        else if (!id) chat.clearMessages();
       },
     }),
     [activeSessionId, chat.currentSessionId, chat.selectSession, chat.clearMessages, setActiveSessionId],

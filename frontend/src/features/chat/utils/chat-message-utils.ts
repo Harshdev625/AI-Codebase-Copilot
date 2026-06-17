@@ -80,6 +80,9 @@ export function getDisplayContent(
   });
 
   if (role === "user") {
+    if (metadata && typeof metadata.display_content === "string" && metadata.display_content.trim()) {
+      return metadata.display_content.trim();
+    }
     if (text.startsWith(FEDERATED_PREFIX) && text.includes(USER_QUERY_MARKER)) {
       return text.split(USER_QUERY_MARKER).pop()?.trim() || text;
     }
@@ -116,6 +119,14 @@ export function normalizeSourcesFromMetadata(metadata: Record<string, unknown>):
 export function normalizeMessageMetadata(metadata: Record<string, unknown> = {}): Record<string, unknown> {
   const sources = normalizeSourcesFromMetadata(metadata);
   const next: Record<string, unknown> = { ...metadata, sources };
+
+  const traceSteps = Array.isArray(metadata.traceSteps)
+    ? metadata.traceSteps
+    : metadata.trace;
+  if (traceSteps) {
+    next.traceSteps = traceSteps;
+    next.trace = traceSteps;
+  }
 
   const patchProposal = metadata.patch_proposal;
   if (patchProposal && !sources.some((s) => s.kind === "patch_proposal")) {

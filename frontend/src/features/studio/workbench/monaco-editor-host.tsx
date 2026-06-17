@@ -8,7 +8,7 @@ import { Loader2 } from "lucide-react";
 import { repositoryService } from "@/features/repositories/services/repository-service";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 
-import { applySearchLineHighlight } from "./monaco-line-highlight";
+import { applySearchLineHighlight, type MonacoApi } from "./monaco-line-highlight";
 import type { SearchHighlightOptions } from "./search-highlight-types";
 
 /**
@@ -31,6 +31,7 @@ export function MonacoEditorHost({
   const { resolvedTheme } = useTheme();
   const { editorWordWrap, editorMinimap } = useStudioStore();
   const editorRef = React.useRef<Parameters<NonNullable<React.ComponentProps<typeof Editor>["onMount"]>>[0] | null>(null);
+  const monacoRef = React.useRef<MonacoApi | null>(null);
   const highlightRef = React.useRef<ReturnType<typeof applySearchLineHighlight>>(null);
   const [content, setContent] = React.useState<string | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -92,10 +93,12 @@ export function MonacoEditorHost({
     highlightRef.current?.clear();
     highlightRef.current = null;
     const editor = editorRef.current;
-    if (!editor || !content) return;
+    const monacoApi = monacoRef.current;
+    if (!editor || !monacoApi || !content) return;
     if (initialLine || searchHighlight?.snippet) {
       highlightRef.current = applySearchLineHighlight(
         editor,
+        monacoApi,
         initialLine,
         initialEndLine,
         searchHighlight,
@@ -140,11 +143,13 @@ export function MonacoEditorHost({
         language={language}
         path={filePath}
         value={content ?? ""}
-        onMount={(editor) => {
+        onMount={(editor, monaco) => {
           editorRef.current = editor;
+          monacoRef.current = monaco;
           if (initialLine || searchHighlight?.snippet) {
             highlightRef.current = applySearchLineHighlight(
               editor,
+              monaco,
               initialLine,
               initialEndLine,
               searchHighlight,

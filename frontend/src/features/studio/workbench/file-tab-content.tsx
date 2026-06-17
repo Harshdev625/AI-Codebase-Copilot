@@ -12,7 +12,7 @@ import { useStudioStore } from "@/features/studio/store/studio-store";
 import type { EditorSearchHighlight, MarkdownViewMode } from "@/features/studio/types/studio-types";
 import { MonacoEditorHost } from "./monaco-editor-host";
 import { MarkdownFileViewer } from "./markdown-file-viewer";
-import { applySearchLineHighlight } from "./monaco-line-highlight";
+import { applySearchLineHighlight, type MonacoApi } from "./monaco-line-highlight";
 import type { SearchHighlightOptions } from "./search-highlight-types";
 
 import { isMarkdownFile } from "@/lib/path-utils";
@@ -33,16 +33,19 @@ function MarkdownMonacoPane({
   const { resolvedTheme } = useTheme();
   const { editorWordWrap, editorMinimap } = useStudioStore();
   const editorRef = React.useRef<Parameters<NonNullable<React.ComponentProps<typeof Editor>["onMount"]>>[0] | null>(null);
+  const monacoRef = React.useRef<MonacoApi | null>(null);
   const highlightRef = React.useRef<ReturnType<typeof applySearchLineHighlight>>(null);
 
   React.useEffect(() => {
     highlightRef.current?.clear();
     highlightRef.current = null;
     const editor = editorRef.current;
-    if (!editor) return;
+    const monacoApi = monacoRef.current;
+    if (!editor || !monacoApi) return;
     if (initialLine || searchHighlight?.snippet) {
       highlightRef.current = applySearchLineHighlight(
         editor,
+        monacoApi,
         initialLine,
         initialEndLine,
         searchHighlight,
@@ -71,11 +74,13 @@ function MarkdownMonacoPane({
         language="markdown"
         path={filePath}
         value={content}
-        onMount={(editor) => {
+        onMount={(editor, monaco) => {
           editorRef.current = editor;
+          monacoRef.current = monaco;
           if (initialLine || searchHighlight?.snippet) {
             highlightRef.current = applySearchLineHighlight(
               editor,
+              monaco,
               initialLine,
               initialEndLine,
               searchHighlight,

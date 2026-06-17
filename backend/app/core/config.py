@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     retrieval_cache_ttl_seconds: int = 120
     retrieval_max_chunk_chars: int = 1400
     retrieval_context_char_budget: int = 7_000
-    retrieval_min_token_overlap: int = 1
+    retrieval_min_token_overlap: int = 2
 
     jwt_secret_key: str = "change-me-in-production"
     jwt_issuer: str = "ai-codebase-copilot"

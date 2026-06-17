@@ -20,6 +20,19 @@ jest.mock("@/features/repositories/hooks/use-repositories", () => ({
   useIndexRepository: jest.fn(),
 }));
 
+jest.mock("@/features/repositories/services/repository-service", () => ({
+  repositoryService: {
+    getFileContent: jest.fn().mockResolvedValue({ content: "old line\nunchanged line" }),
+  },
+}));
+
+jest.mock("next/dynamic", () => () => {
+  const MockDiff = ({ originalContent, modifiedContent }: { originalContent: string; modifiedContent: string }) => (
+    <div data-testid="monaco-diff">{originalContent}|{modifiedContent}</div>
+  );
+  return MockDiff;
+});
+
 jest.mock("uuid", () => ({
   v4: () => "mock-uuid"
 }));

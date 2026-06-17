@@ -11,6 +11,7 @@ import {
   useUpdateSessionMutation
 } from "@/features/chat/hooks/use-chat";
 import { chatService } from "@/features/chat/services/chat-service";
+import type { TraceStep } from "@/features/chat/types/chat-types";
 import { TestProviders } from "../test-utils";
 
 jest.mock("uuid", () => ({
@@ -173,6 +174,93 @@ describe("use-chat hooks", () => {
       expect(mockSetActiveSessionId).toHaveBeenCalledWith("new-session");
     });
 
+    it("accumulates trace_step and source events", async () => {
+      (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
+        onEvent({ type: "start", session_id: "existing-session", intent: "search" });
+        onEvent({
+          type: "trace_step",
+          step: {
+            node: "retrieval",
+            label: "Retrieved 1 sources",
+            status: "done",
+            detail: {
+              retrieved_count: 1,
+              source_preview: [{ path: "styles/main.css", score: 0.88 }],
+            },
+          },
+        });
+        onEvent({
+          type: "source",
+          source: { path: "styles/main.css", content: "body {}", score: 0.88 },
+        });
+        onEvent({ type: "chunk", delta: "Optimize CSS bundles." });
+        onEvent({
+          type: "done",
+          intent: "search",
+          sources: [{ path: "styles/main.css", content: "body {}" }],
+          trace: [{ node: "retrieval", label: "Retrieved 1 sources" }],
+          session_usage: { total_tokens: 120 },
+        });
+      });
+
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
+
+      await act(async () => {
+        await result.current.sendMessage("optimize css");
+      });
+
+      const assistant = result.current.messages[1];
+      expect(assistant.metadata.intent).toBe("search");
+      expect(assistant.metadata.traceSteps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ node: "retrieval", label: "Retrieved 1 sources" }),
+        ]),
+      );
+      expect(assistant.metadata.sources).toHaveLength(1);
+      expect(assistant.metadata.session_usage).toEqual({ total_tokens: 120 });
+      expect(assistant.metadata.isStreaming).toBe(false);
+    });
+
+    it("dedupes status and trace_step for the same pipeline step", async () => {
+      (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
+        onEvent({ type: "start", session_id: "existing-session", intent: "docs" });
+        onEvent({ type: "status", step: "Planning intent: docs", stage: "pipeline" });
+        onEvent({
+          type: "trace_step",
+          step: {
+            node: "planner",
+            label: "Planning intent: docs",
+            status: "done",
+            detail: { intent: "docs" },
+          },
+        });
+        onEvent({ type: "status", step: "Retrieved 8 sources", stage: "pipeline" });
+        onEvent({
+          type: "trace_step",
+          step: {
+            node: "retrieval",
+            label: "Retrieved 8 sources",
+            status: "done",
+            detail: { retrieved_count: 8 },
+          },
+        });
+        onEvent({ type: "chunk", delta: "Project overview." });
+        onEvent({ type: "done", intent: "docs", sources: [], trace: [] });
+      });
+
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
+
+      await act(async () => {
+        await result.current.sendMessage("tell me about the project");
+      });
+
+      const steps = result.current.messages[1].metadata.traceSteps as TraceStep[];
+      expect(steps).toHaveLength(3);
+      expect(steps.filter((s) => s.label === "Planning intent: docs")).toHaveLength(1);
+      expect(steps.find((s) => s.label === "Planning intent: docs")?.node).toBe("planner");
+      expect(steps.filter((s) => s.label === "Retrieved 8 sources")).toHaveLength(1);
+    });
+
     it("new session start does not clear messages", async () => {
       mockActiveSessionId = null;
       (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
@@ -196,9 +284,46 @@ describe("use-chat hooks", () => {
       expect(result.current.messages.length).toBe(2);
       expect(result.current.messages[1].content).toBe("A productivity extension.");
       expect(result.current.messages[1].metadata.statuses).toEqual(["Planning intent: docs"]);
-      expect(result.current.messages[1].metadata.trace).toEqual([
-        { node: "planner", label: "Planning intent: docs" },
-      ]);
+      expect(result.current.messages[1].metadata.traceSteps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ node: "planner", label: "Planning intent: docs" }),
+        ]),
+      );
+    });
+
+    it("keeps local user message when history sync returns assistant-only", async () => {
+      (chatService.stream as jest.Mock).mockImplementation(async (_payload, onEvent) => {
+        onEvent({ type: "start", session_id: "existing-session" });
+        onEvent({ type: "chunk", delta: "Answer text." });
+        onEvent({ type: "done", intent: "docs", sources: [], trace: [] });
+      });
+
+      (chatService.listMessages as jest.Mock).mockResolvedValue({
+        items: [
+          {
+            id: "server-assistant",
+            role: "assistant",
+            content: "Answer text.",
+            metadata: { intent: "docs" },
+            created_at: new Date().toISOString(),
+          },
+        ],
+        total: 1,
+      });
+
+      const { result } = renderHook(() => useChat({ repositoryId: "repo-1" }), { wrapper: TestProviders });
+
+      await act(async () => {
+        await result.current.sendMessage("what is this project?");
+      });
+
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      });
+
+      const roles = result.current.messages.map((msg) => msg.role);
+      expect(roles).toEqual(expect.arrayContaining(["user", "assistant"]));
+      expect(result.current.messages.some((msg) => msg.role === "user" && msg.content.includes("what is this project"))).toBe(true);
     });
 
     it("merges done metadata even when sources are empty", async () => {
@@ -215,9 +340,11 @@ describe("use-chat hooks", () => {
       });
 
       expect(result.current.messages[1].metadata.intent).toBe("search");
-      expect(result.current.messages[1].metadata.trace).toEqual([
-        { node: "retrieval", label: "Retrieved 0 sources" },
-      ]);
+      expect(result.current.messages[1].metadata.traceSteps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ node: "retrieval", label: "Retrieved 0 sources" }),
+        ]),
+      );
     });
 
     it("clears messages", () => {

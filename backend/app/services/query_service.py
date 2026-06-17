@@ -7,6 +7,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -250,6 +251,39 @@ class QueryService:
             "scope_paths": scope_paths,
         }
         result = await self._invoke_graph_with_trace(state)
+        result = await self._complete_after_graph(
+            result,
+            repository_id=repository_id,
+            repo_id=repo_id,
+            query=query,
+            session_id=session_id,
+            scope_paths=scope_paths,
+            attached_files=attached_files,
+            chat_mode=chat_mode,
+            history=history,
+        )
+        logger.debug(
+            "query_prepare - context assembled repository_id=%s snippets=%s context_chars=%s",
+            repository_id,
+            len(result.get("retrieved_context", [])[:6]),
+            len(result.get("_assembled_context", "")),
+        )
+        assembled_context = str(result.pop("_assembled_context", ""))
+        return result, assembled_context, cache_key, False
+
+    async def _complete_after_graph(
+        self,
+        result: dict,
+        *,
+        repository_id: str,
+        repo_id: str,
+        query: str,
+        session_id: str | None,
+        scope_paths: list[str] | None,
+        attached_files: list[str] | None,
+        chat_mode: str,
+        history: list[dict],
+    ) -> dict:
         proposal = self._build_patch_proposal_from_state(result)
         if proposal:
             result["patch_proposal"] = proposal
@@ -290,13 +324,102 @@ class QueryService:
                 f"{assembled_context}"
             )
         result["source_index"] = source_index
-        logger.debug(
-            "query_prepare - context assembled repository_id=%s snippets=%s context_chars=%s",
-            repository_id,
-            len(snippets),
-            len(assembled_context),
+        result["_assembled_context"] = assembled_context
+        result["query"] = query
+        return result
+
+    async def stream_generation_pipeline(
+        self,
+        repository_id: str | None,
+        repo_id: str | None,
+        query: str,
+        *,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        federated: bool = False,
+        scope_paths: list[str] | None = None,
+        attached_files: list[str] | None = None,
+        chat_mode: str = "ASK",
+    ) -> AsyncIterator[dict]:
+        """Stream LangGraph node trace updates, then emit final prepared generation payload."""
+        history = await self._load_session_history(session_id)
+        history_hash = self._history_hash(history)
+
+        normalized = query.strip().lower()
+        query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+        mode_key = "federated" if federated else "single"
+        scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
+        attached_suffix = f":{'-'.join(sorted(attached_files))}" if attached_files else ""
+        scope_key = f"{repository_id}{scope_suffix}{attached_suffix}"
+        cache_key = f"chat:v3:{mode_key}:{scope_key}:{query_hash}:{history_hash}"
+        cached = self.cache.get_json(cache_key)
+        if cached is not None:
+            yield {
+                "type": "complete",
+                "result": cached,
+                "assembled_context": "",
+                "cache_key": cache_key,
+                "from_cache": True,
+            }
+            return
+
+        if not repository_id or not repo_id:
+            raise NoContextError("Repository context missing. Select a repository and retry.")
+
+        state = {
+            "repo_id": repo_id,
+            "repository_id": repository_id,
+            "query": query,
+            "session": self.session,
+            "history": history,
+            "scope_paths": scope_paths,
+        }
+
+        merged: dict = {}
+        emitted_trace = 0
+        try:
+            async for update in compiled_graph.astream(state, stream_mode="updates"):
+                for _node_name, node_output in update.items():
+                    if not isinstance(node_output, dict):
+                        continue
+                    merged.update({k: v for k, v in node_output.items() if k != "run_trace"})
+                    trace = list(node_output.get("run_trace") or merged.get("run_trace") or [])
+                    if "run_trace" in node_output:
+                        merged["run_trace"] = node_output["run_trace"]
+                        trace = list(node_output["run_trace"])
+                    while emitted_trace < len(trace):
+                        entry = trace[emitted_trace]
+                        emitted_trace += 1
+                        if isinstance(entry, dict):
+                            yield {"type": "trace_step", "entry": entry}
+        except Exception as exc:
+            logger.exception("LangGraph streaming failed")
+            raise WorkflowError("Workflow execution failed") from exc
+
+        result = await self._complete_after_graph(
+            merged,
+            repository_id=repository_id,
+            repo_id=repo_id,
+            query=query,
+            session_id=session_id,
+            scope_paths=scope_paths,
+            attached_files=attached_files,
+            chat_mode=chat_mode,
+            history=history,
         )
-        return result, assembled_context, cache_key, False
+
+        for source in list(result.get("retrieved_context") or [])[:8]:
+            if isinstance(source, dict):
+                yield {"type": "source", "source": source}
+
+        assembled_context = str(result.pop("_assembled_context", ""))
+        yield {
+            "type": "complete",
+            "result": result,
+            "assembled_context": assembled_context,
+            "cache_key": cache_key,
+            "from_cache": False,
+        }
 
     def _load_attached_file_snippets(
         self,
@@ -345,6 +468,28 @@ class QueryService:
                 "pinned": True,
             })
         return snippets
+
+    @staticmethod
+    def extract_patch_from_text(text: str) -> str | None:
+        """Extract unified diff from ACT mode LLM output."""
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+
+        fenced = re.search(r"```(?:diff|patch)?\s*\n([\s\S]*?)```", raw, re.IGNORECASE)
+        if fenced:
+            candidate = fenced.group(1).strip()
+            if "diff --git" in candidate or candidate.startswith("---"):
+                return candidate
+
+        if "diff --git" in raw:
+            start = raw.find("diff --git")
+            return raw[start:].strip()
+
+        if raw.startswith("---"):
+            return raw
+
+        return None
 
     def _build_patch_proposal_from_state(self, state: dict) -> dict | None:
         patch_text = str(state.get("patch") or "").strip()
@@ -537,6 +682,9 @@ class QueryService:
         *,
         user_id: str | None = None,
         session_id: str | None = None,
+        query: str | None = None,
+        display_query: str | None = None,
+        scope_paths: list[str] | None = None,
     ) -> dict:
         answer = str(result.get("answer") or "").strip()
         if not answer:
@@ -559,7 +707,9 @@ class QueryService:
                 user_id=user_id,
                 repo_id=str(repo_id or ""),
                 repository_id=str(repository_id or ""),
-                query=str(safe_result.get("query") or ""),
+                query=str(query or safe_result.get("query") or ""),
+                display_content=str(display_query or query or safe_result.get("query") or ""),
+                scope_paths=scope_paths,
                 intent=str(safe_result.get("intent") or "unknown"),
                 answer=str(safe_result.get("answer") or ""),
                 source_index=safe_result.get("source_index", []) or [],
@@ -665,16 +815,21 @@ class QueryService:
                 "usage": usage,
                 "patch_proposal": kwargs.get("patch_proposal"),
                 "trace": kwargs.get("trace", []) or [],
+                "traceSteps": kwargs.get("trace", []) or [],
                 "statuses": kwargs.get("statuses", []) or [],
             }
             user_metadata = {
                 "repository_id": kwargs.get("repository_id"),
                 "repo_id": kwargs.get("repo_id"),
+                "scope_paths": kwargs.get("scope_paths") or [],
+                "display_content": kwargs.get("display_content") or "",
             }
             query_text = str(kwargs.get("query") or "").strip()
+            display_text = str(kwargs.get("display_content") or "").strip()
+            user_content = display_text or query_text
             answer_text = str(kwargs.get("answer") or "").strip()
 
-            if query_text:
+            if user_content:
                 self.session.execute(
                     text(
                         """
@@ -686,7 +841,7 @@ class QueryService:
                         "id": str(uuid.uuid4()),
                         "chat_session_id": session_id,
                         "role": "user",
-                        "content": query_text,
+                        "content": user_content,
                         "metadata": json.dumps(user_metadata),
                     },
                 )

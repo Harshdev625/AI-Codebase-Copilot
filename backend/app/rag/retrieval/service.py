@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.exceptions import DatabaseException, ExternalServiceError
 from app.observability.metrics import runtime_metrics
 from app.rag.retrieval.hybrid import hybrid_retrieve, project_federated_retrieve
+from app.rag.retrieval.query_signals import extension_matches_path, infer_query_signals
 from app.services.cache_service import get_cache_service
 
 
@@ -22,7 +23,15 @@ class RetrievalService:
         self.session = session
         self.cache = get_cache_service()
 
-    def retrieve_repository(self, *, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None) -> list[dict[str, Any]]:
+    def retrieve_repository(
+        self,
+        *,
+        repository_id: str,
+        query: str,
+        top_k: int = 8,
+        scope_paths: list[str] | None = None,
+        intent: str | None = None,
+    ) -> list[dict[str, Any]]:
         dialect_name = self.session.bind.dialect.name if self.session.bind is not None else "unknown"
         if dialect_name != "postgresql":
             logger.warning(
@@ -45,12 +54,19 @@ class RetrievalService:
         runtime_metrics.increment("retrieval_cache_misses_total", scope="repository")
         with runtime_metrics.timer("retrieval_latency_ms", scope="repository"):
             try:
-                items = hybrid_retrieve(self.session, repository_id=repository_id, query=query, top_k=top_k, scope_paths=scope_paths)
+                items = hybrid_retrieve(
+                    self.session,
+                    repository_id=repository_id,
+                    query=query,
+                    top_k=top_k,
+                    scope_paths=scope_paths,
+                    intent=intent,
+                )
             except Exception as exc:
                 logger.exception("retrieval_repository - query failed repository_id=%s", repository_id)
                 raise DatabaseException("Failed to retrieve repository context") from exc
 
-        selected = self._post_process(items, query=query, top_k=top_k)
+        selected = self._post_process(items, query=query, top_k=top_k, intent=intent)
         try:
             self.cache.set_json(cache_key, {"items": selected}, ttl_seconds=settings.retrieval_cache_ttl_seconds)
         except ExternalServiceError as exc:
@@ -92,7 +108,7 @@ class RetrievalService:
                 logger.exception("retrieval_project - query failed project_id=%s", project_id)
                 raise DatabaseException("Failed to retrieve project context") from exc
 
-        selected = self._post_process(items, query=query, top_k=top_k)
+        selected = self._post_process(items, query=query, top_k=top_k, intent=intent)
         try:
             self.cache.set_json(cache_key, {"items": selected}, ttl_seconds=settings.retrieval_cache_ttl_seconds)
         except ExternalServiceError as exc:
@@ -101,11 +117,19 @@ class RetrievalService:
         runtime_metrics.increment("retrieved_chunks_total", amount=len(selected), scope="project")
         return selected
 
-    def _post_process(self, items: list[dict[str, Any]], *, query: str, top_k: int) -> list[dict[str, Any]]:
+    def _post_process(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        query: str,
+        top_k: int,
+        intent: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not items:
             return []
 
         query_tokens = self._tokenize(query)
+        signals = infer_query_signals(query, intent=intent)
         deduped: list[dict[str, Any]] = []
         seen_keys: set[tuple[str, str, str]] = set()
         context_chars = 0
@@ -122,6 +146,9 @@ class RetrievalService:
             overlap = self._overlap_count(query_tokens, self._tokenize(f"{path}\n{symbol}\n{content[:1200]}"))
             if query_tokens and overlap < settings.retrieval_min_token_overlap:
                 score = float(item.get("rerank_score") or item.get("federation_score") or item.get("score") or 0.0)
+                path_matches = extension_matches_path(path, signals.preferred_extensions)
+                if signals.is_tech_specific and not path_matches and overlap < 2:
+                    continue
                 if score < 0.12:
                     continue
 

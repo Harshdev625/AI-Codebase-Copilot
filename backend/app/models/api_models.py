@@ -39,6 +39,11 @@ class ChatRequest(StrictRequestModel):
     include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
     scope_paths: list[str] | None = Field(default=None, description="Paths to restrict retrieval scope")
     attached_files: list[str] | None = Field(default=None, description="Exact file paths to pin full content in context")
+    display_query: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="User-visible message text (when different from query, e.g. stripped @mentions)",
+    )
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
@@ -57,6 +62,83 @@ class ChatResponse(BaseModel):
     intent: str
     session_id: str
     sources: list[dict[str, Any]] = []
+
+
+TraceNodeName = Literal[
+    "planner",
+    "retrieval",
+    "reasoning",
+    "tool_execution",
+    "answer",
+    "llm",
+]
+
+TraceStepStatus = Literal["running", "done", "error"]
+TraceStage = Literal["pipeline", "llm"]
+
+
+class TraceSourcePreview(BaseModel):
+    path: str
+    score: float | None = None
+
+
+class TraceStepDetail(BaseModel):
+    intent: str | None = None
+    retrieved_count: int | None = None
+    confidence: float | None = None
+    scope_paths: list[str] | None = None
+    source_preview: list[TraceSourcePreview] | None = None
+    tool_name: str | None = None
+    error: str | None = None
+
+
+class TraceStep(BaseModel):
+    node: TraceNodeName
+    label: str
+    ts: float | None = None
+    stage: TraceStage | None = None
+    status: TraceStepStatus | None = None
+    detail: TraceStepDetail | None = None
+
+    @classmethod
+    def from_run_trace_entry(
+        cls,
+        entry: dict[str, Any],
+        *,
+        stage: TraceStage = "pipeline",
+        status: TraceStepStatus = "done",
+    ) -> "TraceStep":
+        detail_raw = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+        source_preview = None
+        if isinstance(detail_raw.get("source_preview"), list):
+            source_preview = [
+                TraceSourcePreview(
+                    path=str(item.get("path") or ""),
+                    score=item.get("score"),
+                )
+                for item in detail_raw["source_preview"]
+                if isinstance(item, dict) and item.get("path")
+            ]
+        detail = TraceStepDetail(
+            intent=detail_raw.get("intent"),
+            retrieved_count=detail_raw.get("retrieved_count"),
+            confidence=detail_raw.get("confidence"),
+            scope_paths=detail_raw.get("scope_paths"),
+            source_preview=source_preview,
+            tool_name=detail_raw.get("tool_name"),
+            error=detail_raw.get("error"),
+        )
+        node = str(entry.get("node") or "planner")
+        if node not in {"planner", "retrieval", "reasoning", "tool_execution", "answer", "llm"}:
+            node = "planner"
+        return cls(
+            node=node,  # type: ignore[arg-type]
+            label=str(entry.get("label") or ""),
+            ts=entry.get("ts"),
+            stage=stage,
+            status=status,
+            detail=detail if any(v is not None for v in detail.model_dump().values()) else None,
+        )
 
 
 class ApplyPatchRequest(StrictRequestModel):

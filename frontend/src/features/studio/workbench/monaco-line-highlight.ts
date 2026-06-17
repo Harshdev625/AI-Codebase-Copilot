@@ -1,5 +1,4 @@
 import type { editor } from "monaco-editor";
-import * as monaco from "monaco-editor";
 
 import { resolveSearchRange } from "./search-line-range";
 
@@ -8,14 +7,17 @@ export { locateSnippetInFile, resolveSearchRange } from "./search-line-range";
 
 import type { SearchHighlightOptions } from "./search-highlight-types";
 
+export type MonacoApi = typeof import("monaco-editor");
+
 function buildDecorations(
+  monacoApi: MonacoApi,
   model: editor.ITextModel,
   range: { startLine: number; endLine: number },
   highlight?: SearchHighlightOptions,
 ): editor.IModelDeltaDecoration[] {
   const decorations: editor.IModelDeltaDecoration[] = [
     {
-      range: new monaco.Range(
+      range: new monacoApi.Range(
         range.startLine,
         1,
         range.endLine,
@@ -26,7 +28,7 @@ function buildDecorations(
         className: "studio-editor-search-line",
         overviewRuler: {
           color: "#e3b341",
-          position: monaco.editor.OverviewRulerLane.Center,
+          position: monacoApi.editor.OverviewRulerLane.Center,
         },
       },
     },
@@ -40,10 +42,10 @@ function buildDecorations(
     const matchStart = idx >= 0 ? idx + 1 : col;
     const matchEnd = Math.min(matchStart + query.length, lineContent.length + 1);
     decorations.push({
-      range: new monaco.Range(range.startLine, matchStart, range.startLine, matchEnd),
+      range: new monacoApi.Range(range.startLine, matchStart, range.startLine, matchEnd),
       options: {
         inlineClassName: "studio-editor-search-match",
-        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        stickiness: monacoApi.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
       },
     });
   }
@@ -54,10 +56,11 @@ function buildDecorations(
 /** Scroll to and highlight a line range opened from search results. */
 export function applySearchLineHighlight(
   editorInstance: editor.IStandaloneCodeEditor,
+  monacoApi: MonacoApi,
   initialLine?: number,
   initialEndLine?: number,
   highlight?: SearchHighlightOptions,
-): monaco.editor.IEditorDecorationsCollection | null {
+): editor.IEditorDecorationsCollection | null {
   const model = editorInstance.getModel();
   if (!model) return null;
 
@@ -70,12 +73,12 @@ export function applySearchLineHighlight(
     highlight?.snippet,
   );
 
-  const decorations = buildDecorations(model, { startLine, endLine }, highlight);
+  const decorations = buildDecorations(monacoApi, model, { startLine, endLine }, highlight);
   const collection = editorInstance.createDecorationsCollection(decorations);
 
   const reveal = () => {
     editorInstance.revealRangeInCenter(
-      new monaco.Range(startLine, 1, endLine, model.getLineMaxColumn(endLine)),
+      new monacoApi.Range(startLine, 1, endLine, model.getLineMaxColumn(endLine)),
     );
     editorInstance.setPosition({ lineNumber: startLine, column: 1 });
   };

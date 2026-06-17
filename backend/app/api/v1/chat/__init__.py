@@ -30,6 +30,11 @@ from app.models.api_models import (
     ApplyPatchRequest,
     ChatSessionUpdateRequest,
 )
+from app.api.v1.chat_stream_helpers import (
+    llm_status_events,
+    pipeline_status_events,
+    source_events,
+)
 from app.services.query_service import QueryService
 from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT
@@ -434,39 +439,16 @@ async def chat_stream(
         req.session_id, str(current_user["id"]), active_repository_id
     )
 
-    try:
-        result, assembled_context, cache_key, from_cache = await service.prepare_generation(
-            active_repository_id,
-            active_repo_id,
-            req.query,
-            user_id=str(current_user["id"]),
-            session_id=active_session_id,
-            federated=False,
-            scope_paths=req.scope_paths,
-            attached_files=req.attached_files,
-            chat_mode=req.mode,
-        )
-    except NoContextError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-
-    intent = str(result.get("intent", "unknown"))
-    sources = result.get("retrieved_context", [])
-    run_trace = list(result.get("run_trace") or [])
-    stream_statuses = _statuses_from_trace(run_trace)
+    result: dict | None = None
+    assembled_context = ""
+    cache_key = ""
+    from_cache = False
+    run_trace: list = []
+    sources: list = []
+    intent = "unknown"
+    stream_statuses: list[str] = []
     deterministic_answer = None
-    build_deterministic = getattr(service, "build_deterministic_answer", None)
-    if not from_cache and callable(build_deterministic):
-        deterministic_answer = build_deterministic(req.query, result)
-    if deterministic_answer is not None:
-        result["answer"] = deterministic_answer
-        await service.finalize_result(
-            active_repository_id,
-            active_repo_id,
-            result,
-            cache_key,
-            user_id=str(current_user["id"]),
-            session_id=active_session_id,
-        )
+    graph_streamed_live = False
 
     def _event_success(payload: dict, event_type: str = "message") -> str:
         # True SSE format
@@ -483,17 +465,104 @@ async def chat_stream(
         return f"event: error\ndata: {data_str}\n\n"
 
     async def _iter_stream() -> AsyncIterator[str]:
-        """H6 FIX: Improved streaming with error recovery and proper error signaling."""
+        """Stream LangGraph trace updates, retrieval sources, then LLM answer tokens."""
+        nonlocal result, assembled_context, cache_key, from_cache, run_trace, sources, intent
+        nonlocal stream_statuses, deterministic_answer, graph_streamed_live
         stream_started = False
         try:
             yield _event_success({"type": "start", "intent": intent, "session_id": active_session_id})
             stream_started = True
 
-            for status_label in stream_statuses:
-                yield _event_success({"type": "status", "step": status_label, "stage": "pipeline"})
+            try:
+                async for pipeline_event in service.stream_generation_pipeline(
+                    active_repository_id,
+                    active_repo_id,
+                    req.query,
+                    user_id=str(current_user["id"]),
+                    session_id=active_session_id,
+                    federated=False,
+                    scope_paths=req.scope_paths,
+                    attached_files=req.attached_files,
+                    chat_mode=req.mode,
+                ):
+                    event_type = pipeline_event.get("type")
+                    if event_type == "trace_step":
+                        graph_streamed_live = True
+                        entry = pipeline_event.get("entry")
+                        if isinstance(entry, dict):
+                            run_trace.append(entry)
+                            detail = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+                            if entry.get("node") == "planner" and detail.get("intent"):
+                                intent = str(detail.get("intent"))
+                            for payload in pipeline_status_events(entry):
+                                if payload.get("type") == "status":
+                                    stream_statuses.append(str(payload.get("step") or ""))
+                                yield _event_success(payload)
+                    elif event_type == "source":
+                        source = pipeline_event.get("source")
+                        if isinstance(source, dict):
+                            sources.append(source)
+                            yield _event_success({"type": "source", "source": source})
+                    elif event_type == "complete":
+                        result = dict(pipeline_event.get("result") or {})
+                        assembled_context = str(pipeline_event.get("assembled_context") or "")
+                        cache_key = str(pipeline_event.get("cache_key") or "")
+                        from_cache = bool(pipeline_event.get("from_cache"))
+                        run_trace = list(result.get("run_trace") or run_trace)
+                        sources = list(result.get("retrieved_context") or sources)
+                        intent = str(result.get("intent", intent))
+            except NoContextError as exc:
+                yield _event_error(str(exc), "no_context")
+                return
+
+            if result is None:
+                yield _event_error("Generation pipeline returned no result", "pre_stream_error")
+                return
+
+            if from_cache or not graph_streamed_live:
+                for entry in run_trace:
+                    if isinstance(entry, dict):
+                        for payload in pipeline_status_events(entry):
+                            if payload.get("type") == "status":
+                                label = str(payload.get("step") or "")
+                                if label and label not in stream_statuses:
+                                    stream_statuses.append(label)
+                            yield _event_success(payload)
+                for payload in source_events(sources):
+                    yield _event_success(payload)
+
+            build_deterministic = getattr(service, "build_deterministic_answer", None)
+            if not from_cache and callable(build_deterministic):
+                deterministic_answer = build_deterministic(req.query, result)
+            if deterministic_answer is not None:
+                result["answer"] = deterministic_answer
+                result["query"] = req.query
+                await service.finalize_result(
+                    active_repository_id,
+                    active_repo_id,
+                    result,
+                    cache_key,
+                    user_id=str(current_user["id"]),
+                    session_id=active_session_id,
+                    query=req.query,
+                    display_query=req.display_query,
+                    scope_paths=req.scope_paths,
+                )
 
             if from_cache:
                 try:
+                    result["query"] = req.query
+                    await service.finalize_result(
+                        active_repository_id,
+                        active_repo_id,
+                        result,
+                        cache_key,
+                        user_id=str(current_user["id"]),
+                        session_id=active_session_id,
+                        query=req.query,
+                        display_query=req.display_query,
+                        scope_paths=req.scope_paths,
+                    )
                     yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
                     yield _event_success(
                         {
@@ -531,6 +600,7 @@ async def chat_stream(
             if result.get("patch_proposal"):
                 try:
                     yield _event_success({"type": "chunk", "delta": str(result.get("answer", "Patch proposal ready."))})
+                    result["query"] = req.query
                     await service.finalize_result(
                         active_repository_id,
                         active_repo_id,
@@ -538,6 +608,9 @@ async def chat_stream(
                         cache_key,
                         user_id=str(current_user["id"]),
                         session_id=active_session_id,
+                        query=req.query,
+                        display_query=req.display_query,
+                        scope_paths=req.scope_paths,
                     )
                     yield _event_success(
                         {
@@ -571,8 +644,10 @@ async def chat_stream(
                     return _INSUFFICIENT_CONTEXT_ANSWER
                 return llm_answer
 
-            yield _event_success({"type": "status", "step": "Generating answer", "stage": "llm"})
-            stream_statuses.append("Generating answer")
+            for payload in llm_status_events():
+                if payload.get("type") == "status":
+                    stream_statuses.append(str(payload.get("step") or ""))
+                yield _event_success(payload)
             result["stream_statuses"] = stream_statuses
 
             try:
@@ -662,6 +737,15 @@ async def chat_stream(
                 final_answer = _INSUFFICIENT_CONTEXT_ANSWER
                 generated_parts = [final_answer]
 
+            chat_mode = str(req.mode or "ASK").upper()
+            if chat_mode == "ACT":
+                patch_text = service.extract_patch_from_text(final_answer)
+                if patch_text:
+                    result["patch"] = patch_text
+                    proposal = service._build_patch_proposal_from_state(result)
+                    if proposal:
+                        result["patch_proposal"] = proposal
+
             usage = service.model_router.consume_stream_usage()
             if not usage.get("total_tokens"):
                 usage = extract_ollama_usage(
@@ -675,6 +759,7 @@ async def chat_stream(
             try:
                 result["answer"] = final_answer
                 result["stream_statuses"] = stream_statuses
+                result["query"] = req.query
                 await service.finalize_result(
                     active_repository_id,
                     active_repo_id,
@@ -682,6 +767,9 @@ async def chat_stream(
                     cache_key,
                     user_id=str(current_user["id"]),
                     session_id=active_session_id,
+                    query=req.query,
+                    display_query=req.display_query,
+                    scope_paths=req.scope_paths,
                 )
             except Exception:
                 logger.exception("chat_stream - error finalizing result")
@@ -696,6 +784,7 @@ async def chat_stream(
                     service=service,
                     session_id=active_session_id,
                 )
+                | ({"proposal": result.get("patch_proposal")} if result.get("patch_proposal") else {})
             )
         except asyncio.CancelledError:
             logger.info("chat_stream - client disconnected, cancelling stream")
