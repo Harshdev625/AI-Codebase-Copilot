@@ -13,6 +13,12 @@ describe("chat-message-utils", () => {
     expect(getDisplayContent(raw, "user")).toBe("What is auth?");
   });
 
+  it("prefers display_content in user metadata", () => {
+    expect(
+      getDisplayContent("@src/auth.ts what is auth?", "user", { display_content: "what is auth?" }),
+    ).toBe("what is auth?");
+  });
+
   it("maps source_index to sources", () => {
     const metadata = {
       source_index: [{ path: "src/a.ts", content: "code", score: 0.9 }],

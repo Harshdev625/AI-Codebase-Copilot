@@ -95,6 +95,8 @@ def _pipeline_from_prepare(prepare_coro):
 
 
 def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    finalized = {"called": 0}
+
     class FakeQueryService:
         def __init__(self, session):
             self.session = session
@@ -117,8 +119,10 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
         async def _ensure_session(self, session_id, user_id, repository_id):
             return session_id or "new-session"
 
-        async def finalize_result(self, *_args, **_kwargs):
-            raise AssertionError("should not finalize cached results")
+        async def finalize_result(self, *_args, **kwargs):
+            finalized["called"] += 1
+            assert kwargs.get("query") == "hey"
+            return {}
 
         @property
         def model_router(self):
@@ -134,6 +138,7 @@ def test_chat_stream_from_cache_emits_start_chunk_done(monkeypatch: pytest.Monke
     assert any(e.get("type") == "source" for e in data_events)
     assert any(e.get("type") == "chunk" for e in data_events)
     assert data_events[-1]["type"] == "done"
+    assert finalized["called"] == 1
 
 
 def test_chat_stream_non_cached_streams_and_finalizes(monkeypatch: pytest.MonkeyPatch) -> None:

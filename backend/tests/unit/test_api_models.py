@@ -34,6 +34,11 @@ def test_chat_request_valid() -> None:
     assert req.repo_id == "repo1"
 
 
+def test_chat_request_accepts_display_query() -> None:
+    req = ChatRequest(repo_id="repo1", query="@file.ts explain", display_query="explain")
+    assert req.display_query == "explain"
+
+
 def test_chat_request_rejects_short_query() -> None:
     with pytest.raises(ValidationError):
         ChatRequest(repo_id="repo1", query="hi")

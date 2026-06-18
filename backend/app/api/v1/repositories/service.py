@@ -113,7 +113,7 @@ def get_repositories_for_user(
                 WHERE cc.repository_id = r.id
               ) AS latest_indexed_chunks
             FROM repositories r
-            WHERE r.owner_user_id = :user_id AND r.is_deleted = false
+            WHERE r.owner_user_id = :user_id AND COALESCE(r.is_deleted, false) = false
             ORDER BY r.created_at DESC
             {pagination_sql}
             """
@@ -137,8 +137,8 @@ def add_repository_for_user(
         session.execute(
             text(
                 """
-                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch, retain_snapshots_mode, retain_snapshot_count)
-                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch, 'LAST_N', 20)
+                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch, is_deleted, retain_snapshots_mode, retain_snapshot_count)
+                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch, :is_deleted, 'LAST_N', 20)
                 """
             ),
             {
@@ -148,6 +148,7 @@ def add_repository_for_user(
                 "remote_url": remote_url,
                 "local_path": local_path,
                 "default_branch": default_branch,
+                "is_deleted": False,
             },
         )
         session.commit()

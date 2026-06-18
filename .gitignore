@@ -56,3 +56,10 @@ backend/.ruff_cache/
 Project.md
 project_status.md
 docs/project_status.md
+
+# Personal session tracking (local only — not for repo)
+docs/tracking/
+enhancement.md
+
+# Playwright artifacts
+frontend/test-results/

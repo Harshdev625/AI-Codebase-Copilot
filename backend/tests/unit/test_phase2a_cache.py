@@ -40,7 +40,7 @@ async def test_cache_reuse_success(indexing_service, tmp_path):
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git:
         
         # Mock rev-parse to return the latest commit sha
@@ -83,7 +83,7 @@ async def test_cache_invalidation_stale_branch(indexing_service, tmp_path):
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git, \
          patch.object(indexing_service, "_force_delete_directory") as mock_delete:
          
@@ -125,7 +125,7 @@ async def test_cache_invalidation_changed_url(indexing_service, tmp_path):
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git, \
          patch.object(indexing_service, "_force_delete_directory") as mock_delete:
          
@@ -165,7 +165,7 @@ async def test_cache_invalidation_diverged_ancestry(indexing_service, tmp_path):
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git, \
          patch.object(indexing_service, "_force_delete_directory") as mock_delete:
          
@@ -211,7 +211,7 @@ async def test_cache_invalidation_schema_version_mismatch(indexing_service, tmp_
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git, \
          patch.object(indexing_service, "_force_delete_directory") as mock_delete:
          
@@ -253,7 +253,7 @@ async def test_cache_invalidation_indexer_version_mismatch(indexing_service, tmp
             "last_accessed_at": 100.0
         }, f)
         
-    with patch.object(indexing_service, "_cache_root", return_value=tmp_path / "repos"), \
+    with patch("app.services.indexing_service.repository_cache_dir", return_value=cache_dir), \
          patch.object(indexing_service, "_run_git", new_callable=AsyncMock) as mock_git, \
          patch.object(indexing_service, "_force_delete_directory") as mock_delete:
          

@@ -19,4 +19,15 @@ describe("monaco-line-highlight", () => {
     const found = locateSnippetInFile(content.split("\n"), "return 1");
     expect(found).toEqual({ startLine: 3, endLine: 3 });
   });
+
+  it("returns default range when nothing matches", () => {
+    expect(resolveSearchRange(4, content, undefined, undefined, "missing snippet")).toEqual({
+      startLine: 1,
+      endLine: 1,
+    });
+  });
+
+  it("locateSnippetInFile returns null for empty snippet", () => {
+    expect(locateSnippetInFile(["line"], "   ")).toBeNull();
+  });
 });

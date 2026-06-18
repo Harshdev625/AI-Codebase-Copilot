@@ -287,6 +287,38 @@ async def test_record_agent_run_with_session(query_service, mock_session):
 
 
 @pytest.mark.asyncio
+async def test_record_agent_run_uses_display_content(query_service, mock_session):
+    import json
+
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="@src/auth.py what is auth?",
+        display_content="what is auth?",
+        scope_paths=["src/auth.py"],
+        answer="Auth is in auth.py",
+    )
+    user_call = mock_session.execute.call_args_list[0]
+    params = user_call.args[1] if len(user_call.args) > 1 else user_call.kwargs
+    assert params["content"] == "what is auth?"
+    metadata = json.loads(params["metadata"])
+    assert metadata["display_content"] == "what is auth?"
+    assert metadata["scope_paths"] == ["src/auth.py"]
+
+
+@pytest.mark.asyncio
+async def test_record_agent_run_skips_empty_user_content(query_service, mock_session):
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="",
+        display_content="",
+        answer="assistant only",
+    )
+    assert mock_session.execute.call_count == 1
+    params = mock_session.execute.call_args.args[1]
+    assert params["role"] == "assistant"
+
+
+@pytest.mark.asyncio
 async def test_record_agent_run_persists_sources_and_source_index(query_service, mock_session):
     import json
 
@@ -337,10 +369,17 @@ async def test_finalize_result_success(query_service, mock_session):
         "cache_key",
         user_id="user-1",
         session_id="sess-1",
+        query="user question",
+        display_query="visible question",
+        scope_paths=["src/a.ts"],
     )
     assert result["answer"] == "This is the answer"
     query_service.cache.set_json.assert_called_once()
     query_service._record_agent_run.assert_awaited_once()
+    kwargs = query_service._record_agent_run.await_args.kwargs
+    assert kwargs["query"] == "user question"
+    assert kwargs["display_content"] == "visible question"
+    assert kwargs["scope_paths"] == ["src/a.ts"]
 
 
 @pytest.mark.asyncio

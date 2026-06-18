@@ -98,4 +98,23 @@ describe("studio-store", () => {
     useStudioStore.getState().openFileInEditor("lib/utils.ts");
     expect(useStudioStore.getState().activeFilePath).toBe("lib/utils.ts");
   });
+
+  it("closeTab removes tab and falls back to welcome", () => {
+    useStudioStore.getState().openFileTab("src/a.ts");
+    const tabId = useStudioStore.getState().activeTabId;
+    useStudioStore.getState().closeTab(tabId);
+    const state = useStudioStore.getState();
+    expect(state.editorTabs.some((t) => t.id === tabId)).toBe(false);
+    expect(state.activeTabId).toBe(WELCOME_TAB_ID);
+  });
+
+  it("closeOtherTabs keeps only the active tab", () => {
+    useStudioStore.getState().openFileTab("src/a.ts");
+    useStudioStore.getState().openFileTab("src/b.ts");
+    const keepId = useStudioStore.getState().activeTabId;
+    useStudioStore.getState().closeOtherTabs(keepId);
+    const state = useStudioStore.getState();
+    expect(state.editorTabs).toHaveLength(1);
+    expect(state.activeTabId).toBe(keepId);
+  });
 });

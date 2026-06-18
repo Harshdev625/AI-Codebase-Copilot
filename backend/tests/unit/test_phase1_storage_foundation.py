@@ -246,7 +246,7 @@ class TestFileMetadataPersistence:
         f2 = tmp_path / "utils.ts"
         f2.write_text("export const x = 1;\n", encoding="utf-8")
 
-        upserted, files_to_chunk = await upsert_file_records(
+        upserted, files_to_chunk, deleted_paths = await upsert_file_records(
             db_session,
             repository_id=repo["id"],
             repo_root=tmp_path,
@@ -257,6 +257,7 @@ class TestFileMetadataPersistence:
         assert upserted == 2
         # Both files are new (no prior hash), so both need chunking
         assert len(files_to_chunk) == 2
+        assert deleted_paths == []
 
         rows = db_session.execute(
             text("SELECT path, language, status FROM repository_files WHERE repository_id = :rid"),

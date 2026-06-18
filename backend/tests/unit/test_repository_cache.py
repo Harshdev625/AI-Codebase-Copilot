@@ -93,3 +93,31 @@ def test_normalize_repository_file_path_strips_after_workspace_name(tmp_path: Pa
 
     long_path = f"Projects/AI Codebase Copilot/timemachine/docs/CHANGELOG.md"
     assert normalize_repository_file_path(long_path, workspace=repo) == "docs/CHANGELOG.md"
+
+
+def test_normalize_repo_path_empty():
+    from app.services.repository_cache import normalize_repo_path
+
+    assert normalize_repo_path(None) is None
+    assert normalize_repo_path("   ") is None
+    assert normalize_repo_path(" /path ") == "/path"
+
+
+def test_resolve_repository_workspace_prefers_cache(tmp_path: Path, monkeypatch):
+    from app.services.repository_cache import resolve_repository_workspace
+
+    cache_dir = tmp_path / "cache" / "repo-slug"
+    cache_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        "app.services.repository_cache.repository_cache_dir",
+        lambda repo_id: cache_dir if repo_id == "org/repo" else tmp_path / "missing",
+    )
+    assert resolve_repository_workspace("org/repo", local_path=str(tmp_path / "other")) == cache_dir
+
+
+def test_read_workspace_file_bytes_returns_content(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "note.txt").write_text("hello", encoding="utf-8")
+    raw = read_workspace_file_bytes(repo, "note.txt")
+    assert raw == b"hello"
