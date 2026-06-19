@@ -9,7 +9,6 @@ from app.models.api_models import (
     AuthLoginRequest,
     AuthRegisterRequest,
     ChatRequest,
-    CreateProjectRequest,
     IndexRequest,
 )
 
@@ -67,11 +66,6 @@ def test_auth_admin_register_requires_secret() -> None:
 def test_auth_login_accepts_minimal_password() -> None:
     req = AuthLoginRequest(email="dev@example.com", password="x")
     assert req.password == "x"
-
-
-def test_create_project_request_limits_name_length() -> None:
-    with pytest.raises(ValidationError):
-        CreateProjectRequest(name="a")
 
 
 def test_add_repository_requires_source() -> None:

@@ -9,7 +9,6 @@
  *   session_id    → activeSessionId + aiPanelOpen=true
  *   ai=open       → aiPanelOpen=true
  *   panel=explorer|search|... → primarySidebar
- *   view=editor|patch-review → open corresponding tab (legacy)
  *   file=path     → open file tab
  *   patch_id=     → open patch tab
  */

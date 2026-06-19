@@ -263,19 +263,6 @@ class UserResponse(BaseModel):
     is_active: bool
 
 
-class CreateProjectRequest(StrictRequestModel):
-    name: str = Field(..., min_length=2, max_length=120)
-    description: str | None = Field(default=None, max_length=500)
-
-
-class ProjectResponse(BaseModel):
-    id: str
-    name: str
-    description: str | None = None
-    created_by: str
-    created_at: str
-
-
 class AddRepositoryRequest(StrictRequestModel):
     repo_id: str = Field(..., min_length=2, max_length=128, pattern=REPO_ID_PATTERN)
     remote_url: str | None = Field(default=None, max_length=1024)

@@ -63,7 +63,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function SourceExplorerV2({ sources }: { sources: Source[] }) {
-  const { openFileInEditor } = useStudioStore();
+  const { openFileTab } = useStudioStore();
   const [open, setOpen] = React.useState(false);
 
   if (sources.length === 0) return null;
@@ -88,7 +88,7 @@ function SourceExplorerV2({ sources }: { sources: Source[] }) {
             <button
               key={idx}
               type="button"
-              onClick={() => openFileInEditor(src.path, src.start_line)}
+              onClick={() => openFileTab(src.path, src.start_line)}
               className="min-w-0 text-left rounded-lg border border-[#5CD4C2]/20 bg-black/20 px-2.5 py-2 hover:bg-[#5CD4C2]/10 transition-colors"
             >
               <div className="flex min-w-0 items-center justify-between gap-2">

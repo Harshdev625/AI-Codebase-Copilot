@@ -80,8 +80,6 @@ export interface StudioStoreState {
   closeAllTabs: () => void;
   setActiveTabId: (tabId: string) => void;
   setTabViewMode: (tabId: string, viewMode: MarkdownViewMode) => void;
-  /** @deprecated Use openFileTab */
-  openFileInEditor: (path: string, initialLine?: number, commitSha?: string) => void;
   editorWordWrap: boolean;
   editorMinimap: boolean;
   defaultMarkdownView: MarkdownViewMode;
@@ -390,10 +388,6 @@ const studioStoreBase = create<StudioStoreState>()(
             tab.id === tabId ? { ...tab, viewMode } : tab,
           ),
         }));
-      },
-
-      openFileInEditor: (path, initialLine, commitSha) => {
-        get().openFileTab(path, initialLine, commitSha);
       },
 
       editorWordWrap: defaults.editorWordWrap,

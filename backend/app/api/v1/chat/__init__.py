@@ -352,7 +352,6 @@ def apply_patch(
 
 
 @router.post("", response_model=ChatResponse)
-@router.post("/chat", response_model=ChatResponse, include_in_schema=False)
 async def chat(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),
@@ -411,7 +410,6 @@ async def chat(
 
 
 @router.post("/stream")
-@router.post("/chat/stream", include_in_schema=False)
 async def chat_stream(
     req: ChatRequest,
     current_user: dict = Depends(get_current_user),

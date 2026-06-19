@@ -126,16 +126,6 @@ export const repositoryService = {
     });
   },
 
-  retrieveProject(
-    projectId: string,
-    payload: { query: string; repository_ids: string[]; top_k?: number }
-  ): Promise<{ items: RetrievalItem[] }> {
-    return apiClient<{ items: RetrievalItem[] }>(`/v1/projects/${projectId}/retrieve`, {
-      method: "POST",
-      body: payload,
-    });
-  },
-
   retrieveRepository(
     repositoryId: string,
     payload: { query: string; top_k?: number }

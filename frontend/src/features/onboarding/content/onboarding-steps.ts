@@ -37,7 +37,7 @@ export const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     title: 'Search across repositories',
     description:
-      'In Studio chat, use Federated Scope to query multiple repositories at once. Press Ctrl+K (Cmd+K on Mac) anywhere to open the command palette.',
+      'Use the Studio search panel and command palette (Ctrl+K / Cmd+K) to find files and symbols across your indexed repositories.',
     icon: Search,
   },
 ];

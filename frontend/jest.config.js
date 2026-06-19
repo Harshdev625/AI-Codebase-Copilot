@@ -37,7 +37,6 @@ const customJestConfig = {
     "!src/features/studio/components/studio-explorer-panel.tsx",
     "!src/features/studio/components/studio-primary-sidebar.tsx",
     "!src/features/studio/components/global-top-bar.tsx",
-    "!src/features/studio/components/copilot-studio-shell.tsx",
     "!src/features/dashboard/components/dashboard-add-repository.tsx",
     "!src/components/layout/app-shell.tsx",
     "!src/components/layout/page-transition.tsx",

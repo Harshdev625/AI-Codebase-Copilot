@@ -2,8 +2,6 @@ import {
   getDisplayContent,
   normalizeMessageMetadata,
   normalizeSourcesFromMetadata,
-  buildFederatedChatQuery,
-  CHAT_QUERY_MAX_LENGTH,
 } from "@/features/chat/utils/chat-message-utils";
 
 describe("chat-message-utils", () => {
@@ -34,13 +32,5 @@ describe("chat-message-utils", () => {
     };
     const normalized = normalizeMessageMetadata(metadata);
     expect((normalized.sources as Array<{ kind?: string }>)[0]?.kind).toBe("patch_proposal");
-  });
-
-  it("buildFederatedChatQuery stays within max length", () => {
-    const hugeContext = "x".repeat(5000);
-    const query = buildFederatedChatQuery(hugeContext, "Tell me about the project.");
-    expect(query.length).toBeLessThanOrEqual(CHAT_QUERY_MAX_LENGTH);
-    expect(query).toContain("Tell me about the project.");
-    expect(query).toContain("truncated");
   });
 });

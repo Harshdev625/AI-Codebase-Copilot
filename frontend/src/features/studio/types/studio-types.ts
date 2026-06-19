@@ -34,9 +34,6 @@ export type PrimarySidebar =
   | "patches"
   | "tasks";
 
-/** @deprecated V1 canvas router — kept for URL compat during migration */
-export type CanvasMode = "chat" | "editor" | "diff" | "patch-review";
-
 export type MobileStudioTab = "editor" | "files" | "ai";
 
 export type StudioDensity = "comfortable" | "compact";

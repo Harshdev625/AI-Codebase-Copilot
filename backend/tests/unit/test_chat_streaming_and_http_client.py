@@ -54,7 +54,7 @@ def _make_chat_test_app(monkeypatch: pytest.MonkeyPatch, fake_query_service_cls)
     import app.api.v1.chat as chat_module
 
     app = FastAPI()
-    app.include_router(chat_module.router, prefix="/v1")
+    app.include_router(chat_module.router, prefix="/v1/chat")
 
     # Avoid auth + real DB usage.
     app.dependency_overrides[chat_module.get_current_user] = lambda: {"id": "u1"}

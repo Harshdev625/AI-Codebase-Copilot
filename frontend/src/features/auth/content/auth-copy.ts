@@ -72,9 +72,9 @@ const USER_FEATURES: AuthFeatureItem[] = [
   },
   {
     icon: GitBranchPlus,
-    title: 'Multi-Repo Interrogation',
+    title: 'Cross-repo context',
     description:
-      'Query across repositories in one session with federated retrieval and citations.',
+      'Scope files and folders from your indexed repositories into chat sessions for grounded answers.',
     className: 'md:col-span-5',
     iconClass: 'text-teal-400',
     accent: 'from-teal-500/12 to-transparent',

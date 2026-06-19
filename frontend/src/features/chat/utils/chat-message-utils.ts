@@ -3,24 +3,8 @@ import type { ChatMessage, Source } from "@/features/chat/types/chat-types";
 const FEDERATED_PREFIX = "Below is the retrieved cross-repository context";
 export const USER_QUERY_MARKER = "\nUser Query: ";
 export const CHAT_QUERY_MAX_LENGTH = 4000;
-export const FEDERATED_CONTEXT_PREFIX = `${FEDERATED_PREFIX} for this query:\n\n`;
 
-/** Combine federated retrieval context + user query within API max length. */
-export function buildFederatedChatQuery(
-  formattedContext: string,
-  userQuery: string,
-  maxLength: number = CHAT_QUERY_MAX_LENGTH,
-): string {
-  const suffix = `${USER_QUERY_MARKER}${userQuery}`;
-  const maxContextLen = Math.max(256, maxLength - suffix.length);
-  let context = formattedContext;
-  if (context.length > maxContextLen) {
-    const notice = "\n\n...(retrieved context truncated to fit API limit)...\n\n";
-    context = context.slice(0, Math.max(0, maxContextLen - notice.length)) + notice;
-  }
-  return `${context}${suffix}`;
-}
-
+/** Normalize paths for display (repo-relative, no Windows absolutes). */
 const WINDOWS_PATH_RE = /[A-Za-z]:\\[\w\s./\\-]+/g;
 const SOURCE_BLOCK_RE = /Source\s*\[S\d+\][^\n]*\n?/gi;
 const PROMPT_ECHO_SOURCE_BLOCK_RE =

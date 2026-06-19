@@ -94,8 +94,8 @@ describe("studio-store", () => {
     expect(state.sidebarCollapsed).toBe(false);
   });
 
-  it("openFileInEditor alias opens file tab", () => {
-    useStudioStore.getState().openFileInEditor("lib/utils.ts");
+  it("openFileTab opens file tab", () => {
+    useStudioStore.getState().openFileTab("lib/utils.ts");
     expect(useStudioStore.getState().activeFilePath).toBe("lib/utils.ts");
   });
 

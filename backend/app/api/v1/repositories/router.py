@@ -98,47 +98,6 @@ def _to_payload(row: dict) -> dict:
 
     return payload
 
-@router.get("/projects")
-def list_projects(
-    current_user: dict = Depends(get_current_user),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.post("/projects", status_code=status.HTTP_201_CREATED)
-def create_project(
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.delete("/projects/{project_id}", status_code=status.HTTP_200_OK)
-def delete_project(
-    project_id: str,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.get("/projects/{project_id}/repositories")
-def list_repositories(
-    project_id: str,
-    current_user: dict = Depends(get_current_user),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Project repositories are disabled in the simplified schema.")
-
-@router.post("/projects/{project_id}/repositories", status_code=status.HTTP_201_CREATED)
-def add_repository(
-    project_id: str,
-    req: AddRepositoryRequest,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Project repositories are disabled in the simplified schema.")
-
 @router.post("/index", status_code=status.HTTP_202_ACCEPTED)
 def index_repo(
     req: IndexRequest,
@@ -1592,12 +1551,6 @@ class RetrieveRepositoryPayload(BaseModel):
     patch_id: Optional[str] = None
 
 
-class RetrieveProjectPayload(BaseModel):
-    query: str
-    top_k: Optional[int] = 10
-    repository_ids: List[str]
-
-
 @router.post("/repositories/{repository_id}/search")
 def search_repository_workspace(
     repository_id: str,
@@ -1688,31 +1641,6 @@ def retrieve_repository_endpoint(
             workspace=cache_path,
             local_path=local_path,
         )
-
-    return success_response({"items": items})
-
-
-@router.post("/projects/{project_id}/retrieve")
-def retrieve_project_endpoint(
-    project_id: str,
-    payload: RetrieveProjectPayload,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(current_user, {"repository:read"})
-    for rid in payload.repository_ids:
-        ensure_repository_access_by_id(session, rid, current_user["id"])
-
-    from app.rag.retrieval.hybrid import project_federated_retrieve
-    try:
-        items = project_federated_retrieve(
-            session,
-            repository_ids=payload.repository_ids,
-            query=payload.query,
-            top_k=payload.top_k
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Project retrieval failed: {str(exc)}")
 
     return success_response({"items": items})
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import DatabaseException, ExternalServiceError
 from app.observability.metrics import runtime_metrics
-from app.rag.retrieval.hybrid import hybrid_retrieve, project_federated_retrieve
+from app.rag.retrieval.hybrid import hybrid_retrieve
 from app.rag.retrieval.query_signals import extension_matches_path, infer_query_signals
 from app.services.cache_service import get_cache_service
 
@@ -73,48 +73,6 @@ class RetrievalService:
             logger.warning("retrieval_repository - cache write failed key=%s error=%s", cache_key, exc)
         runtime_metrics.increment("retrieval_requests_total", scope="repository")
         runtime_metrics.increment("retrieved_chunks_total", amount=len(selected), scope="repository")
-        return selected
-
-    def retrieve_project(self, *, project_id: str, query: str, top_k: int = 8, per_repo_k: int = 6) -> list[dict[str, Any]]:
-        dialect_name = self.session.bind.dialect.name if self.session.bind is not None else "unknown"
-        if dialect_name != "postgresql":
-            logger.warning(
-                "retrieval_project - unsupported dialect dialect=%s project_id=%s",
-                dialect_name,
-                project_id,
-            )
-            return []
-        cache_key = self._cache_key(scope=f"project:{project_id}", query=query, top_k=top_k)
-        try:
-            cached = self.cache.get_json(cache_key)
-        except ExternalServiceError as exc:
-            logger.warning("retrieval_project - cache read failed key=%s error=%s", cache_key, exc)
-            cached = None
-        if cached and isinstance(cached.get("items"), list):
-            runtime_metrics.increment("retrieval_cache_hits_total", scope="project")
-            return [dict(item) for item in cached["items"]]
-
-        runtime_metrics.increment("retrieval_cache_misses_total", scope="project")
-        with runtime_metrics.timer("retrieval_latency_ms", scope="project"):
-            try:
-                items = project_federated_retrieve(
-                    self.session,
-                    project_id=project_id,
-                    query=query,
-                    top_k=top_k,
-                    per_repo_k=per_repo_k,
-                )
-            except Exception as exc:
-                logger.exception("retrieval_project - query failed project_id=%s", project_id)
-                raise DatabaseException("Failed to retrieve project context") from exc
-
-        selected = self._post_process(items, query=query, top_k=top_k, intent=intent)
-        try:
-            self.cache.set_json(cache_key, {"items": selected}, ttl_seconds=settings.retrieval_cache_ttl_seconds)
-        except ExternalServiceError as exc:
-            logger.warning("retrieval_project - cache write failed key=%s error=%s", cache_key, exc)
-        runtime_metrics.increment("retrieval_requests_total", scope="project")
-        runtime_metrics.increment("retrieved_chunks_total", amount=len(selected), scope="project")
         return selected
 
     def _post_process(

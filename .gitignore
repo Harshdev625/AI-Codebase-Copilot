@@ -59,7 +59,9 @@ docs/project_status.md
 
 # Personal session tracking (local only — not for repo)
 docs/tracking/
+docs/repo-cleanup.md
 enhancement.md
+info.md
 
 # Playwright artifacts
 frontend/test-results/

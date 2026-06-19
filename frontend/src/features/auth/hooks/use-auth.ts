@@ -137,9 +137,3 @@ export function useLogout() {
     [router, logoutStore, queryClient]
   );
 }
-
-/** @deprecated Use useLogout instead */
-export function useLogoutAction() {
-  const logout = useLogout();
-  return logout;
-}

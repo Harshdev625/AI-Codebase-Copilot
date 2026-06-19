@@ -346,8 +346,4 @@ test.describe("Engineering Studio E2E Tests", () => {
     await page.locator('[data-testid="snapshot-pin-toggle-snap-1"]').click();
     expect(patchPayload).toEqual({ is_pinned: true });
   });
-
-  test.skip("5. Federated search cross-repository retrieval selector", async () => {
-    // MultiRepositorySelect is not wired into the studio shell yet.
-  });
 });

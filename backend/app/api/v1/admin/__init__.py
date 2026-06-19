@@ -520,17 +520,6 @@ def admin_telemetry(
     return success_response(payload)
 
 
-@router.get("/admin/architecture-graph")
-def admin_architecture_graph(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    repository_id: str | None = Query(default=None),
-    limit: int = Query(default=500, ge=100, le=1500),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Architecture graph is disabled in the simplified schema.")
-
-
 @router.get("/admin/recent-activity")
 def admin_recent_activity(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
@@ -656,22 +645,3 @@ def admin_service_health(
         ]
     logger.info("admin_service_health - response sent")
     return success_response(statuses)
-
-
-@router.get("/admin/usage-overview")
-def admin_usage_overview(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Usage tracking is disabled in the simplified schema.")
-
-
-@router.get("/admin/billing-events")
-def admin_billing_events(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Billing events are disabled in the simplified schema.")
