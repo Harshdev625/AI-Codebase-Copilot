@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Repository } from "@/features/repositories/types/repository-types";
 import type { ChatMode, ChatSession } from "@/features/chat/types/chat-types";
+import { useChangeSetForSession } from "@/features/change-sets/hooks/use-change-sets";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 
 type StudioChatState = ReturnType<typeof useChat>;
@@ -59,6 +60,8 @@ export function StudioCanvasChat({
   const activeFilePath = useStudioStore((s) => s.activeFilePath);
   const editorTabs = useStudioStore((s) => s.editorTabs);
   const activeTabId = useStudioStore((s) => s.activeTabId);
+  const focusSidebar = useStudioStore((s) => s.focusSidebar);
+  const setActiveChangeSetId = useStudioStore((s) => s.setActiveChangeSetId);
 
   const [query, setQuery] = React.useState("");
   const [mode, setMode] = React.useState<ChatMode>("ASK");
@@ -87,12 +90,29 @@ export function StudioCanvasChat({
   } = useSessionScope(currentSessionId);
 
   const activeSession = sessions.find((s) => s.id === currentSessionId);
+  const changeSetQuery = useChangeSetForSession(currentSessionId);
+  const activeChangeSet = changeSetQuery.data;
+  const planApproved =
+    activeChangeSet?.status === "PLAN_APPROVED" ||
+    (activeChangeSet?.status === "PATCH_REJECTED" && !activeChangeSet?.patch_id) ||
+    activeChangeSet?.status === "ACTING" ||
+    activeChangeSet?.status === "PATCH_READY" ||
+    activeChangeSet?.status === "VALIDATING" ||
+    activeChangeSet?.status === "PATCH_APPROVED" ||
+    activeChangeSet?.status === "PATCH_REJECTED" ||
+    activeChangeSet?.status === "APPLIED" ||
+    activeChangeSet?.status === "ROLLED_BACK";
 
   React.useEffect(() => {
     if (activeSession?.session_mode) {
       setMode(normalizeSessionMode(activeSession.session_mode));
     }
   }, [activeSession?.id, activeSession?.session_mode]);
+
+  React.useEffect(() => {
+    if (!activeChangeSet) return;
+    setActiveChangeSetId(activeChangeSet.id);
+  }, [activeChangeSet?.id, setActiveChangeSetId]);
 
   const handleModeChange = React.useCallback(
     (next: ChatMode) => {
@@ -151,6 +171,11 @@ export function StudioCanvasChat({
 
   const handleSend = async () => {
     if (!canSend) return;
+    if (mode === "ACT" && !planApproved) {
+      toast.error("Plan required", "Approve a plan in Plan tasks before using Act mode.");
+      focusSidebar("tasks");
+      return;
+    }
     const trimmed = query.trim();
     setQuery("");
     setCaretIndex(0);
@@ -218,6 +243,8 @@ export function StudioCanvasChat({
         repositoryId={repositoryId}
         mode={mode}
         scopePaths={scopePaths}
+        planStatus={activeChangeSet?.status}
+        planVersion={activeChangeSet?.plan_version}
         sessionTitle={
           activeSession?.session_title || activeSession?.summary || undefined
         }
@@ -225,6 +252,21 @@ export function StudioCanvasChat({
           activeSession?.last_activity_at || activeSession?.updated_at || activeSession?.created_at
         }
       />
+
+      {mode === "PLAN" && activeChangeSet && (
+        <div className="shrink-0 border-b border-violet-500/20 bg-violet-500/5 px-4 py-2 text-xs text-[#C9D1D9]">
+          <span className="font-medium text-violet-300">Plan mode:</span>{" "}
+          Send a follow-up here to change direction (e.g. &quot;focus on dark mode only&quot;). Or use{" "}
+          <button
+            type="button"
+            className="font-medium text-violet-400 hover:underline"
+            onClick={() => focusSidebar("tasks")}
+          >
+            Plan tasks → Request changes
+          </button>{" "}
+          for structured revisions.
+        </div>
+      )}
 
       <div className="relative min-h-0 min-w-0 flex-1 overflow-x-hidden">
         {currentSessionId && isHistoryLoading && (
@@ -337,7 +379,13 @@ export function StudioCanvasChat({
               onDrop={handleComposerDrop}
             >
               <div className="flex flex-col gap-1 p-2 pt-2">
-                <ModeSelector mode={mode} onModeChange={handleModeChange} variant="compact" />
+                <ModeSelector
+                  mode={mode}
+                  onModeChange={handleModeChange}
+                  variant="compact"
+                  actDisabled={!planApproved}
+                  planAwaitingReview={Boolean(activeChangeSet)}
+                />
 
                 <ComposerAttachments
                   scopePaths={scopePaths}
@@ -396,7 +444,13 @@ export function StudioCanvasChat({
                         void handleSend();
                       }
                     }}
-                    placeholder="Ask a question or type @ to reference files…"
+                    placeholder={
+                      mode === "PLAN" && activeChangeSet
+                        ? "Describe what to change in the plan…"
+                        : mode === "ACT"
+                          ? "Optional: extra instructions for the patch…"
+                          : "Ask a question or type @ to reference files…"
+                    }
                     rows={1}
                     disabled={!repositoryId}
                     className="max-h-[300px] min-h-[44px] w-full resize-none border-0 bg-transparent px-2 py-2.5 text-[14px] leading-relaxed text-[#E2E8F0] shadow-none placeholder:text-[#8B949E] focus-visible:outline-none focus:ring-0 custom-scrollbar"

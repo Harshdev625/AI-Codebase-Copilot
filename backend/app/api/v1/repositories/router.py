@@ -1527,6 +1527,14 @@ def apply_patch(
         session.commit()
         raise HTTPException(status_code=500, detail=f"Failed to apply patch: {str(exc)}")
 
+    from app.db.models import ChangeSet
+    cs = session.query(ChangeSet).filter(ChangeSet.patch_id == patch_id).first()
+    if cs and cs.status == "PATCH_APPROVED":
+        cs.status = "APPLIED"
+        cs.updated_at = datetime.now(timezone.utc)
+
+    session.commit()
+
     return success_response({
         "patch_id": patch_id,
         "status": "APPLIED"

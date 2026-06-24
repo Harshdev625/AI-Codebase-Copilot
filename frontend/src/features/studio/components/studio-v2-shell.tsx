@@ -23,14 +23,18 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBar } from "@/features/studio/panels/status-bar";
 import { SettingsPanel } from "@/features/studio/panels/settings-panel";
+import { PlanTasksPanel } from "@/features/studio/panels/plan-tasks-panel";
+import { PlanCenterPanel } from "@/features/studio/panels/plan-center-panel";
 import { cn } from "@/lib/utils";
 
 import { StudioWorkbenchProvider } from "../context/studio-workbench-context";
 import { useStudioStore } from "../store/studio-store";
+import { isChatWorkflowPanel } from "../utils/studio-layout";
 import { GlobalTopBar } from "./global-top-bar";
 import { StudioNavRail } from "./studio-nav-rail";
 import { StudioPrimarySidebar } from "./studio-primary-sidebar";
 import { StudioSessionSidebar } from "./studio-session-sidebar";
+import { StudioWorkflowSidebar } from "./studio-workflow-sidebar";
 import { StudioCanvasChat } from "./studio-canvas-chat";
 import { AiDockPanel } from "../workbench/ai-dock-panel";
 import { ScopeBar } from "../workbench/scope-bar";
@@ -121,7 +125,9 @@ export function StudioV2Shell({
     setActiveSessionId,
   } = useStudioStore();
 
-  const isChatMode = primarySidebar === "sessions";
+  const isChatWorkflowSidebar = isChatWorkflowPanel(primarySidebar);
+  const showChatCenter = primarySidebar === "sessions";
+  const showPlanCenter = primarySidebar === "tasks";
 
   const chat = useChat({ repositoryId });
 
@@ -220,7 +226,7 @@ export function StudioV2Shell({
       <div
         className="studio-workbench flex h-full w-full flex-col overflow-hidden bg-background text-foreground"
         data-studio-shell="v2"
-        data-studio-mode={isChatMode ? "chat" : "editor"}
+        data-studio-mode={showChatCenter ? "chat" : showPlanCenter ? "plan" : "editor"}
       >
         <GlobalTopBar />
 
@@ -246,9 +252,15 @@ export function StudioV2Shell({
           <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
             {!sidebarCollapsed && (
               <div className="flex h-full w-[min(300px,22vw)] min-w-[260px] shrink-0 flex-col border-r border-[#1E212B]">
-                {isChatMode ? (
+                {primarySidebar === "sessions" && (
                   <StudioSessionSidebar {...sessionSidebarProps} />
-                ) : (
+                )}
+                {primarySidebar === "tasks" && (
+                  <StudioWorkflowSidebar title="PLAN TASKS">
+                    <PlanTasksPanel />
+                  </StudioWorkflowSidebar>
+                )}
+                {!isChatWorkflowSidebar && (
                   <>
                     <StudioPrimarySidebar {...toolSidebarProps} />
                     <ScopeBar />
@@ -258,7 +270,7 @@ export function StudioV2Shell({
             )}
 
             <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              {isChatMode ? (
+              {showChatCenter ? (
                 <StudioCanvasChat
                   variant="canvas"
                   repositoryId={repositoryId}
@@ -267,6 +279,8 @@ export function StudioV2Shell({
                   chat={chat}
                   sessions={sessions}
                 />
+              ) : showPlanCenter ? (
+                <PlanCenterPanel />
               ) : (
                 <EditorWorkbench />
               )}

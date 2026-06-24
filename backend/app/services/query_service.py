@@ -16,7 +16,7 @@ from sqlalchemy import text
 from app.core.config import settings
 from app.graph.workflow import compiled_graph
 from app.llm.model_router import get_model_router
-from app.llm.prompt_builder import BASE_SYSTEM_PROMPT, build_context_packet
+from app.llm.prompt_builder import BASE_SYSTEM_PROMPT, build_context_packet, get_system_prompt_for_mode
 from app.llm.token_usage import extract_ollama_usage, merge_usage_totals
 from app.observability.metrics import runtime_metrics
 from app.rag.retrieval.service import get_retrieval_service
@@ -33,6 +33,35 @@ from app.db.models import ChatSession, Repository
 
 
 logger = logging.getLogger(__name__)
+
+_DEBUG_LOG_PATH = "debug-16bbe5.log"
+_DEBUG_SESSION_ID = "16bbe5"
+
+
+def _agent_debug_log(
+    *,
+    location: str,
+    message: str,
+    data: dict,
+    hypothesis_id: str,
+    run_id: str = "act-run",
+) -> None:
+    # #region agent log
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, default=str) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 class QueryService:
@@ -130,13 +159,23 @@ class QueryService:
                 query,
                 assembled_context,
                 mode="federated" if federated else "single",
+                chat_mode=chat_mode,
             )
             result["stats"] = {"usage": usage}
         except (LLMRequestError, ExternalServiceError) as exc:
+            if str(chat_mode).upper() in {"ACT", "PLAN"}:
+                logger.exception(
+                    "LLM call failed (no fallback for %s) repo_id=%s repository_id=%s",
+                    chat_mode,
+                    repo_id,
+                    repository_id,
+                )
+                raise
             logger.exception("LLM call failed repo_id=%s repository_id=%s", repo_id, repository_id)
             runtime_metrics.increment("llm_chat_errors_total", mode="federated" if federated else "single")
             fallback = self._select_fallback_answer(query, result)
             result["answer"] = fallback
+            result["_llm_fallback"] = True
             result["session_id"] = active_session_id
             result["intent"] = result.get("intent", "unknown")
             logger.warning(
@@ -159,6 +198,24 @@ class QueryService:
 
         result["answer"] = llm_answer
         result["session_id"] = active_session_id
+
+        if str(chat_mode).upper() == "ACT":
+            patch_text = self.extract_patch_from_text(llm_answer)
+            _agent_debug_log(
+                location="query_service.py:run",
+                message="ACT patch extraction result",
+                data={
+                    "patch_found": bool(patch_text),
+                    "patch_chars": len(patch_text or ""),
+                    "answer_chars": len(llm_answer or ""),
+                },
+                hypothesis_id="H3-extract-patch",
+            )
+            if patch_text:
+                result["patch"] = patch_text
+                proposal = self._build_patch_proposal_from_state(result)
+                if proposal:
+                    result["patch_proposal"] = proposal
         
         logger.debug(
             "query_run - model answer generated repository_id=%s repo_id=%s chars=%s",
@@ -182,26 +239,65 @@ class QueryService:
         )
 
     @circuit_breaker(failure_threshold=3, recovery_timeout_seconds=300, service_name="LLM")
-    async def _get_llm_answer_with_timeout(self, query: str, context: str, mode: str) -> tuple[str, dict]:
+    async def _get_llm_answer_with_timeout(
+        self,
+        query: str,
+        context: str,
+        mode: str,
+        *,
+        chat_mode: str = "ASK",
+    ) -> tuple[str, dict]:
         with runtime_metrics.timer("llm_chat_latency_ms", mode=mode):
-            timeout_seconds = max(5.0, float(settings.ollama_chat_timeout_seconds))
+            mode_upper = str(chat_mode).upper()
+            system_prompt = get_system_prompt_for_mode(chat_mode)
+            if mode_upper == "ACT":
+                timeout_seconds = max(5.0, float(settings.ollama_act_timeout_seconds))
+            elif mode_upper == "PLAN":
+                timeout_seconds = max(5.0, float(settings.ollama_plan_timeout_seconds))
+            else:
+                timeout_seconds = max(5.0, float(settings.ollama_chat_timeout_seconds))
             try:
                 completion = await asyncio.wait_for(
                     asyncio.to_thread(
                         self.model_router.chat,
                         prompt=query,
                         context=context,
-                        system_prompt=BASE_SYSTEM_PROMPT,
+                        system_prompt=system_prompt,
+                        timeout_seconds=timeout_seconds,
+                        allow_context_retry=mode_upper not in {"ACT", "PLAN"},
                     ),
-                    timeout=timeout_seconds,
+                    timeout=timeout_seconds + 30.0,
                 )
-                return completion.text, dict(completion.usage or {})
+                answer_text = completion.text
+                if mode_upper == "ACT":
+                    _agent_debug_log(
+                        location="query_service.py:_get_llm_answer_with_timeout",
+                        message="ACT LLM response received",
+                        data={
+                            "answer_chars": len(answer_text or ""),
+                            "answer_preview": (answer_text or "")[:500],
+                            "system_prompt_kind": "ACT",
+                            "context_chars": len(context or ""),
+                        },
+                        hypothesis_id="H1-system-prompt",
+                    )
+                return answer_text, dict(completion.usage or {})
             except asyncio.TimeoutError as exc:
                 logger.warning("llm_chat - timeout after %s seconds", timeout_seconds)
-                raise LLMRequestError(f"Language model timed out after {timeout_seconds}s") from exc
+                raise LLMRequestError(
+                    f"Language model timed out after {timeout_seconds}s. "
+                    f"For Act mode, increase OLLAMA_ACT_TIMEOUT_SECONDS or use a faster model."
+                ) from exc
             except Exception as exc:
+                msg = str(exc)
+                if "timed out" in msg.lower():
+                    logger.warning("llm_chat - ollama timeout after %ss mode=%s", timeout_seconds, chat_mode)
+                    raise LLMRequestError(
+                        f"Ollama timed out after {timeout_seconds}s. "
+                        "Use a smaller/faster model, reduce plan scope, or raise OLLAMA_ACT_TIMEOUT_SECONDS."
+                    ) from exc
                 logger.exception("llm_chat - unexpected error")
-                raise LLMRequestError("Language model request failed") from exc
+                raise LLMRequestError(f"Language model request failed: {msg[:240]}") from exc
 
     async def prepare_generation(
         self,
@@ -229,7 +325,7 @@ class QueryService:
 
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-        mode_key = "federated" if federated else "single"
+        mode_key = f"{chat_mode.upper()}:{('federated' if federated else 'single')}"
         scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
         attached_suffix = f":{'-'.join(sorted(attached_files))}" if attached_files else ""
         scope_key = f"{repository_id}{scope_suffix}{attached_suffix}"
@@ -242,15 +338,34 @@ class QueryService:
         if not repository_id or not repo_id:
             raise NoContextError("Repository context missing. Select a repository and retry.")
 
-        state = {
-            "repo_id": repo_id,
-            "repository_id": repository_id,
-            "query": query,
-            "session": self.session,
-            "history": history,
-            "scope_paths": scope_paths,
-        }
-        result = await self._invoke_graph_with_trace(state)
+        mode_upper = str(chat_mode).upper()
+        if mode_upper == "ACT":
+            result = {
+                "repo_id": repo_id,
+                "repository_id": repository_id,
+                "query": query,
+                "retrieved_context": [],
+                "run_trace": [{"node": "act_prepare", "label": "Skipped graph for ACT mode"}],
+            }
+            _agent_debug_log(
+                location="query_service.py:prepare_generation",
+                message="ACT path bypassing LangGraph",
+                data={
+                    "scope_paths": scope_paths or [],
+                    "attached_files": attached_files or [],
+                },
+                hypothesis_id="H2-graph-bypass",
+            )
+        else:
+            state = {
+                "repo_id": repo_id,
+                "repository_id": repository_id,
+                "query": query,
+                "session": self.session,
+                "history": history,
+                "scope_paths": scope_paths,
+            }
+            result = await self._invoke_graph_with_trace(state)
         result = await self._complete_after_graph(
             result,
             repository_id=repository_id,
@@ -293,19 +408,46 @@ class QueryService:
             existing = list(result.get("retrieved_context") or [])
             result["retrieved_context"] = attached_snippets + existing
 
+        mode_upper = str(chat_mode).upper()
         if not result.get("retrieved_context"):
+            top_k = 4 if mode_upper == "ACT" else 8
+            retrieval_scope = scope_paths if mode_upper != "ACT" else None
             retrieved = self.retrieval_service.retrieve_repository(
                 repository_id=repository_id,
                 query=query,
-                top_k=8,
-                scope_paths=scope_paths,
+                top_k=top_k,
+                scope_paths=retrieval_scope,
             )
+            if not retrieved and scope_paths and mode_upper == "ACT":
+                retrieved = self.retrieval_service.retrieve_repository(
+                    repository_id=repository_id,
+                    query=query,
+                    top_k=top_k,
+                    scope_paths=None,
+                )
             if retrieved:
                 result["retrieved_context"] = retrieved
 
-        snippets = result.get("retrieved_context", [])[:6]
+        snippet_limit = 4 if mode_upper == "ACT" else 6
+        snippets = result.get("retrieved_context", [])[:snippet_limit]
         if not snippets:
+            _agent_debug_log(
+                location="query_service.py:_complete_after_graph",
+                message="ACT context assembly failed",
+                data={
+                    "chat_mode": chat_mode,
+                    "attached_files": attached_files or [],
+                    "attached_snippet_count": len(attached_snippets),
+                    "scope_paths": scope_paths or [],
+                },
+                hypothesis_id="H6-context-missing",
+            )
             logger.warning("query_prepare - no indexed context repository_id=%s repo_id=%s", repository_id, repo_id)
+            if mode_upper == "ACT" and attached_files and not attached_snippets:
+                raise NoContextError(
+                    "ACT could not load plan target files from the repository workspace. "
+                    "Revise the plan with full file paths (e.g. css/style.css) and retry."
+                )
             raise NoContextError(
                 "No indexed context found for this query. Index the repository first and retry."
             )
@@ -347,7 +489,7 @@ class QueryService:
 
         normalized = query.strip().lower()
         query_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-        mode_key = "federated" if federated else "single"
+        mode_key = f"{chat_mode.upper()}:{('federated' if federated else 'single')}"
         scope_suffix = f":{'-'.join(sorted(scope_paths))}" if scope_paths else ""
         attached_suffix = f":{'-'.join(sorted(attached_files))}" if attached_files else ""
         scope_key = f"{repository_id}{scope_suffix}{attached_suffix}"
@@ -432,6 +574,7 @@ class QueryService:
         from app.services.repository_cache import (
             normalize_repository_file_path,
             read_repository_file,
+            resolve_act_file_paths,
             resolve_repository_workspace,
         )
 
@@ -444,9 +587,16 @@ class QueryService:
         if not cache_path:
             return []
 
+        resolved_paths = resolve_act_file_paths(
+            attached_files,
+            cache_path,
+            local_path=repo.local_path,
+        )
+        paths_to_load = resolved_paths or list(attached_files)
+
         snippets: list[dict] = []
         max_chars = 50_000
-        for raw_path in attached_files:
+        for raw_path in paths_to_load:
             norm = normalize_repository_file_path(
                 raw_path,
                 workspace=cache_path,
@@ -476,20 +626,45 @@ class QueryService:
         if not raw:
             return None
 
+        for match in re.finditer(r"```[^\n]*\n([\s\S]*?)```", raw):
+            candidate = match.group(1).strip()
+            if QueryService._looks_like_unified_diff(candidate):
+                return candidate
+
         fenced = re.search(r"```(?:diff|patch)?\s*\n([\s\S]*?)```", raw, re.IGNORECASE)
         if fenced:
             candidate = fenced.group(1).strip()
-            if "diff --git" in candidate or candidate.startswith("---"):
+            if QueryService._looks_like_unified_diff(candidate):
                 return candidate
 
         if "diff --git" in raw:
             start = raw.find("diff --git")
-            return raw[start:].strip()
+            chunk = raw[start:].strip()
+            if QueryService._looks_like_unified_diff(chunk):
+                return chunk
+
+        if "@@" in raw:
+            start = raw.find("---")
+            if start >= 0:
+                chunk = raw[start:].strip()
+                if QueryService._looks_like_unified_diff(chunk):
+                    return chunk
 
         if raw.startswith("---"):
             return raw
 
         return None
+
+    @staticmethod
+    def _looks_like_unified_diff(text: str) -> bool:
+        candidate = str(text or "").strip()
+        if not candidate:
+            return False
+        if "diff --git" in candidate:
+            return True
+        if candidate.startswith("---") and "+++" in candidate:
+            return True
+        return False
 
     def _build_patch_proposal_from_state(self, state: dict) -> dict | None:
         patch_text = str(state.get("patch") or "").strip()

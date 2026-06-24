@@ -1,22 +1,10 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useStudioStore } from "../store/studio-store";
-import type { PrimarySidebar } from "../types/studio-types";
-
-const TOOL_PANELS: PrimarySidebar[] = [
-  "explorer",
-  "search",
-  "snapshots",
-  "patches",
-  "tasks",
-];
-
-function isToolPanel(panel: string | null): panel is PrimarySidebar {
-  return Boolean(panel && TOOL_PANELS.includes(panel as PrimarySidebar));
-}
 
 /**
- * URL → store on mount; store → URL on explicit navigation (debounced).
+ * URL sync — repository, session, and editor deep-links only.
+ * Sidebar panel state stays in the store (not in the URL).
  */
 export function useStudioUrlSync() {
   const router = useRouter();
@@ -25,10 +13,8 @@ export function useStudioUrlSync() {
   const {
     selectedRepositoryId,
     activeSessionId,
-    primarySidebar,
     setSelectedRepositoryId,
     setActiveSessionId,
-    focusSidebar,
     openFileTab,
     openPatchTab,
   } = useStudioStore();
@@ -38,13 +24,8 @@ export function useStudioUrlSync() {
   React.useEffect(() => {
     const repositoryId = searchParams.get("repository_id");
     const sessionId = searchParams.get("session_id");
-    const panel = searchParams.get("panel");
-    const aiOpen = searchParams.get("ai") === "open";
     const file = searchParams.get("file");
     const patchId = searchParams.get("patch_id");
-
-    const hasEditorIntent = Boolean(file || patchId);
-    const hasToolPanel = isToolPanel(panel);
 
     if (repositoryId && repositoryId !== selectedRepositoryId) {
       setSelectedRepositoryId(repositoryId);
@@ -54,35 +35,37 @@ export function useStudioUrlSync() {
       const lineRaw = searchParams.get("line");
       const line = lineRaw ? parseInt(lineRaw, 10) : undefined;
       openFileTab(file, Number.isFinite(line) ? line : undefined);
-      focusSidebar(hasToolPanel ? (panel as PrimarySidebar) : "explorer");
     } else if (patchId) {
       openPatchTab(patchId);
-      focusSidebar(hasToolPanel ? (panel as PrimarySidebar) : "explorer");
-    } else if (hasToolPanel) {
-      focusSidebar(panel as PrimarySidebar);
     }
 
     if (sessionId && sessionId !== activeSessionId) {
       setActiveSessionId(sessionId);
-      if (!hasEditorIntent && !hasToolPanel) {
-        focusSidebar("sessions");
-      }
-    }
-
-    if (aiOpen && !hasEditorIntent && !hasToolPanel) {
-      focusSidebar("sessions");
     }
 
     hydratedRef.current = true;
+
+    // Strip legacy panel/ai query params — sidebar state lives in the store only.
+    if (
+      typeof window !== "undefined" &&
+      (searchParams.has("panel") || searchParams.has("ai"))
+    ) {
+      const params = new URLSearchParams(window.location.search);
+      params.delete("panel");
+      params.delete("ai");
+      const query = params.toString();
+      const cleanUrl = query ? `/studio?${query}` : "/studio";
+      router.replace(cleanUrl);
+    }
   }, [
     searchParams,
     selectedRepositoryId,
     activeSessionId,
     setSelectedRepositoryId,
     setActiveSessionId,
-    focusSidebar,
     openFileTab,
     openPatchTab,
+    router,
   ]);
 
   const updateUrl = React.useCallback(() => {
@@ -100,23 +83,14 @@ export function useStudioUrlSync() {
     const activeTab = useStudioStore.getState().editorTabs.find(
       (t) => t.id === useStudioStore.getState().activeTabId,
     );
-    const hasOpenFile = activeTab?.kind === "file" && activeTab.filePath;
-    const hasOpenPatch = activeTab?.kind === "patch" && activeTab.patchId;
 
-    if (primarySidebar && primarySidebar !== "sessions") {
-      params.set("panel", primarySidebar);
-    }
-    if (primarySidebar === "sessions") {
-      params.set("ai", "open");
-    }
-
-    if (hasOpenFile && activeTab?.filePath) {
+    if (activeTab?.kind === "file" && activeTab.filePath) {
       params.set("file", activeTab.filePath);
       if (activeTab.initialLine) {
         params.set("line", String(activeTab.initialLine));
       }
     }
-    if (hasOpenPatch && activeTab?.patchId) {
+    if (activeTab?.kind === "patch" && activeTab.patchId) {
       params.set("patch_id", activeTab.patchId);
     }
 
@@ -129,7 +103,7 @@ export function useStudioUrlSync() {
 
     if (newUrl === currentPath) return;
     router.replace(newUrl);
-  }, [selectedRepositoryId, activeSessionId, primarySidebar, router]);
+  }, [selectedRepositoryId, activeSessionId, router]);
 
   React.useEffect(() => {
     const timeoutId = setTimeout(updateUrl, 300);

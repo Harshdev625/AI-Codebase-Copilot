@@ -121,3 +121,25 @@ def test_read_workspace_file_bytes_returns_content(tmp_path: Path):
     (repo / "note.txt").write_text("hello", encoding="utf-8")
     raw = read_workspace_file_bytes(repo, "note.txt")
     assert raw == b"hello"
+
+
+def test_find_workspace_files_by_basename(tmp_path: Path):
+    from app.services.repository_cache import find_workspace_files_by_basename
+
+    repo = tmp_path / "repo"
+    css_dir = repo / "assets" / "css"
+    css_dir.mkdir(parents=True)
+    (css_dir / "style.css").write_text("body {}", encoding="utf-8")
+    matches = find_workspace_files_by_basename(repo, "style.css")
+    assert matches == ["assets/css/style.css"]
+
+
+def test_resolve_act_file_paths_resolves_basename(tmp_path: Path):
+    from app.services.repository_cache import resolve_act_file_paths
+
+    repo = tmp_path / "repo"
+    css_dir = repo / "css"
+    css_dir.mkdir(parents=True)
+    (css_dir / "layout.css").write_text("{}", encoding="utf-8")
+    resolved = resolve_act_file_paths(["layout.css", "Node.js"], repo)
+    assert resolved == ["css/layout.css"]

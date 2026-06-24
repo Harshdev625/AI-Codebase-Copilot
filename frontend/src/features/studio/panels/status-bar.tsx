@@ -90,7 +90,7 @@ export function StatusBar() {
             type="button"
             className="flex items-center gap-1.5 bg-primary-foreground/15 rounded px-2 py-0.5 hover:bg-primary-foreground/25 transition-colors"
             onClick={() => focusSidebar('tasks')}
-            title="Open background tasks for details"
+            title="Open plan tasks panel"
           >
             <Loader2 className="w-3 h-3 animate-spin" />
             <span>Indexing {progress}%</span>

@@ -77,14 +77,28 @@ class OllamaModelRouter:
         self._stream_usage = {}
         return usage
 
-    def chat(self, prompt: str, context: str = "", system_prompt: str | None = None) -> ChatCompletion:
+    def chat(
+        self,
+        prompt: str,
+        context: str = "",
+        system_prompt: str | None = None,
+        *,
+        timeout_seconds: float | None = None,
+        allow_context_retry: bool = True,
+    ) -> ChatCompletion:
         logger.debug("ollama_chat - request received prompt_chars=%s context_chars=%s", len(prompt), len(context))
         full_context = context
         short_context = context[:6000] if context else ""
         last_error: RuntimeError | None = None
         active_system_prompt = system_prompt or BASE_SYSTEM_PROMPT or _DEFAULT_CHAT_SYSTEM_PROMPT
+        read_timeout = max(5.0, float(timeout_seconds if timeout_seconds is not None else self.timeout))
 
-        for candidate_context in (full_context, short_context):
+        if allow_context_retry and short_context and short_context != full_context:
+            context_candidates: tuple[str, ...] = (full_context, short_context)
+        else:
+            context_candidates = (full_context,) if full_context else ("",)
+
+        for candidate_context in context_candidates:
             payload: dict[str, Any] = {
                 "model": self.chat_model,
                 "messages": build_chat_messages(
@@ -103,10 +117,10 @@ class OllamaModelRouter:
                     f"{self.base_url}/api/chat",
                     json=payload,
                     timeout=httpx.Timeout(
-                        connect=max(self.timeout, 30.0),
-                        read=self.timeout,
-                        write=max(self.timeout, 30.0),
-                        pool=max(self.timeout, 30.0),
+                        connect=max(read_timeout, 30.0),
+                        read=read_timeout,
+                        write=max(read_timeout, 30.0),
+                        pool=max(read_timeout, 30.0),
                     ),
                 )
                 response.raise_for_status()
@@ -146,7 +160,7 @@ class OllamaModelRouter:
                     str(exc)[:100],
                 )
 
-            if not candidate_context or candidate_context == short_context:
+            if not allow_context_retry or not candidate_context or candidate_context == short_context:
                 break
 
         if last_error is not None:

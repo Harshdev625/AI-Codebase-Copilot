@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.admin import router as admin_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.chat import router as chat_router
+from app.api.v1.change_sets import router as change_sets_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.repositories import router as repositories_router
 from app.api.v1.webhooks import router as webhooks_router
@@ -285,6 +286,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router, prefix="/v1")
     app.include_router(dashboard_router, prefix="/v1")
     app.include_router(chat_router, prefix="/v1/chat")
+    app.include_router(change_sets_router, prefix="/v1/change-sets")
     app.include_router(repositories_router, prefix="/v1")
     app.include_router(webhooks_router, prefix="/v1")
     return app

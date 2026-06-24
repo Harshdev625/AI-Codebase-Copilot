@@ -252,7 +252,8 @@ export function PatchDiffViewer({
               createPatchMutation.isPending ||
               validatePatchMutation.isPending ||
               applyMutation.isPending ||
-              status === 'APPLIED'
+              status === 'APPLIED' ||
+              status !== 'APPROVED'
             }
             className="h-8 gap-1 bg-destructive text-xs font-bold shadow-glow-sm hover:bg-destructive/90"
           >

@@ -37,11 +37,18 @@ def _apply_additive_migrations(connection) -> None:
                 "ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL"
             )
         )
+        connection.execute(
+            text(
+                "ALTER TABLE change_sets "
+                "ADD COLUMN IF NOT EXISTS plan_file_path VARCHAR NULL"
+            )
+        )
     elif dialect == "sqlite":
         # SQLite lacks IF NOT EXISTS for columns; ignore if already present.
         for stmt in (
             "ALTER TABLE chat_sessions ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT 0",
             "ALTER TABLE chat_sessions ADD COLUMN deleted_at TEXT NULL",
+            "ALTER TABLE change_sets ADD COLUMN plan_file_path VARCHAR NULL",
         ):
             try:
                 connection.execute(text(stmt))

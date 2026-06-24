@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     ollama_chat_model: str = "tinyllama:latest"
     ollama_timeout_seconds: float = 600.0
     ollama_chat_timeout_seconds: float = 15.0
+    ollama_plan_timeout_seconds: float = 240.0
+    ollama_act_timeout_seconds: float = 600.0
     ollama_embedding_timeout_seconds: float = 600.0
 
     qdrant_host: str = "localhost"

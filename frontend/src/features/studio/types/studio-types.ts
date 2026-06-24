@@ -28,6 +28,7 @@ export interface EditorTab {
 /** Activity bar sidebar views. */
 export type PrimarySidebar =
   | "sessions"
+  | "plan"
   | "explorer"
   | "search"
   | "snapshots"
@@ -37,6 +38,11 @@ export type PrimarySidebar =
 export type MobileStudioTab = "editor" | "files" | "ai";
 
 export type StudioDensity = "comfortable" | "compact";
+
+export type WorkbenchCenter = "chat" | "editor";
+
+/** Active tab in the center plan workbench. */
+export type PlanCenterTab = "overview" | "steps" | "document";
 
 export const WELCOME_TAB_ID = "welcome";
 

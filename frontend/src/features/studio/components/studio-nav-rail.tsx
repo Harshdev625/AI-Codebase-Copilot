@@ -21,16 +21,18 @@ const navItems: {
   { id: "sessions", icon: MessageSquare, label: "Chat & Sessions" },
   { id: "explorer", icon: Files, label: "Explorer" },
   { id: "search", icon: Search, label: "Search" },
-  { id: "snapshots", icon: Camera, label: "Snapshots" },
-  { id: "patches", icon: GitPullRequestDraft, label: "Patches" },
-  { id: "tasks", icon: ListTodo, label: "Tasks" },
+  { id: "snapshots", icon: Camera, label: "Index snapshots" },
+  { id: "patches", icon: GitPullRequestDraft, label: "Code patches" },
+  { id: "tasks", icon: ListTodo, label: "Plan tasks" },
 ];
 
 export function StudioNavRail() {
-  const { primarySidebar, focusSidebar } = useStudioStore();
+  const { primarySidebar, focusSidebar, activeChangeSetId } = useStudioStore();
 
   const renderItem = (item: (typeof navItems)[number]) => {
     const active = primarySidebar === item.id;
+    const showPlanDot =
+      Boolean(activeChangeSetId) && item.id === "tasks" && primarySidebar !== "tasks";
     return (
       <button
         key={item.id}
@@ -47,6 +49,9 @@ export function StudioNavRail() {
       >
         {active && (
           <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-r-full bg-[#58A6FF] xl:h-6" />
+        )}
+        {showPlanDot && (
+          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-violet-400 ring-2 ring-[#0F1117]" />
         )}
         <item.icon className="h-[18px] w-[18px] xl:h-5 xl:w-5" />
         <span className="pointer-events-none absolute left-full ml-2 hidden rounded bg-[#1A1C23] px-2 py-1 text-[10px] font-medium text-[#C9D1D9] opacity-0 shadow-lg transition-opacity group-hover:opacity-100 lg:block">

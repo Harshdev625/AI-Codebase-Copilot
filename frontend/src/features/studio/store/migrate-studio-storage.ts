@@ -13,8 +13,9 @@
  *   patch_id=     → open patch tab
  */
 
-import type { EditorTab, MarkdownViewMode, MobileStudioTab, PrimarySidebar } from "../types/studio-types";
+import type { EditorTab, MarkdownViewMode, MobileStudioTab, PrimarySidebar, WorkbenchCenter } from "../types/studio-types";
 import { WELCOME_TAB_ID } from "../types/studio-types";
+import { isChatWorkflowPanel } from "../utils/studio-layout";
 
 export const STUDIO_STORAGE_V2_KEY = "studio-storage-v2";
 
@@ -47,6 +48,7 @@ export interface StudioPersistV2 {
   density: "comfortable" | "compact";
   mobileTab: MobileStudioTab;
   contextPanelOpen: boolean;
+  workbenchCenter: WorkbenchCenter;
 }
 
 const VALID_SIDEBARS: PrimarySidebar[] = [
@@ -59,6 +61,7 @@ const VALID_SIDEBARS: PrimarySidebar[] = [
 ];
 
 function normalizeSidebar(raw?: string): PrimarySidebar {
+  if (raw === "plan") return "tasks";
   if (raw && VALID_SIDEBARS.includes(raw as PrimarySidebar)) {
     return raw as PrimarySidebar;
   }
@@ -107,6 +110,7 @@ export function createDefaultPersistV2(): StudioPersistV2 {
     density: "comfortable",
     mobileTab: "files",
     contextPanelOpen: true,
+    workbenchCenter: "editor",
   };
 }
 
@@ -145,6 +149,9 @@ export function parsePersistV2(raw: string | null): StudioPersistV2 | null {
         ...createDefaultPersistV2(),
         ...state,
         mobileTab: state.mobileTab ?? "files",
+        workbenchCenter:
+          state.workbenchCenter ??
+          (isChatWorkflowPanel(state.primarySidebar ?? "explorer") ? "chat" : "editor"),
       } as StudioPersistV2;
       return migrateExplorerFirstIfIdle(v2);
     }

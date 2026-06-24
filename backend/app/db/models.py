@@ -412,6 +412,48 @@ class Message(Base):
 
 
 # ---------------------------------------------------------------------------
+# Change Sets (Plan → Act workflow)
+# ---------------------------------------------------------------------------
+
+class ChangeSet(Base):
+    __tablename__ = "change_sets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chat_session_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False, default="PLANNING")
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSONBType(), nullable=False, default=dict)
+    plan_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    patch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("act_patch_drafts.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    repository: Mapped["Repository"] = relationship("Repository")
+    chat_session: Mapped["ChatSession"] = relationship("ChatSession")
+    patch: Mapped["ActPatchDraft | None"] = relationship("ActPatchDraft", foreign_keys=[patch_id])
+
+
+# ---------------------------------------------------------------------------
 # Agent Runs
 # ---------------------------------------------------------------------------
 

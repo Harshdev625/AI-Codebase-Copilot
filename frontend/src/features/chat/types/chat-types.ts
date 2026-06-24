@@ -126,6 +126,13 @@ export type ChatStreamDone = {
   trace?: unknown;
   usage?: TokenUsage;
   session_usage?: SessionUsageTotals;
+  change_set?: import("@/features/change-sets/types/change-set-types").ChangeSet;
+};
+
+export type ChatStreamPlanError = {
+  type: "plan_error";
+  error: string;
+  detail?: string;
 };
 
 export type TokenUsage = {
@@ -151,6 +158,15 @@ export type ChatStreamError = { type: "error"; error: string };
 export type ChatStreamAnswer = { type: "answer"; text: string };
 export type ChatStreamPatch = { type: "patch"; diff: string };
 
+export type ChatStreamPlanReady = {
+  type: "plan_ready";
+  change_set_id: string;
+  plan_version: number;
+  plan: import("@/features/change-sets/types/change-set-types").PlanJson;
+  status: string;
+  plan_file_path?: string | null;
+};
+
 export type ChatStreamEvent = 
   | ChatStreamStart 
   | ChatStreamChunk 
@@ -161,4 +177,6 @@ export type ChatStreamEvent =
   | ChatStreamProgress
   | ChatStreamError
   | ChatStreamAnswer
-  | ChatStreamPatch;
+  | ChatStreamPatch
+  | ChatStreamPlanReady
+  | ChatStreamPlanError;

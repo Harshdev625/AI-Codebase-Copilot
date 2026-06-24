@@ -36,6 +36,7 @@ from app.api.v1.chat_stream_helpers import (
     source_events,
 )
 from app.services.query_service import QueryService
+from app.services.change_set_service import ChangeSetService
 from app.core.exceptions import ExternalServiceError, LLMRequestError, NoContextError
 from app.llm.prompt_builder import BASE_SYSTEM_PROMPT
 from app.llm.token_usage import extract_ollama_usage
@@ -96,6 +97,70 @@ def _session_usage_totals(service: QueryService, session_id: str | None) -> dict
     return meta.get("usage_totals")
 
 
+def _workflow_mode(mode) -> str:
+    if mode is None:
+        return "ASK"
+    if hasattr(mode, "value"):
+        return str(mode.value).upper()
+    return str(mode).upper()
+
+
+def _try_persist_plan(
+    session: Session,
+    *,
+    mode,
+    repository_id: str | None,
+    chat_session_id: str | None,
+    user_id: str,
+    answer_text: str,
+    query: str = "",
+) -> tuple[list[dict], dict | None]:
+    """Persist PLAN-mode output; return SSE payloads and optional change_set summary."""
+    if _workflow_mode(mode) != "PLAN":
+        return [], None
+    if not chat_session_id or not repository_id:
+        return [], None
+    try:
+        from app.services.change_set_service import ChangeSetService
+        from app.services.plan_parser import parse_plan_from_text
+
+        plan_json, plan_md = parse_plan_from_text(answer_text)
+        cs_service = ChangeSetService(session)
+        cs_row = cs_service.create_or_update_plan(
+            repository_id=repository_id,
+            chat_session_id=chat_session_id,
+            user_id=user_id,
+            plan_json=plan_json,
+            plan_markdown=plan_md or answer_text,
+            query=query,
+        )
+        summary = cs_service.to_response(cs_row)
+        events = [
+            {
+                "type": "plan_ready",
+                "change_set_id": cs_row.id,
+                "plan_version": cs_row.plan_version,
+                "plan": cs_row.plan_json,
+                "status": cs_row.status,
+                "plan_file_path": cs_row.plan_file_path,
+                "plan_task_files": summary.get("plan_task_files") or [],
+            }
+        ]
+        return events, summary
+    except Exception as exc:
+        logger.exception("chat_stream - failed to persist plan")
+        return [
+            {
+                "type": "plan_error",
+                "error": (
+                    "Failed to save the plan for review. "
+                    "Restart the backend so the database schema includes change_sets."
+                ),
+                "detail": str(exc),
+            }
+        ], None
+
+
 def _done_payload(
     *,
     intent: str,
@@ -104,8 +169,9 @@ def _done_payload(
     run_trace,
     service: QueryService,
     session_id: str | None,
+    change_set: dict | None = None,
 ) -> dict:
-    return {
+    payload = {
         "type": "done",
         "intent": intent,
         "sources": sources,
@@ -114,6 +180,9 @@ def _done_payload(
         "usage": (result.get("stats") or {}).get("usage"),
         "session_usage": _session_usage_totals(service, session_id),
     }
+    if change_set:
+        payload["change_set"] = change_set
+    return payload
 
 
 def _statuses_from_trace(run_trace: list) -> list[str]:
@@ -437,6 +506,13 @@ async def chat_stream(
         req.session_id, str(current_user["id"]), active_repository_id
     )
 
+    cs_service = ChangeSetService(session)
+    stream_query = (
+        cs_service.build_plan_followup_query(active_session_id, str(current_user["id"]), req.query)
+        if _workflow_mode(req.mode) == "PLAN"
+        else req.query
+    )
+
     result: dict | None = None
     assembled_context = ""
     cache_key = ""
@@ -475,7 +551,7 @@ async def chat_stream(
                 async for pipeline_event in service.stream_generation_pipeline(
                     active_repository_id,
                     active_repo_id,
-                    req.query,
+                    stream_query,
                     user_id=str(current_user["id"]),
                     session_id=active_session_id,
                     federated=False,
@@ -561,15 +637,29 @@ async def chat_stream(
                         display_query=req.display_query,
                         scope_paths=req.scope_paths,
                     )
-                    yield _event_success({"type": "chunk", "delta": str(result.get("answer", ""))})
+                    cached_answer = str(result.get("answer", ""))
+                    yield _event_success({"type": "chunk", "delta": cached_answer})
+                    plan_events, change_set = _try_persist_plan(
+                        session,
+                        mode=req.mode,
+                        repository_id=active_repository_id,
+                        chat_session_id=active_session_id,
+                        user_id=str(current_user["id"]),
+                        answer_text=cached_answer,
+                        query=req.query,
+                    )
+                    for plan_event in plan_events:
+                        yield _event_success(plan_event)
                     yield _event_success(
-                        {
-                            "type": "done",
-                            "intent": intent,
-                            "sources": sources,
-                            "proposal": result.get("patch_proposal"),
-                            "trace": result.get("run_trace", []),
-                        }
+                        _done_payload(
+                            intent=intent,
+                            sources=sources,
+                            result=result,
+                            run_trace=result.get("run_trace", []),
+                            service=service,
+                            session_id=active_session_id,
+                            change_set=change_set,
+                        )
                     )
                     return
                 except Exception as exc:
@@ -580,14 +670,27 @@ async def chat_stream(
             if deterministic_answer is not None:
                 try:
                     yield _event_success({"type": "chunk", "delta": deterministic_answer})
+                    plan_events, change_set = _try_persist_plan(
+                        session,
+                        mode=req.mode,
+                        repository_id=active_repository_id,
+                        chat_session_id=active_session_id,
+                        user_id=str(current_user["id"]),
+                        answer_text=deterministic_answer,
+                        query=req.query,
+                    )
+                    for plan_event in plan_events:
+                        yield _event_success(plan_event)
                     yield _event_success(
-                        {
-                            "type": "done",
-                            "intent": intent,
-                            "sources": sources,
-                            "proposal": result.get("patch_proposal"),
-                            "trace": result.get("run_trace", []),
-                        }
+                        _done_payload(
+                            intent=intent,
+                            sources=sources,
+                            result=result,
+                            run_trace=result.get("run_trace", []),
+                            service=service,
+                            session_id=active_session_id,
+                            change_set=change_set,
+                        )
                     )
                     return
                 except Exception as exc:
@@ -597,7 +700,8 @@ async def chat_stream(
 
             if result.get("patch_proposal"):
                 try:
-                    yield _event_success({"type": "chunk", "delta": str(result.get("answer", "Patch proposal ready."))})
+                    proposal_answer = str(result.get("answer", "Patch proposal ready."))
+                    yield _event_success({"type": "chunk", "delta": proposal_answer})
                     result["query"] = req.query
                     await service.finalize_result(
                         active_repository_id,
@@ -610,14 +714,27 @@ async def chat_stream(
                         display_query=req.display_query,
                         scope_paths=req.scope_paths,
                     )
+                    plan_events, change_set = _try_persist_plan(
+                        session,
+                        mode=req.mode,
+                        repository_id=active_repository_id,
+                        chat_session_id=active_session_id,
+                        user_id=str(current_user["id"]),
+                        answer_text=proposal_answer,
+                        query=req.query,
+                    )
+                    for plan_event in plan_events:
+                        yield _event_success(plan_event)
                     yield _event_success(
-                        {
-                            "type": "done",
-                            "intent": intent,
-                            "sources": sources,
-                            "proposal": result.get("patch_proposal"),
-                            "trace": result.get("run_trace", []),
-                        }
+                        _done_payload(
+                            intent=intent,
+                            sources=sources,
+                            result=result,
+                            run_trace=result.get("run_trace", []),
+                            service=service,
+                            session_id=active_session_id,
+                            change_set=change_set,
+                        )
                     )
                     return
                 except Exception as exc:
@@ -633,9 +750,10 @@ async def chat_stream(
 
             async def _fallback_non_stream() -> str:
                 llm_answer, usage = await service._get_llm_answer_with_timeout(
-                    req.query,
+                    stream_query,
                     assembled_context,
                     mode="single",
+                    chat_mode=req.mode,
                 )
                 result["stats"] = {"usage": usage}
                 if _is_unacceptable_answer(llm_answer):
@@ -735,7 +853,7 @@ async def chat_stream(
                 final_answer = _INSUFFICIENT_CONTEXT_ANSWER
                 generated_parts = [final_answer]
 
-            chat_mode = str(req.mode or "ASK").upper()
+            chat_mode = _workflow_mode(req.mode)
             if chat_mode == "ACT":
                 patch_text = service.extract_patch_from_text(final_answer)
                 if patch_text:
@@ -773,6 +891,18 @@ async def chat_stream(
                 logger.exception("chat_stream - error finalizing result")
                 pass
 
+            plan_events, change_set = _try_persist_plan(
+                session,
+                mode=req.mode,
+                repository_id=active_repository_id,
+                chat_session_id=active_session_id,
+                user_id=str(current_user["id"]),
+                answer_text=final_answer,
+                query=req.query,
+            )
+            for plan_event in plan_events:
+                yield _event_success(plan_event)
+
             yield _event_success(
                 _done_payload(
                     intent=intent,
@@ -781,6 +911,7 @@ async def chat_stream(
                     run_trace=run_trace,
                     service=service,
                     session_id=active_session_id,
+                    change_set=change_set,
                 )
                 | ({"proposal": result.get("patch_proposal")} if result.get("patch_proposal") else {})
             )

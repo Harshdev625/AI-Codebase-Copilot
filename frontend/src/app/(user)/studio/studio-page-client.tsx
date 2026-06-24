@@ -25,7 +25,8 @@ export function StudioPageClient(): React.JSX.Element {
   useStudioUrlSync();
 
   React.useEffect(() => {
-    const panel = searchParams.get("panel") as PrimarySidebar | null;
+    const panelRaw = searchParams.get("panel");
+    const panel = (panelRaw === "plan" ? "tasks" : panelRaw) as PrimarySidebar | null;
     const file = searchParams.get("file");
     const patchId = searchParams.get("patch_id");
 

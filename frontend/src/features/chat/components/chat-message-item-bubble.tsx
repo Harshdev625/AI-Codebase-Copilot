@@ -11,11 +11,13 @@ import { CodeBlock } from '@/components/ui/code-block';
 import { PatchDiffViewer } from './patch-diff-viewer';
 import type { Source } from '@/features/chat/types/chat-types';
 import { getDisplayContent, normalizeRepoPath, normalizeSourcesFromMetadata } from '@/features/chat/utils/chat-message-utils';
+import { stripPlanJsonBlock, extractPlanSummaryFromContent, messageLooksLikePlan } from '@/features/change-sets/utils/plan-display-utils';
 import { formatChatTimestamp } from '@/features/chat/utils/chat-timestamp-utils';
 import { formatTokenCount, getMessageUsage } from '@/features/chat/utils/token-usage-utils';
 import { FileIcon } from '@/features/studio/components/file-icon';
 import { useStudioStore } from '@/features/studio/store/studio-store';
-import { LiveThinkingStrip } from './live-thinking-strip';
+import { LiveThinkingStrip } from "./live-thinking-strip";
+import { PlanMessageCard } from "./plan-message-card";
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
@@ -121,6 +123,17 @@ export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp 
   const repositoryId = repositoryIdProp || selectedRepositoryId || '';
   const timestamp = message.created_at ? formatChatTimestamp(message.created_at) : 'Just now';
   const isStreaming = Boolean(metadata.isStreaming);
+  const hasPlanMeta = isAssistant && Boolean(metadata.change_set_id) && !isStreaming;
+  const hasPlanContent = isAssistant && !isStreaming && messageLooksLikePlan(message.content ?? "");
+  const hasPlan = hasPlanMeta || hasPlanContent;
+  const renderedContent = hasPlan ? stripPlanJsonBlock(displayContent) : displayContent;
+  const planSummary =
+    (typeof metadata.plan_summary === "string" ? metadata.plan_summary : null) ||
+    extractPlanSummaryFromContent(message.content ?? "");
+  const planStepCount =
+    typeof metadata.plan_step_count === "number"
+      ? metadata.plan_step_count
+      : undefined;
 
   const sortedSources = React.useMemo(() => {
     return [...normalSources].sort((a, b) => {
@@ -178,30 +191,41 @@ export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp 
             <LiveThinkingStrip metadata={metadata} sources={sortedSources as Source[]} />
           )}
 
+          {hasPlan && (
+            <PlanMessageCard
+              summary={planSummary}
+              planVersion={metadata.plan_version as number | undefined}
+              stepCount={planStepCount}
+              status={metadata.plan_status as string | undefined}
+            />
+          )}
+
           <div className="min-w-0 overflow-x-hidden text-[14px] leading-relaxed">
             {isAssistant ? (
               <div className={PROSE_CLASSES}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    code({ className, children, ...props }) {
-                      const match = /language-(\w+)/.exec(className || '');
-                      if (!match) {
-                        return <code className={className} {...props}>{children}</code>;
-                      }
-                      return (
-                        <div className="my-3 min-w-0 max-w-full overflow-x-auto">
-                          <CodeBlock
-                            code={String(children).replace(/\n$/, '')}
-                            language={match[1]}
-                          />
-                        </div>
-                      );
-                    },
-                  }}
-                >
-                  {displayContent}
-                </ReactMarkdown>
+                {!hasPlan && renderedContent ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        if (!match) {
+                          return <code className={className} {...props}>{children}</code>;
+                        }
+                        return (
+                          <div className="my-3 min-w-0 max-w-full overflow-x-auto">
+                            <CodeBlock
+                              code={String(children).replace(/\n$/, '')}
+                              language={match[1]}
+                            />
+                          </div>
+                        );
+                      },
+                    }}
+                  >
+                    {renderedContent}
+                  </ReactMarkdown>
+                ) : null}
                 {patchProposal?.proposal && repositoryId && (
                   <div className="min-w-0 max-w-full overflow-x-auto">
                     <PatchDiffViewer

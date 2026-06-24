@@ -12,6 +12,7 @@ import {
   parsePersistV2,
   STUDIO_STORAGE_V2_KEY,
 } from "./migrate-studio-storage";
+import { isChatWorkflowPanel } from "../utils/studio-layout";
 import type {
   EditorSearchHighlight,
   EditorTab,
@@ -19,6 +20,8 @@ import type {
   MobileStudioTab,
   PrimarySidebar,
   StudioDensity,
+  WorkbenchCenter,
+  PlanCenterTab,
 } from "../types/studio-types";
 import { MAX_EDITOR_TABS, WELCOME_TAB_ID } from "../types/studio-types";
 
@@ -31,6 +34,18 @@ export interface StudioStoreState {
   setActivePatchId: (id: string | null) => void;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
+
+  activeChangeSetId: string | null;
+  setActiveChangeSetId: (id: string | null) => void;
+
+  /** Center plan workbench tab + highlighted step (sidebar selects, center renders). */
+  planCenterTab: PlanCenterTab;
+  selectedPlanTaskId: string | null;
+  setPlanCenterView: (tab: PlanCenterTab, taskId?: string | null) => void;
+
+  /** Main area: chat (plan workflow) or editor (files/patches). */
+  workbenchCenter: WorkbenchCenter;
+  setWorkbenchCenter: (center: WorkbenchCenter) => void;
 
   searchQuery: string;
   setSearchQuery: (query: string) => void;
@@ -162,6 +177,17 @@ const studioStoreBase = create<StudioStoreState>()(
       activeSessionId: defaults.activeSessionId,
       setActiveSessionId: (id) => set({ activeSessionId: id }),
 
+      activeChangeSetId: null,
+      setActiveChangeSetId: (id) => set({ activeChangeSetId: id }),
+
+      planCenterTab: "overview",
+      selectedPlanTaskId: null,
+      setPlanCenterView: (tab, taskId = null) =>
+        set({ planCenterTab: tab, selectedPlanTaskId: taskId ?? null }),
+
+      workbenchCenter: defaults.workbenchCenter,
+      setWorkbenchCenter: (center) => set({ workbenchCenter: center }),
+
       searchQuery: "",
       setSearchQuery: (query) => set({ searchQuery: query }),
       searchResults: [],
@@ -188,12 +214,32 @@ const studioStoreBase = create<StudioStoreState>()(
           primarySidebar: panel,
           sidebarCollapsed: false,
           aiPanelOpen: panel === "sessions",
+          workbenchCenter: isChatWorkflowPanel(panel) ? "chat" : "editor",
         }),
       focusSidebar: (panel) => {
+        const prev = get().primarySidebar;
+        // #region agent log
+        fetch("http://127.0.0.1:7863/ingest/e55e1c64-8993-4a79-98e7-53d0e4bd1d58", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "16bbe5" },
+          body: JSON.stringify({
+            sessionId: "16bbe5",
+            hypothesisId: "H1",
+            location: "studio-store.ts:focusSidebar",
+            message: "sidebar focus",
+            data: { panel, prev, workbenchCenter: panel === "sessions" ? "chat" : panel === "tasks" ? "plan" : "editor" },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         set({
           primarySidebar: panel,
           sidebarCollapsed: false,
           aiPanelOpen: panel === "sessions",
+          workbenchCenter: isChatWorkflowPanel(panel) ? "chat" : "editor",
+          ...(panel === "tasks" && prev !== "tasks"
+            ? { planCenterTab: "overview" as PlanCenterTab, selectedPlanTaskId: null }
+            : {}),
         });
       },
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
@@ -203,7 +249,12 @@ const studioStoreBase = create<StudioStoreState>()(
       setAiPanelOpen: (open) => {
         set(
           open
-            ? { aiPanelOpen: true, primarySidebar: "sessions", sidebarCollapsed: false }
+            ? {
+                aiPanelOpen: true,
+                primarySidebar: "sessions",
+                sidebarCollapsed: false,
+                workbenchCenter: "chat",
+              }
             : { aiPanelOpen: false },
         );
       },
@@ -212,7 +263,12 @@ const studioStoreBase = create<StudioStoreState>()(
         if (s.primarySidebar === "sessions" && !s.sidebarCollapsed) {
           set({ sidebarCollapsed: true });
         } else {
-          set({ aiPanelOpen: true, primarySidebar: "sessions", sidebarCollapsed: false });
+          set({
+            aiPanelOpen: true,
+            primarySidebar: "sessions",
+            sidebarCollapsed: false,
+            workbenchCenter: "chat",
+          });
         }
       },
       setSettingsOpen: (open) => set({ settingsOpen: open }),
@@ -292,6 +348,7 @@ const studioStoreBase = create<StudioStoreState>()(
             activeFileInitialLine: initialLine,
             activeFileCommitSha: commitSha,
             activePatchId: null,
+            workbenchCenter: "editor",
           };
         });
       },
@@ -316,6 +373,7 @@ const studioStoreBase = create<StudioStoreState>()(
             activeFilePath: null,
             activeFileInitialLine: undefined,
             activeFileCommitSha: undefined,
+            workbenchCenter: "editor",
           };
         });
       },
@@ -416,6 +474,7 @@ const studioStoreBase = create<StudioStoreState>()(
         editorWordWrap: state.editorWordWrap,
         editorMinimap: state.editorMinimap,
         defaultMarkdownView: state.defaultMarkdownView,
+        workbenchCenter: state.workbenchCenter,
       }),
       merge: (persisted, current) => {
         const parsed = parsePersistV2(
@@ -431,7 +490,8 @@ const studioStoreBase = create<StudioStoreState>()(
           activeSessionId: migrated.activeSessionId,
           activePatchId: migrated.activePatchId,
           selectedSnapshotId: migrated.selectedSnapshotId ?? null,
-          primarySidebar: migrated.primarySidebar ?? "explorer",
+          primarySidebar:
+            migrated.primarySidebar === "plan" ? "tasks" : migrated.primarySidebar ?? "explorer",
           aiPanelOpen: migrated.aiPanelOpen ?? false,
           sidebarCollapsed: migrated.sidebarCollapsed ?? false,
           contextPanelOpen: migrated.contextPanelOpen ?? true,

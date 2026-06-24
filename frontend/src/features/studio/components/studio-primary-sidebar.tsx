@@ -6,7 +6,6 @@ import { PanelLeftClose } from "lucide-react";
 import type { ChatSession } from "@/features/chat/types/chat-types";
 import type { Repository } from "@/features/repositories/types/repository-types";
 import { Button } from "@/components/ui/button";
-import { BackgroundTasksPanel } from "@/features/studio/panels/background-tasks-panel";
 import { PatchListPanel } from "@/features/studio/panels/patch-list-panel";
 import { SearchPanel } from "@/features/studio/panels/search-panel";
 import { SnapshotTimeline } from "@/features/repositories/components/snapshot-timeline";
@@ -19,7 +18,6 @@ const PANEL_TITLES: Record<string, string> = {
   search: "SEARCH",
   snapshots: "SNAPSHOTS",
   patches: "PATCHES",
-  tasks: "BACKGROUND TASKS",
 };
 
 interface StudioPrimarySidebarProps {
@@ -68,8 +66,6 @@ export function StudioPrimarySidebar({
         );
       case "patches":
         return <PatchListPanel onPatchClick={(patchId) => openPatchTab(patchId)} />;
-      case "tasks":
-        return <BackgroundTasksPanel />;
       default:
         return null;
     }

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Iterable
 
 from app.core.config import settings
 
@@ -150,3 +152,67 @@ def read_repository_file(
         if res.returncode == 0:
             return res.stdout
     return read_workspace_file_bytes(cache_path, relative_path)
+
+
+def find_workspace_files_by_basename(workspace: Path, basename: str, *, max_matches: int = 2) -> list[str]:
+    """Find repo-relative paths whose final segment matches basename (case-insensitive)."""
+    if not workspace.exists() or not basename or ".." in basename.split("/"):
+        return []
+    target = basename.replace("\\", "/").split("/")[-1].lower()
+    if not target:
+        return []
+    matches: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        dirnames[:] = [d for d in dirnames if d not in {".git", "node_modules", "__pycache__"}]
+        for filename in filenames:
+            if filename.lower() != target:
+                continue
+            rel = Path(dirpath, filename).relative_to(workspace).as_posix()
+            if rel and ".." not in rel.split("/"):
+                matches.append(rel)
+                if len(matches) >= max_matches:
+                    return matches
+    return matches
+
+
+def resolve_act_file_paths(
+    raw_paths: Iterable[str],
+    workspace: Path | None,
+    *,
+    local_path: str | None = None,
+) -> list[str]:
+    """Normalize plan file hints to existing repo-relative paths."""
+    resolved: list[str] = []
+    seen: set[str] = set()
+    roots: list[Path] = []
+    for candidate in (workspace, Path(local_path) if local_path else None):
+        if candidate is None:
+            continue
+        try:
+            root = candidate.resolve()
+            if root.exists():
+                roots.append(root)
+        except OSError:
+            continue
+
+    for raw in raw_paths:
+        hint = str(raw or "").strip()
+        if not hint:
+            continue
+        norm = normalize_repository_file_path(hint, workspace=workspace, local_path=local_path)
+        chosen: str | None = None
+        for root in roots:
+            if norm and (root / norm.replace("\\", "/")).is_file():
+                chosen = norm.replace("\\", "/").lstrip("/")
+                break
+        if not chosen and roots:
+            basename = hint.replace("\\", "/").split("/")[-1]
+            for root in roots:
+                found = find_workspace_files_by_basename(root, basename, max_matches=1)
+                if found:
+                    chosen = found[0]
+                    break
+        if chosen and chosen not in seen:
+            seen.add(chosen)
+            resolved.append(chosen)
+    return resolved

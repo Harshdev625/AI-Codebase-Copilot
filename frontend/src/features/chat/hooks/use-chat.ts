@@ -16,6 +16,8 @@ import {
 } from "@/features/chat/utils/trace-utils";
 import { useStudioStore } from "@/features/studio/store/studio-store";
 import { useStudioWorkbenchSessionOptional } from "@/features/studio/context/studio-workbench-context";
+import { changeSetKeys } from "@/features/change-sets/hooks/use-change-sets";
+import { planSavedMessage } from "@/features/change-sets/utils/plan-display-utils";
 
 export const chatKeys = {
   sessions: (repositoryId?: string) => ["chat", "sessions", repositoryId] as const,
@@ -202,6 +204,8 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
   const workbench = useStudioWorkbenchSessionOptional();
   const storeSessionId = useStudioStore((s) => s.activeSessionId);
   const setStoreSessionId = useStudioStore((s) => s.setActiveSessionId);
+  const setActiveChangeSetId = useStudioStore((s) => s.setActiveChangeSetId);
+  const openFileTab = useStudioStore((s) => s.openFileTab);
   const currentSessionId = workbench?.activeSessionId ?? storeSessionId;
   const setCurrentSessionId = workbench?.setActiveSessionId ?? setStoreSessionId;
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
@@ -468,7 +472,41 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                 metadata.patches = [...patches, event.diff];
                 return metadata;
               });
+            } else if (event.type === "plan_ready") {
+              setActiveChangeSetId(event.change_set_id);
+              void queryClient.invalidateQueries({
+                queryKey: ["change-sets", "session", localSessionId ?? ""],
+              });
+              updateAssistant(
+                (metadata) => {
+                  metadata.change_set_id = event.change_set_id;
+                  metadata.plan_version = event.plan_version;
+                  metadata.plan_status = event.status;
+                  if (event.plan_file_path) metadata.plan_file_path = event.plan_file_path;
+                  const summary = event.plan?.summary?.trim();
+                  if (summary) metadata.plan_summary = summary;
+                  const stepCount = event.plan?.steps?.length;
+                  if (stepCount != null) metadata.plan_step_count = stepCount;
+                  return metadata;
+                },
+                () => planSavedMessage(event.plan_file_path),
+              );
+            } else if (event.type === "plan_error") {
+              updateAssistant((metadata) => {
+                metadata.plan_error = event.error;
+                return metadata;
+              });
             } else if (event.type === "done") {
+              if (event.change_set?.id) {
+                setActiveChangeSetId(event.change_set.id);
+                void queryClient.invalidateQueries({
+                  queryKey: changeSetKeys.session(localSessionId ?? ""),
+                });
+              } else if (mode === "PLAN" && localSessionId) {
+                void queryClient.invalidateQueries({
+                  queryKey: changeSetKeys.session(localSessionId),
+                });
+              }
               setMessages((prev) =>
                 prev.map((msg) => {
                   if (msg.id !== assistantMessageId) return msg;
@@ -485,6 +523,14 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
                     traceSteps: mergedTrace,
                     ...(event.usage ? { usage: event.usage } : {}),
                     ...(event.session_usage ? { session_usage: event.session_usage } : {}),
+                    ...(event.change_set?.id ? { change_set_id: event.change_set.id } : {}),
+                    ...(event.change_set?.status ? { plan_status: event.change_set.status } : {}),
+                    ...(event.change_set?.plan_json?.summary
+                      ? { plan_summary: event.change_set.plan_json.summary }
+                      : {}),
+                    ...(event.change_set?.plan_json?.steps
+                      ? { plan_step_count: event.change_set.plan_json.steps.length }
+                      : {}),
                     isStreaming: false,
                   });
                   return {
@@ -524,7 +570,7 @@ export function useChat({ repositoryId }: { repositoryId?: string } = {}) {
         }
       }
     },
-    [repositoryId, currentSessionId, queryClient, setSessionIdSilent, scheduleHistorySync]
+    [repositoryId, currentSessionId, queryClient, setSessionIdSilent, scheduleHistorySync, setActiveChangeSetId, openFileTab]
   );
 
   return {

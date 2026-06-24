@@ -33,6 +33,21 @@ def test_extract_patch_from_triple_dash() -> None:
     assert patch.startswith("--- a/foo.py")
 
 
+def test_extract_patch_from_generic_fenced_block() -> None:
+    text = """Here:
+```
+--- a/src/style.css
++++ b/src/style.css
+@@ -1,3 +1,3 @@
+-old
++new
+```
+"""
+    patch = QueryService.extract_patch_from_text(text)
+    assert patch is not None
+    assert "style.css" in patch
+
+
 def test_extract_patch_returns_none_for_plain_text() -> None:
     assert QueryService.extract_patch_from_text("no patch here") is None
     assert QueryService.extract_patch_from_text("") is None
