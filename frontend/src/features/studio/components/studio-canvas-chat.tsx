@@ -1,49 +1,74 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Send, StopCircle, Database, GitBranch, Paperclip, Wand2, Mic } from "lucide-react";
+import Link from "next/link";
+import { FilePlus, Loader2, Send, StopCircle } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/shared/toast-provider";
-import {
-  useChat,
-  useChatSessions,
-  useUpdateSessionMutation,
-} from "@/features/chat/hooks/use-chat";
+import type { useChat } from "@/features/chat/hooks/use-chat";
+import { useUpdateSessionMutation } from "@/features/chat/hooks/use-chat";
+import { useSessionScope } from "@/features/chat/hooks/use-session-scope";
+import { useComposerMentions } from "@/features/chat/hooks/use-composer-mentions";
 import { ChatMessageItemBubble } from "@/features/chat/components/chat-message-item-bubble";
 import { ModeSelector } from "@/features/chat/components/mode-selector";
 import { RepositoryContextHeader } from "@/features/chat/components/repository-context-header";
-import { ScopeSelector } from "@/features/chat/components/scope-selector";
+import { ComposerAttachments } from "@/features/chat/components/composer-attachments";
+import { ComposerMentionMenu } from "@/features/chat/components/composer-mention-menu";
+import {
+  extractMentionPaths,
+  mergeUnique,
+  partitionMentionPaths,
+  stripMentionTokens,
+} from "@/features/chat/utils/composer-mention-utils";
 import { cn } from "@/lib/utils";
 import type { Repository } from "@/features/repositories/types/repository-types";
-import { MultiRepositorySelect } from "@/features/chat/components/multi-repository-select";
-import { repositoryService } from "@/features/repositories/services/repository-service";
-import { useStudioStore } from "../store/studio-store";
-import type { ChatMode } from "@/features/chat/types/chat-types";
+import type { ChatMode, ChatSession } from "@/features/chat/types/chat-types";
+import { useChangeSetForSession } from "@/features/change-sets/hooks/use-change-sets";
+import { useStudioStore } from "@/features/studio/store/studio-store";
+
+type StudioChatState = ReturnType<typeof useChat>;
 
 interface StudioCanvasChatProps {
   repositoryId?: string;
   repositories?: Repository[];
   isRepositoriesLoading?: boolean;
+  chat: StudioChatState;
+  sessions: ChatSession[];
+  /** dock = AI panel (full width, compact empty state) */
+  variant?: "canvas" | "dock";
 }
 
-/**
- * Studio canvas chat mode.
- * Phase 1: Extracted chat functionality from ChatWorkspace, adapted for studio store.
- */
+function normalizeSessionMode(raw?: string | null): ChatMode {
+  const upper = (raw ?? "ASK").toUpperCase();
+  if (upper === "PLAN" || upper === "ACT") return upper;
+  return "ASK";
+}
+
+/** Studio chat surface — used in AI dock (V2) or legacy canvas. */
 export function StudioCanvasChat({
   repositoryId,
-  repositories = [],
+  repositories: _repositories = [],
   isRepositoriesLoading = false,
+  chat,
+  sessions,
+  variant = "canvas",
 }: StudioCanvasChatProps) {
   const toast = useToast();
+  const updateSession = useUpdateSessionMutation();
+  const activeFilePath = useStudioStore((s) => s.activeFilePath);
+  const editorTabs = useStudioStore((s) => s.editorTabs);
+  const activeTabId = useStudioStore((s) => s.activeTabId);
+  const focusSidebar = useStudioStore((s) => s.focusSidebar);
+  const setActiveChangeSetId = useStudioStore((s) => s.setActiveChangeSetId);
+
   const [query, setQuery] = React.useState("");
   const [mode, setMode] = React.useState<ChatMode>("ASK");
-  const [scopePaths, setScopePaths] = React.useState<string[]>([]);
-  const [selectedRepoIds, setSelectedRepoIds] = React.useState<string[]>([]);
-  const virtuosoRef = React.useRef<any>(null);
-  const { setActiveSessionId } = useStudioStore();
+  const [caretIndex, setCaretIndex] = React.useState(0);
+  const inputAreaRef = React.useRef<HTMLDivElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [inputHeight, setInputHeight] = React.useState(180);
 
   const {
     messages,
@@ -53,98 +78,199 @@ export function StudioCanvasChat({
     isHistoryLoading,
     historyError,
     currentSessionId,
-  } = useChat({ repositoryId });
+  } = chat;
 
-  const sessionsQuery = useChatSessions(100, 0);
-  const updateSessionMutation = useUpdateSessionMutation();
-  
-  const sessions = React.useMemo(() => sessionsQuery.data?.items ?? [], [sessionsQuery.data?.items]);
+  const {
+    scopePaths,
+    attachedFiles,
+    toggleScopePath,
+    toggleAttachedFile,
+    addMentionPath,
+    updateScopeMetadata,
+  } = useSessionScope(currentSessionId);
+
+  const activeSession = sessions.find((s) => s.id === currentSessionId);
+  const changeSetQuery = useChangeSetForSession(currentSessionId);
+  const activeChangeSet = changeSetQuery.data;
+  const planApproved =
+    activeChangeSet?.status === "PLAN_APPROVED" ||
+    (activeChangeSet?.status === "PATCH_REJECTED" && !activeChangeSet?.patch_id) ||
+    activeChangeSet?.status === "ACTING" ||
+    activeChangeSet?.status === "PATCH_READY" ||
+    activeChangeSet?.status === "VALIDATING" ||
+    activeChangeSet?.status === "PATCH_APPROVED" ||
+    activeChangeSet?.status === "PATCH_REJECTED" ||
+    activeChangeSet?.status === "APPLIED" ||
+    activeChangeSet?.status === "ROLLED_BACK";
+
+  React.useEffect(() => {
+    if (activeSession?.session_mode) {
+      setMode(normalizeSessionMode(activeSession.session_mode));
+    }
+  }, [activeSession?.id, activeSession?.session_mode]);
+
+  React.useEffect(() => {
+    if (!activeChangeSet) return;
+    setActiveChangeSetId(activeChangeSet.id);
+  }, [activeChangeSet?.id, setActiveChangeSetId]);
+
+  const handleModeChange = React.useCallback(
+    (next: ChatMode) => {
+      setMode(next);
+      if (currentSessionId) {
+        updateSession.mutate({
+          sessionId: currentSessionId,
+          payload: { session_mode: next },
+        });
+      }
+    },
+    [currentSessionId, updateSession],
+  );
+
+  React.useEffect(() => {
+    const el = inputAreaRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      setInputHeight(el.offsetHeight);
+    });
+    observer.observe(el);
+    setInputHeight(el.offsetHeight);
+    return () => observer.disconnect();
+  }, []);
+
   const historyErrorMessage =
     historyError instanceof Error ? historyError.message : historyError ? "Unable to load history." : "";
 
-  // Sync scopePaths when session changes
-  React.useEffect(() => {
-    if (currentSessionId) {
-      const session = sessions.find((s: any) => s.id === currentSessionId);
-      if (session && session.metadata?.scope_paths) {
-        setScopePaths(session.metadata.scope_paths);
-      } else {
-        setScopePaths([]);
-      }
-    } else {
-      setScopePaths([]);
-    }
-  }, [currentSessionId, sessions]);
+  const canSend = Boolean(repositoryId) && query.trim().length > 0 && !isSending;
 
-  // Persist scopePaths to session when it changes
-  const handleScopeChange = React.useCallback((newPaths: string[]) => {
-    setScopePaths(newPaths);
-    if (currentSessionId) {
-      updateSessionMutation.mutate({ 
-        sessionId: currentSessionId, 
-        payload: { metadata: { scope_paths: newPaths } } 
+  const {
+    mention,
+    suggestions,
+    isLoading: mentionsLoading,
+    selectSuggestion,
+    moveSelection,
+    dismiss,
+  } = useComposerMentions(query, caretIndex, repositoryId);
+
+  const handleMentionSelect = React.useCallback(
+    (suggestion: { path: string; type: "FILE" | "DIRECTORY" }) => {
+      const { nextText, nextCaret } = selectSuggestion(suggestion);
+      setQuery(nextText);
+      setCaretIndex(nextCaret);
+      addMentionPath(suggestion.path, suggestion.type === "FILE");
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange(nextCaret, nextCaret);
+        }
       });
-    }
-  }, [currentSessionId, updateSessionMutation]);
-
-  const canSend = (Boolean(repositoryId) || selectedRepoIds.length > 0) && query.trim().length > 0 && !isSending;
+    },
+    [selectSuggestion, addMentionPath],
+  );
 
   const handleSend = async () => {
     if (!canSend) return;
+    if (mode === "ACT" && !planApproved) {
+      toast.error("Plan required", "Approve a plan in Plan tasks before using Act mode.");
+      focusSidebar("tasks");
+      return;
+    }
     const trimmed = query.trim();
     setQuery("");
+    setCaretIndex(0);
+
+    const mentionPaths = extractMentionPaths(trimmed);
+    const { scopePaths: mentionScope, attachedFiles: mentionAttached } =
+      partitionMentionPaths(mentionPaths);
+    const finalScopePaths = mergeUnique(scopePaths, mentionScope);
+    const finalAttachedFiles = mergeUnique(attachedFiles, mentionAttached);
+
+    if (mentionPaths.length > 0) {
+      updateScopeMetadata(finalScopePaths, finalAttachedFiles);
+    }
+
+    const displayContent = stripMentionTokens(trimmed) || trimmed;
+
     try {
-      if (selectedRepoIds.length > 0) {
-        toast.info("Retrieving Federated Context", `Querying ${selectedRepoIds.length} repositories...`);
-        const allResults = await Promise.allSettled(
-          selectedRepoIds.map((rid) =>
-            repositoryService.retrieveRepository(rid, { query: trimmed, top_k: 6 })
-          )
-        );
-
-        let formattedContext = "Below is the retrieved cross-repository context for this query:\n\n";
-        let idx = 0;
-        allResults.forEach((result) => {
-          if (result.status === "fulfilled") {
-            result.value.items?.forEach((item) => {
-              idx++;
-              const displayScore = item.rerank_score !== undefined ? item.rerank_score : item.score;
-              formattedContext += `[Source #${idx}] File: ${item.path} (Repository: ${item.repository_id})\n`;
-              formattedContext += `Symbol: ${item.symbol || "unknown"}\n`;
-              formattedContext += `Score: ${(displayScore * 100).toFixed(1)}%\n`;
-              formattedContext += "```\n" + item.content + "\n```\n\n";
-            });
-          }
-        });
-        if (idx === 0) {
-          formattedContext += "(No matching snippets retrieved across repositories)\n\n";
-        }
-
-        const finalQuery = `${formattedContext}\nUser Query: ${trimmed}`;
-        await sendMessage(finalQuery, mode, scopePaths);
-      } else {
-        await sendMessage(trimmed, mode, scopePaths);
-      }
+      await sendMessage(trimmed, mode, finalScopePaths, {
+        displayContent,
+        attachedFiles: finalAttachedFiles.length ? finalAttachedFiles : undefined,
+      });
     } catch (error) {
-      if ((error as any).name !== "AbortError") {
-         const message = error instanceof Error ? error.message : "Unable to send message.";
-         toast.error("Chat Failed", message);
+      if ((error as { name?: string }).name !== "AbortError") {
+        const message = error instanceof Error ? error.message : "Unable to send message.";
+        toast.error("Chat Failed", message);
       }
     }
   };
 
+  const handleAddOpenFile = React.useCallback(() => {
+    const activeTab = editorTabs.find((t) => t.id === activeTabId);
+    const path = activeTab?.kind === "file" ? activeTab.filePath : activeFilePath;
+    if (!path) {
+      toast.info("No file open", "Open a file in the editor to add it to context.");
+      return;
+    }
+    addMentionPath(path, true);
+    textareaRef.current?.focus();
+  }, [editorTabs, activeTabId, activeFilePath, addMentionPath, toast]);
+
+  const handleComposerDrop = React.useCallback(
+    (event: React.DragEvent) => {
+      const path =
+        event.dataTransfer.getData("application/x-studio-path") ||
+        event.dataTransfer.getData("text/plain");
+      if (!path || path.includes("\n")) return;
+      event.preventDefault();
+      addMentionPath(path, path.includes("."));
+    },
+    [addMentionPath],
+  );
+
+  const isDock = variant === "dock";
+
   return (
-    <main className="flex min-h-0 flex-1 flex-col bg-[#0B0D14] relative z-0">
-      <RepositoryContextHeader 
-        repositoryId={repositoryId} 
-        mode={mode} 
-        scopePaths={scopePaths} 
-        sessionTitle={sessions.find((s: any) => s.id === currentSessionId)?.session_title || sessions.find((s: any) => s.id === currentSessionId)?.summary || undefined}
+    <main
+      className={cn(
+        "relative z-0 flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden bg-[#0B0D14]",
+        isDock && "h-full",
+      )}
+      aria-live="polite"
+      aria-label="Chat messages"
+    >
+      <RepositoryContextHeader
+        repositoryId={repositoryId}
+        mode={mode}
+        scopePaths={scopePaths}
+        planStatus={activeChangeSet?.status}
+        planVersion={activeChangeSet?.plan_version}
+        sessionTitle={
+          activeSession?.session_title || activeSession?.summary || undefined
+        }
+        sessionTimestamp={
+          activeSession?.last_activity_at || activeSession?.updated_at || activeSession?.created_at
+        }
       />
-      
-      <div className="min-h-0 flex-1 relative">
+
+      {mode === "PLAN" && activeChangeSet && (
+        <div className="shrink-0 border-b border-violet-500/20 bg-violet-500/5 px-4 py-2 text-xs text-[#C9D1D9]">
+          <span className="font-medium text-violet-300">Plan mode:</span>{" "}
+          Send a follow-up here to change direction (e.g. &quot;focus on dark mode only&quot;). Or use{" "}
+          <button
+            type="button"
+            className="font-medium text-violet-400 hover:underline"
+            onClick={() => focusSidebar("tasks")}
+          >
+            Plan tasks → Request changes
+          </button>{" "}
+          for structured revisions.
+        </div>
+      )}
+
+      <div className="relative min-h-0 min-w-0 flex-1 overflow-x-hidden">
         {currentSessionId && isHistoryLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/50 backdrop-blur-sm z-10">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50 backdrop-blur-sm">
             <div className="flex items-center gap-3 rounded-full border border-border/60 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm">
               <Loader2 className="h-4 w-4 animate-spin" />
               Restoring conversation...
@@ -158,150 +284,211 @@ export function StudioCanvasChat({
           </div>
         )}
 
-        {messages.length === 0 && !isHistoryLoading && (
-          <div className="absolute inset-0 flex justify-center overflow-y-auto custom-scrollbar p-6 md:p-8">
-            <div className="flex flex-col max-w-4xl w-full gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-32 mt-10">
-              <div className="flex flex-col items-center justify-center text-center mt-20">
-                <div className="w-16 h-16 rounded-2xl bg-[#1A1C23] border border-[#2D313E] flex items-center justify-center mb-6 shadow-lg">
-                  <Database className="w-8 h-8 text-[#58A6FF]" />
-                </div>
-                <h2 className="text-2xl font-semibold text-[#E2E8F0] tracking-tight mb-2">How can I help you build today?</h2>
-                <p className="text-[#8B949E] text-[15px] max-w-md">Describe your task, ask a question, or select a mode to get started.</p>
+        {messages.length === 0 && !isHistoryLoading && !isDock && (
+          <div className="pointer-events-none absolute inset-0 flex justify-center overflow-y-auto p-6 md:p-8">
+            <div className="mt-10 flex w-full max-w-4xl flex-col gap-6 pb-8">
+              <div className="mt-20 flex flex-col items-center justify-center text-center">
+                <h2 className="mb-2 text-2xl font-semibold tracking-tight text-[#E2E8F0]">
+                  How can I help you build today?
+                </h2>
+                <p className="max-w-md text-[15px] text-[#8B949E]">
+                  Ask a question, plan a change, or use Act mode to generate patches.
+                  Type <span className="font-mono text-[#58A6FF]">@</span> to reference files.
+                </p>
+                {!repositoryId && !isRepositoriesLoading && (
+                  <Link
+                    href="/dashboard"
+                    className="pointer-events-auto mt-4 text-sm font-medium text-[#58A6FF] hover:underline"
+                  >
+                    Open a repository in Studio →
+                  </Link>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        <div className="absolute inset-0 pt-2 pb-40">
-           <Virtuoso
-              ref={virtuosoRef}
-              data={messages}
-              itemContent={(_, message) => <ChatMessageItemBubble key={message.id} message={message} mode={mode} />}
-              className="h-full w-full custom-scrollbar px-2 md:px-6"
-              alignToBottom
-              followOutput="smooth"
-           />
-           {messages.length > 0 && (
-             <div className="text-center mt-4 mb-32 flex justify-center">
-               <span className="text-[11px] font-medium text-[#3FB950] bg-[#238636]/10 border border-[#238636]/30 px-3 py-1 rounded-full">
-                 Index Status: Synchronized & Healthy
-               </span>
-             </div>
-           )}
+        {messages.length === 0 && !isHistoryLoading && isDock && (
+          <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-[#8B949E]">
+            Start a conversation — type @ to reference files from the explorer.
+          </div>
+        )}
+
+        <div className="h-full w-full min-w-0 overflow-x-hidden">
+          <Virtuoso
+            data={messages}
+            itemContent={(_, message) => (
+              <ChatMessageItemBubble
+                key={message.id}
+                message={message}
+                repositoryId={repositoryId}
+              />
+            )}
+            className={cn(
+              "h-full w-full min-w-0 overflow-x-hidden custom-scrollbar",
+            )}
+            alignToBottom
+            followOutput="smooth"
+            components={{
+              Footer: () => <div style={{ height: Math.max(inputHeight, 120) }} aria-hidden />,
+            }}
+          />
         </div>
       </div>
 
-      {/* Floating Input Area */}
-      <div className="absolute bottom-0 left-0 right-0 pt-12 pb-6 z-20 pointer-events-none px-4 md:px-12 bg-gradient-to-t from-[#0B0D14] via-[#0B0D14]/90 to-transparent">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 relative pointer-events-auto">
-          
-          {/* Status indicators */}
-          <div className="absolute -top-12 left-0 right-0 flex justify-center pointer-events-none">
-            {isSending && (
-              <Button 
-                 size="sm" 
-                 variant="outline" 
-                 onClick={stopGeneration}
-                 className="h-8 rounded-full border-[#2D313E] bg-[#1A1C23] text-xs font-semibold shadow-sm hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/30 text-[#C9D1D9] transition-all"
-              >
-                <StopCircle className="mr-1.5 h-3.5 w-3.5" />
-                Stop generating
-              </Button>
-            )}
+      <div
+        ref={inputAreaRef}
+        className={cn(
+          "shrink-0 min-w-0 border-t border-[#1E212B]/80 bg-[#0B0D14] px-3 pb-3 pt-2",
+          !isDock && "md:px-8",
+        )}
+      >
+        {!repositoryId ? (
+          <div className="mx-auto rounded-xl border border-[#2D313E] bg-[#161822] px-4 py-6 text-center text-sm text-[#8B949E]">
+            Open a repository in Studio to chat.{" "}
+            <Link href="/dashboard" className="text-[#58A6FF] hover:underline">
+              Go to dashboard
+            </Link>
           </div>
-
-          <div className={cn(
-            "relative flex flex-col gap-0 rounded-xl border bg-[#161822] shadow-2xl transition-all overflow-hidden group mx-auto w-full",
-            "border-[#2D313E] focus-within:border-[#3B82F6]/50 focus-within:ring-2 focus-within:ring-[#3B82F6]/10"
-          )}>
-            <div className="flex flex-col gap-2 p-2 pt-3">
-              
-              {/* Top Action Bar (Mode selector, Repo, Branch, Scope) */}
-              <div className="flex items-center gap-2 px-2 pb-2">
-                <ModeSelector mode={mode} onModeChange={setMode} />
-                
-                <div className="flex items-center gap-2 ml-2 flex-wrap">
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#C9D1D9] bg-[#1A1C23] px-2 py-1 rounded-md border border-[#2D313E]">
-                    <Database className="w-3 h-3 text-[#8B949E]" /> {repositories?.find(r => r.id === repositoryId)?.repo_id?.split('/').pop() || "No repo"}
-                  </div>
-                  
-                  <MultiRepositorySelect 
-                    repositories={repositories} 
-                    selectedIds={selectedRepoIds} 
-                    onChange={setSelectedRepoIds} 
-                  />
-
-                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-[#C9D1D9] bg-[#1A1C23] px-2 py-1 rounded-md border border-[#2D313E]">
-                    <GitBranch className="w-3 h-3 text-[#8B949E]" /> main
-                  </div>
-                  
-                  <ScopeSelector scopePaths={scopePaths} onChange={handleScopeChange} />
-                </div>
+        ) : (
+          <div className="relative flex w-full flex-col gap-2">
+            {isSending && (
+              <div className="mb-2 flex justify-center">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={stopGeneration}
+                  className="h-8 rounded-full border-[#2D313E] bg-[#1A1C23] text-xs font-semibold text-[#C9D1D9] shadow-sm transition-all hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                >
+                  <StopCircle className="mr-1.5 h-3.5 w-3.5" />
+                  Stop generating
+                </Button>
               </div>
+            )}
 
-              <div className="flex items-end gap-2 pt-1 pb-1 px-1 relative">
-                <div className="absolute left-3 top-2 flex items-center justify-center text-[#8B949E]">
-                  <div className="w-5 h-5 rounded bg-[#1A1C23] border border-[#2D313E] flex items-center justify-center text-[10px] font-bold text-[#58A6FF]">
-                    Ask
-                  </div>
-                </div>
-                <textarea
-                  ref={(el) => {
-                    if (el) {
-                      el.style.height = "auto";
-                      el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
-                    }
-                  }}
-                  value={query}
-                  onChange={(event) => {
-                    setQuery(event.target.value);
-                    event.target.style.height = "auto";
-                    event.target.style.height = `${Math.min(event.target.scrollHeight, 300)}px`;
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void handleSend();
-                    }
-                  }}
-                  placeholder="Describe the changes, ask a question, or reference files..."
-                  rows={1}
-                  className="min-h-[44px] max-h-[300px] flex-1 resize-none border-0 bg-transparent py-2.5 pl-11 pr-3 shadow-none focus-visible:outline-none focus:ring-0 text-[14px] leading-relaxed custom-scrollbar text-[#E2E8F0] placeholder:text-[#8B949E]"
+            <div
+              className={cn(
+                "group relative mx-auto flex w-full flex-col gap-0 rounded-xl border bg-[#161822] shadow-2xl transition-all",
+                "border-[#2D313E] focus-within:border-[#3B82F6]/50 focus-within:ring-2 focus-within:ring-[#3B82F6]/10",
+              )}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes("application/x-studio-path")) {
+                  e.preventDefault();
+                }
+              }}
+              onDrop={handleComposerDrop}
+            >
+              <div className="flex flex-col gap-1 p-2 pt-2">
+                <ModeSelector
+                  mode={mode}
+                  onModeChange={handleModeChange}
+                  variant="compact"
+                  actDisabled={!planApproved}
+                  planAwaitingReview={Boolean(activeChangeSet)}
                 />
-              </div>
 
-              <div className="flex items-center justify-between px-2 pb-1 mt-1 border-t border-[#2D313E]/50 pt-2">
-                <div className="flex items-center gap-1">
-                  <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
-                    <Paperclip className="h-4 w-4" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
-                    <Wand2 className="h-4 w-4" />
-                  </Button>
-                  <Button size="icon" variant="ghost" className="h-8 w-8 text-[#8B949E] hover:text-[#C9D1D9] hover:bg-[#1A1C23]">
-                    <Mic className="h-4 w-4" />
-                  </Button>
+                <ComposerAttachments
+                  scopePaths={scopePaths}
+                  attachedFiles={attachedFiles}
+                  onRemoveScope={toggleScopePath}
+                  onRemoveAttached={toggleAttachedFile}
+                />
+
+                <div className="relative overflow-visible px-1">
+                  <ComposerMentionMenu
+                    open={mention.active}
+                    suggestions={suggestions}
+                    selectedIndex={mention.selectedIndex}
+                    isLoading={mentionsLoading}
+                    onSelect={handleMentionSelect}
+                    className="left-2 right-2 w-auto"
+                  />
+                  <textarea
+                    ref={textareaRef}
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setCaretIndex(event.target.selectionStart ?? 0);
+                      event.target.style.height = "auto";
+                      event.target.style.height = `${Math.min(event.target.scrollHeight, 300)}px`;
+                    }}
+                    onSelect={(event) => {
+                      setCaretIndex(event.currentTarget.selectionStart ?? 0);
+                    }}
+                    onKeyDown={(event) => {
+                      if (mention.active && suggestions.length > 0) {
+                        if (event.key === "ArrowDown") {
+                          event.preventDefault();
+                          moveSelection(1);
+                          return;
+                        }
+                        if (event.key === "ArrowUp") {
+                          event.preventDefault();
+                          moveSelection(-1);
+                          return;
+                        }
+                        if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
+                          event.preventDefault();
+                          const picked = suggestions[mention.selectedIndex];
+                          if (picked) handleMentionSelect(picked);
+                          return;
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          dismiss();
+                          return;
+                        }
+                      }
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        void handleSend();
+                      }
+                    }}
+                    placeholder={
+                      mode === "PLAN" && activeChangeSet
+                        ? "Describe what to change in the plan…"
+                        : mode === "ACT"
+                          ? "Optional: extra instructions for the patch…"
+                          : "Ask a question or type @ to reference files…"
+                    }
+                    rows={1}
+                    disabled={!repositoryId}
+                    className="max-h-[300px] min-h-[44px] w-full resize-none border-0 bg-transparent px-2 py-2.5 text-[14px] leading-relaxed text-[#E2E8F0] shadow-none placeholder:text-[#8B949E] focus-visible:outline-none focus:ring-0 custom-scrollbar"
+                  />
                 </div>
-                
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5 text-[10px] text-[#8B949E] hidden sm:flex">
-                    <kbd className="font-sans font-semibold bg-[#1A1C23] rounded px-1.5 py-0.5 border border-[#2D313E]">↵</kbd> Send
+
+                <div className="mt-1 flex items-center justify-between border-t border-[#2D313E]/50 px-2 pb-1 pt-2">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleAddOpenFile}
+                      disabled={!repositoryId}
+                      className="h-7 gap-1 px-2 text-[10px] text-[#8B949E] hover:text-[#C9D1D9]"
+                      title="Add currently open editor file to context"
+                    >
+                      <FilePlus className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Add open file</span>
+                    </Button>
+                    <span className="hidden text-[10px] text-[#6E7681] md:inline">
+                      @ files · Shift+Enter new line
+                    </span>
                   </div>
                   <Button
                     onClick={() => void handleSend()}
                     disabled={!canSend}
                     size="sm"
-                    className="h-8 px-5 rounded-md bg-[#5CD4C2] hover:bg-[#4bc2b0] text-black font-bold tracking-wide transition-colors border-none"
+                    className="h-8 rounded-md border-none bg-[#5CD4C2] px-5 font-bold tracking-wide text-black transition-colors hover:bg-[#4bc2b0]"
                   >
-                    Ask
+                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                    Send
                   </Button>
                 </div>
               </div>
-
             </div>
           </div>
-          
-        </div>
+        )}
       </div>
     </main>
   );

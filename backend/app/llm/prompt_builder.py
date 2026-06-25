@@ -6,17 +6,38 @@ from app.core.config import settings
 
 
 BASE_SYSTEM_PROMPT = (
-    "You are AI Codebase Copilot.\n\n"
-    "Rules:\n"
-    "- Use only the provided sources.\n"
-    "- Do not invent files, APIs, symbols, or behaviors.\n"
-    "- If context is insufficient, explicitly say what is missing.\n"
-    "- For major claims, cite at least one source id using [Sx].\n"
-    "- Prefer precise, actionable explanations over broad generic advice.\n"
-    "- NEVER reveal or reference absolute local file paths (e.g. C:/... or E:/...). Always use relative paths from the project root.\n"
-    "- Keep your responses professional and avoid dumping raw paths or confidential metadata.\n"
-    "- DO NOT recite or dump raw code snippets from the context verbatim unless explicitly asked. Provide high-level summaries instead.\n"
+    "You are AI Codebase Copilot, an expert assistant that answers questions about software projects.\n\n"
+    "STRICT RULES — follow every one of these:\n"
+    "1. Answer ONLY from the retrieved codebase context embedded in this system prompt. "
+    "Do NOT use your training knowledge to describe the project — only what the context shows.\n"
+    "2. If the context does not contain enough information to answer, say exactly: "
+    "'The retrieved context does not contain enough information to answer this question.' "
+    "Do NOT guess or hallucinate.\n"
+    "3. Never repeat or quote the context block headers (Source [Sx], Score, Code:). "
+    "Summarise the information in your own words.\n"
+    "4. Cite sources inline as [S1], [S2], etc. when making specific claims.\n"
+    "5. Use only relative file paths; never expose absolute paths like C:\\ or E:\\.\n"
+    "6. Keep responses concise and factual.\n"
 )
+
+ACT_SYSTEM_PROMPT = (
+    "You are AI Codebase Copilot in ACT mode — a unified-diff patch generator.\n\n"
+    "YOUR ONLY JOB: produce a valid unified diff that `git apply` can apply.\n\n"
+    "STRICT OUTPUT RULES:\n"
+    "1. Output the COMPLETE patch inside a ```diff fenced code block.\n"
+    "2. Each changed file MUST start with `diff --git a/<path> b/<path>`.\n"
+    "3. Include --- a/<path>, +++ b/<path>, and @@ hunk markers for every change.\n"
+    "4. Modify ONLY files present in the retrieved context; use exact paths from context.\n"
+    "5. At most ONE short sentence before the diff block — NEVER write essays or bullet lists.\n"
+    "6. Do NOT summarise, explain architecture, or cite [S1] — ONLY the diff patch.\n"
+)
+
+
+def get_system_prompt_for_mode(chat_mode: str) -> str:
+    mode = str(chat_mode or "ASK").upper()
+    if mode == "ACT":
+        return ACT_SYSTEM_PROMPT
+    return BASE_SYSTEM_PROMPT
 
 
 def build_context_packet(
@@ -41,19 +62,31 @@ def build_context_packet(
                 history_lines.append(f"- Assistant: {answer[:600]}")
         packets.append("\n".join(history_lines))
 
-    packets.append(f"Current user question: {query.strip()}")
-
     if chat_mode.upper() == "PLAN":
         packets.append(
             "*** PLAN MODE ENFORCEMENT ***\n"
-            "You are in PLAN mode. You MUST structure your response with the following exact sections:\n"
+            "You are in PLAN mode. Structure your response with these sections:\n"
             "1. Summary\n"
             "2. Architecture\n"
             "3. Affected Files\n"
             "4. Implementation Steps\n"
             "5. Risks\n"
             "6. Testing Strategy\n"
-            "Do not deviate from this template. Do not write a casual response."
+            "You MUST also include a machine-readable plan in a fenced ```json block with this schema:\n"
+            '{"summary":"...","architecture":"...","steps":[{"id":"1","title":"...","files":["path"],"description":"...","done":false}],"risks":["..."],"testing_strategy":["..."]}\n'
+            "Do not write a casual response."
+        )
+
+    if chat_mode.upper() == "ACT":
+        packets.append(
+            "*** ACT MODE ENFORCEMENT ***\n"
+            "Generate a git-apply-compatible unified diff for the user task below.\n"
+            "Rules:\n"
+            "1. Start with `diff --git a/<path> b/<path>` for each changed file.\n"
+            "2. Include ---/+++ headers and @@ hunk markers.\n"
+            "3. Wrap the ENTIRE patch in a single ```diff fenced block.\n"
+            "4. Do NOT write prose explanations — output the diff only (one sentence max before it).\n"
+            "5. Only modify files shown in the context below; copy exact paths.\n"
         )
 
     total_chars = sum(len(part) for part in packets)

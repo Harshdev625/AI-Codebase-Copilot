@@ -14,10 +14,29 @@ import {
 import { Label } from '@/components/ui/label';
 import { Loader2, Plus, FolderGit2 } from 'lucide-react';
 import { useToast } from '@/components/shared/toast-provider';
+import { cn } from '@/lib/utils';
 import { useQueryClient } from '@tanstack/react-query';
 
-export function DashboardAddRepository() {
-  const [open, setOpen] = React.useState(false);
+interface DashboardAddRepositoryProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  triggerRef?: React.Ref<HTMLButtonElement>;
+  triggerVariant?: 'default' | 'outline' | 'secondary' | 'ghost';
+  triggerClassName?: string;
+  triggerLabel?: string;
+}
+
+export function DashboardAddRepository({
+  open: controlledOpen,
+  onOpenChange,
+  triggerRef,
+  triggerVariant = 'default',
+  triggerClassName,
+  triggerLabel = 'Add Repository',
+}: DashboardAddRepositoryProps = {}) {
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const [repoId, setRepoId] = React.useState('');
   const [remoteUrl, setRemoteUrl] = React.useState('');
   const [localPath, setLocalPath] = React.useState('');
@@ -67,9 +86,15 @@ export function DashboardAddRepository() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button id="add-repository-btn" className="gap-2 shadow-glow-sm">
+        <Button
+          ref={triggerRef}
+          id="add-repository-btn"
+          variant={triggerVariant}
+          size="lg"
+          className={cn('h-11 gap-2', triggerVariant === 'default' && 'shadow-glow-sm', triggerClassName)}
+        >
           <Plus className="h-4 w-4" />
-          Add Repository
+          {triggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[480px]">
@@ -90,8 +115,8 @@ export function DashboardAddRepository() {
               required
               autoFocus
             />
-            <p className="text-[10px] text-muted-foreground">
-              e.g. facebook/react or my-project
+            <p className="text-xs text-muted-foreground">
+              e.g. facebook/react or my-repo
             </p>
           </div>
           <div className="space-y-2">
@@ -111,7 +136,7 @@ export function DashboardAddRepository() {
               onChange={(e) => setLocalPath(e.target.value)}
               placeholder="C:\Projects\my-repo"
             />
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               Provide either a Remote URL or a Local Path
             </p>
           </div>

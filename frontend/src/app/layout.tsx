@@ -3,6 +3,7 @@ import { Inter, Outfit, JetBrains_Mono } from "next/font/google";
 
 import { AppProviders } from "@/components/app-providers";
 import { CommandPalette } from "@/components/command-palette";
+import { OnboardingWalkthrough } from "@/features/onboarding/components/onboarding-walkthrough";
 import "@/styles/globals.css";
 
 const inter = Inter({
@@ -23,7 +24,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("http://localhost:3000"),
   title: "AI Codebase Copilot",
-  description: "Modern AI workspace for repository intelligence and code conversations",
+  description: "Modern AI studio for repository intelligence and code conversations",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
         <AppProviders>
           {children}
           <CommandPalette />
+          <OnboardingWalkthrough />
         </AppProviders>
       </body>
     </html>

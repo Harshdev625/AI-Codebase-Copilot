@@ -21,8 +21,9 @@ from pathspec.patterns import GitWildMatchPattern
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db.utils import is_sqlite_session, get_jsonb_cast_sql
 from app.core.config import settings
+from app.db.utils import is_sqlite_session, get_jsonb_cast_sql
+from app.services.repository_cache import normalize_repo_path, repo_cache_root, repository_cache_dir
 from app.models.domain_models import CodeChunk
 from app.rag.chunking.ast_chunker import chunk_python_file
 from app.rag.chunking.tree_sitter_chunker import chunk_with_tree_sitter
@@ -63,6 +64,53 @@ class IndexingService:
         self._files_skipped: int = 0
         self._chunks_created: int = 0
         self._index_errors: list[dict] = []
+        self._stage_timings: dict[str, dict[str, float | int | str | None]] = {}
+        self._current_stage: str | None = None
+        self._stage_started_at: float | None = None
+
+    def _reset_stage_timings(self) -> None:
+        self._stage_timings = {}
+        self._current_stage = None
+        self._stage_started_at = None
+
+    def _transition_stage(self, stage: str | None) -> None:
+        if not stage:
+            return
+        if stage == self._current_stage:
+            return
+        now_perf = time.perf_counter()
+        now_epoch = time.time()
+        if self._current_stage and self._stage_started_at is not None:
+            elapsed = round(now_perf - self._stage_started_at, 2)
+            prev = self._stage_timings.setdefault(self._current_stage, {})
+            prev["duration_seconds"] = round(float(prev.get("duration_seconds") or 0) + elapsed, 2)
+            prev["completed_at"] = now_epoch
+        entry = self._stage_timings.setdefault(stage, {})
+        if "started_at" not in entry:
+            entry["started_at"] = now_epoch
+        entry.setdefault("duration_seconds", 0)
+        self._current_stage = stage
+        self._stage_started_at = now_perf
+
+    def _finalize_stage_timings(self) -> None:
+        if self._current_stage and self._stage_started_at is not None:
+            now_perf = time.perf_counter()
+            now_epoch = time.time()
+            elapsed = round(now_perf - self._stage_started_at, 2)
+            entry = self._stage_timings.setdefault(self._current_stage, {})
+            entry["duration_seconds"] = round(float(entry.get("duration_seconds") or 0) + elapsed, 2)
+            entry["completed_at"] = now_epoch
+        self._current_stage = None
+        self._stage_started_at = None
+
+    def _invalidate_remote_repo_cache(self, repo_id: str) -> None:
+        """Remove cloned repo workspace so the next resolve performs a fresh clone."""
+        target = repository_cache_dir(repo_id)
+        if not target.exists():
+            return
+        self._kill_git_processes(target)
+        self._force_delete_directory(target)
+        logger.info("index_cache_invalidate - wiped remote cache repo_id=%s path=%s", repo_id, target)
 
     def _is_low_signal_file(self, file_path: Path
                             , repo_root: Path) -> bool:
@@ -100,7 +148,39 @@ class IndexingService:
             shutil.rmtree(target, onerror=self._on_rm_error)
 
     def _cache_root(self) -> Path:
-        return Path(settings.repo_cache_path).resolve()
+        return repo_cache_root()
+
+    def _persist_repository_cache_path(self, repository_id: str, cache_path: Path) -> None:
+        """Store clone location so file explorer / ACT can find files after indexing."""
+        resolved = str(cache_path.resolve())
+        updated_at_sql = "CURRENT_TIMESTAMP" if is_sqlite_session(self.session) else "NOW()"
+        try:
+            self.session.execute(
+                text(
+                    f"""
+                    UPDATE repositories
+                    SET local_path = :local_path,
+                        updated_at = {updated_at_sql}
+                    WHERE id = :repository_id
+                      AND (local_path IS NULL OR TRIM(local_path) = '')
+                    """
+                ),
+                {"local_path": resolved, "repository_id": repository_id},
+            )
+            self.session.commit()
+            logger.info(
+                "index_cache_persist - linked repository_id=%s cache_path=%s",
+                repository_id,
+                resolved,
+            )
+        except Exception as exc:
+            logger.warning(
+                "index_cache_persist - failed repository_id=%s path=%s error=%s",
+                repository_id,
+                resolved,
+                exc,
+            )
+            self.session.rollback()
 
     async def _delete_dir_with_retry(self, target: Path, max_retries: int = 5, delay: float = 1.0) -> None:
         """Force delete a directory with retries and permission handling."""
@@ -200,11 +280,13 @@ class IndexingService:
             repo_ref,
         )
         if repo_path:
-            root = Path(repo_path)
-            if not root.exists():
-                raise ValidationException(f"Repository path does not exist: {repo_path}")
-            logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
-            return root
+            normalized_path = normalize_repo_path(str(repo_path))
+            if normalized_path:
+                root = Path(normalized_path)
+                if not root.exists():
+                    raise ValidationException(f"Repository path does not exist: {normalized_path}")
+                logger.info("index_resolve_repo - using local path repo_id=%s root=%s", repo_id, root)
+                return root
 
         if not repo_url:
             raise ValidationException("Provide either repo_path or repo_url")
@@ -217,7 +299,7 @@ class IndexingService:
         cache_root = self._cache_root()
         cache_root.mkdir(parents=True, exist_ok=True)
 
-        target = cache_root / self._slugify_repo_id(repo_id)
+        target = repository_cache_dir(repo_id)
         meta_file = target / "cache_meta.json"
         
         is_valid_cache = False
@@ -321,13 +403,20 @@ class IndexingService:
         return spec.match_file(rel_path)
 
     async def _iter_indexable_files(self, repo_root: Path, spec: PathSpec):
-        used_git_listing = False
+        git_files: list[Path] = []
         async for file_path in self._iter_git_listed_files(repo_root):
-            used_git_listing = True
-            yield file_path
+            git_files.append(file_path)
 
-        if used_git_listing:
+        if git_files:
+            for file_path in git_files:
+                yield file_path
             return
+
+        if (repo_root / ".git").exists():
+            logger.warning(
+                "index_discover - git ls-files returned 0 files for %s; falling back to os.walk",
+                repo_root,
+            )
 
         for dirpath, dirnames, filenames in os.walk(repo_root):
             current_dir = Path(dirpath)
@@ -343,8 +432,13 @@ class IndexingService:
                     yield file_path
 
     def _get_previous_completed_commit(self, repository_id: str) -> str | None:
-        # Simplified schema: we no longer persist snapshot history.
-        return None
+        try:
+            return self.session.execute(
+                text("SELECT latest_indexed_commit FROM repositories WHERE id = :id"),
+                {"id": repository_id}
+            ).scalar()
+        except Exception:
+            return None
 
     async def _git_commit_exists(self, repo_root: Path, commit_sha: str) -> bool:
         if not commit_sha:
@@ -628,6 +722,171 @@ class IndexingService:
             )
             raise DatabaseException("Failed to delete chunks for specific paths") from exc
 
+    def _count_repository_chunks(self, repository_id: str) -> int:
+        try:
+            count = self.session.execute(
+                text("SELECT COUNT(*) FROM code_chunks WHERE repository_id = :repository_id"),
+                {"repository_id": repository_id},
+            ).scalar()
+            return int(count or 0)
+        except Exception:
+            return 0
+
+    def _count_indexed_repository_files(self, repository_id: str) -> int:
+        try:
+            count = self.session.execute(
+                text(
+                    """
+                    SELECT COUNT(*)
+                    FROM repository_files
+                    WHERE repository_id = :repository_id AND status = 'INDEXED'
+                    """
+                ),
+                {"repository_id": repository_id},
+            ).scalar()
+            return int(count or 0)
+        except Exception:
+            return 0
+
+    def _resolve_repair_file_list(
+        self,
+        repo_root: Path,
+        repository_id: str,
+        all_files: list[Path],
+    ) -> list[Path]:
+        """Re-chunk files whose metadata says INDEXED but vectors are missing."""
+        try:
+            rows = self.session.execute(
+                text(
+                    """
+                    SELECT path
+                    FROM repository_files
+                    WHERE repository_id = :repository_id AND status = 'INDEXED'
+                    """
+                ),
+                {"repository_id": repository_id},
+            ).mappings().all()
+        except Exception:
+            return []
+
+        indexed_paths = {str(row.get("path") or "").strip() for row in rows}
+        indexed_paths.discard("")
+
+        repair_files: list[Path] = []
+        for file_path in all_files:
+            try:
+                rel = file_path.relative_to(repo_root).as_posix()
+            except ValueError:
+                continue
+            if rel in indexed_paths:
+                repair_files.append(file_path)
+
+        return repair_files
+
+    async def _delete_chunks_by_ids(self, chunk_ids: list[str]) -> None:
+        if not chunk_ids:
+            return
+        unique_ids = sorted({str(cid).strip() for cid in chunk_ids if str(cid).strip()})
+        if not unique_ids:
+            return
+
+        await self._delete_qdrant_with_retry(
+            f"chunk_purge(count={len(unique_ids)})",
+            self.qdrant.delete_points_by_ids,
+            unique_ids,
+        )
+
+        try:
+            for chunk_id in unique_ids:
+                self.session.execute(
+                    text("DELETE FROM code_chunks WHERE id = :id"),
+                    {"id": chunk_id},
+                )
+            self.session.commit()
+            logger.info("index_delete_by_ids - removed chunks=%s", len(unique_ids))
+        except Exception as exc:
+            self.session.rollback()
+            raise DatabaseException("Failed to delete stale chunks from database") from exc
+
+    async def _prune_repository_chunks_except(self, repository_id: str, keep_ids: set[str]) -> None:
+        if not keep_ids:
+            await self._delete_all_repository_chunks(repository_id)
+            return
+        rows = self.session.execute(
+            text("SELECT id FROM code_chunks WHERE repository_id = :repository_id"),
+            {"repository_id": repository_id},
+        ).mappings().all()
+        stale_ids = [str(row["id"]) for row in rows if str(row["id"]) not in keep_ids]
+        await self._delete_chunks_by_ids(stale_ids)
+
+    async def _prune_path_chunks_except(
+        self,
+        repository_id: str,
+        repo_root: Path,
+        relative_paths: set[str],
+        keep_ids: set[str],
+    ) -> None:
+        if not relative_paths:
+            return
+        if not keep_ids:
+            await self._delete_repository_chunks_for_paths(repository_id, repo_root, relative_paths)
+            return
+
+        query_ids_stmt = text(
+            """
+            SELECT id
+            FROM code_chunks
+            WHERE repository_id = :repository_id
+              AND (
+                path = :abs_path
+                OR path = :rel_path
+                OR path LIKE :unix_suffix
+                OR path LIKE :win_suffix
+              )
+            """
+        )
+        stale_ids: list[str] = []
+        for rel in sorted(relative_paths):
+            normalized_rel = rel.replace("\\", "/").lstrip("/")
+            if not normalized_rel:
+                continue
+            abs_path = str((repo_root / normalized_rel).resolve())
+            windows_rel = normalized_rel.replace("/", "\\")
+            params = {
+                "repository_id": repository_id,
+                "abs_path": abs_path,
+                "rel_path": normalized_rel,
+                "unix_suffix": f"%/{normalized_rel}",
+                "win_suffix": f"%\\{windows_rel}",
+            }
+            id_rows = self.session.execute(query_ids_stmt, params).mappings().all()
+            for row in id_rows:
+                chunk_id = str(row.get("id") or "").strip()
+                if chunk_id and chunk_id not in keep_ids:
+                    stale_ids.append(chunk_id)
+
+        await self._delete_chunks_by_ids(stale_ids)
+
+    async def _apply_post_index_cleanup(
+        self,
+        *,
+        repository_id: str,
+        repo_root: Path,
+        indexing_mode: str,
+        changed_paths: set[str],
+        deleted_paths: set[str],
+        keep_ids: set[str],
+    ) -> None:
+        """Remove stale vectors only after new chunks were stored successfully."""
+        if indexing_mode == "full":
+            await self._prune_repository_chunks_except(repository_id, keep_ids)
+            return
+
+        if deleted_paths:
+            await self._delete_repository_chunks_for_paths(repository_id, repo_root, deleted_paths)
+        if changed_paths:
+            await self._prune_path_chunks_except(repository_id, repo_root, changed_paths, keep_ids)
+
     async def _update_progress(
         self,
         indexing_job_id: str | None,
@@ -650,13 +909,17 @@ class IndexingService:
         """
         if not indexing_job_id:
             return
-            
+
+        if stage:
+            self._transition_stage(stage)
+
         # Stage-based percentage calculation
         stage_percentages = {
             "discovery": (0, 5),
             "parsing": (5, 50),
             "embedding": (50, 80),
-            "storage": (50, 95), # Embedding and storage occur in the same batch loop
+            "storage": (50, 95),
+            "finalize": (95, 100),
             "graph": (95, 100),
         }
         
@@ -684,11 +947,12 @@ class IndexingService:
             "total_files": total,
             "processed_files": current,
             "percentage": percentage,
-            "current_stage": stage or "unknown",
+            "current_stage": stage or self._current_stage or "unknown",
             "current_file": current_file,
             "eta_seconds": eta_seconds,
             "avg_seconds_per_file": round(avg_seconds_per_file, 4) if avg_seconds_per_file is not None else None,
             "updated_at_epoch": time.time(),
+            "stage_timings": dict(self._stage_timings),
         }
         if extra_stats:
             try:
@@ -765,15 +1029,20 @@ class IndexingService:
             repository_id,
             commit_sha,
         )
-        logger.info("indexing_start - repo_id=%s repository_id=%s", repo_id, repository_id)
+        logger.info("indexing_start - repo_id=%s repository_id=%s full_reindex=%s", repo_id, repository_id, full_reindex)
+        self._reset_stage_timings()
+        effective_repo_url = repo_url
+        effective_repo_path = normalize_repo_path(repo_path)
+        if full_reindex and effective_repo_url and not effective_repo_path:
+            self._invalidate_remote_repo_cache(repo_id)
         root = await self._resolve_repo_root(
             repo_id, 
-            repo_path=repo_path, 
-            repo_url=repo_url, 
+            repo_path=effective_repo_path, 
+            repo_url=effective_repo_url, 
             repo_ref=repo_ref, 
             repository_id=repository_id
         )
-        cleanup_cached_repo = bool(repo_url and not repo_path)
+        cleanup_cached_repo = bool(effective_repo_url and not effective_repo_path)
         started_at = time.perf_counter()
         self._active_indexing_job_id = indexing_job_id
         self._active_started_at_perf = started_at
@@ -789,75 +1058,88 @@ class IndexingService:
             changed_paths: set[str] = set()
             deleted_paths: set[str] = set()
 
-            indexing_mode = "full"
-            mode_reason = "full reindex"
             force_full_reindex = bool(full_reindex or settings.indexing_force_full_reindex)
 
-            can_attempt_incremental = (
-                not force_full_reindex
-                and settings.indexing_incremental_enabled
-                and repository_id is not None
-                and bool(str(commit_sha).strip())
-                and str(commit_sha).strip() != "local-working-copy"
-            )
+            # Discover all valid files on disk
+            all_files = [f async for f in self._iter_indexable_files(root, ignore_spec)]
+            total_files = len(all_files)
 
-            if can_attempt_incremental:
-                previous_commit = self._get_previous_completed_commit(str(repository_id))
-                if previous_commit and previous_commit != commit_sha:
-                    try:
-                        changed_paths, deleted_paths = await self._collect_git_diff_paths(
-                            root,
-                            previous_commit,
-                            commit_sha,
-                        )
-                        file_list = self._filter_incremental_files(root, ignore_spec, changed_paths)
-                        indexing_mode = "incremental"
-                        mode_reason = (
-                            f"changed_paths={len(changed_paths)} deleted_paths={len(deleted_paths)} "
-                            f"from={previous_commit[:10]}"
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "index_repository - incremental fallback repo_id=%s reason=%s",
-                            repo_id,
-                            self._format_process_error(exc, "incremental diff unavailable"),
-                        )
-                        file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
-                        indexing_mode = "full"
-                        mode_reason = "incremental fallback to full"
-                elif previous_commit == commit_sha:
-                    file_list = []
-                    indexing_mode = "incremental"
-                    mode_reason = "no code changes since previous indexed commit"
-                else:
-                    file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
-                    indexing_mode = "full"
-                    mode_reason = "no previous completed snapshot"
+            if repository_id and total_files == 0:
+                existing_chunks = self._count_repository_chunks(str(repository_id))
+                if existing_chunks > 0:
+                    raise ValidationException(
+                        "File discovery found 0 files, but indexed chunks still exist. "
+                        "Verify the repository clone/path is intact, then retry. "
+                        "Use full re-index if the workspace was moved."
+                    )
+
+            if force_full_reindex or not settings.indexing_incremental_enabled or not repository_id:
+                indexing_mode = "full"
+                mode_reason = "forced full reindex" if force_full_reindex else "incremental disabled"
             else:
-                file_list = [f async for f in self._iter_indexable_files(root, ignore_spec)]
-                if force_full_reindex:
-                    mode_reason = "forced full reindex"
-                elif not settings.indexing_incremental_enabled:
-                    mode_reason = "incremental disabled"
-                elif not repository_id:
-                    mode_reason = "missing repository_id for incremental mode"
-                else:
-                    mode_reason = "non-commit indexing request"
+                indexing_mode = "incremental"
+                mode_reason = "hash-based incremental"
 
-            total_files = len(file_list)
+            changed_paths: set[str] = set()
+            deleted_paths: set[str] = set()
+            file_list = all_files
             
             # --- Persist file records and get incremental chunk list ---
             if repository_id:
-                self._files_indexed, files_to_chunk = await upsert_file_records(
+                self._files_indexed, files_to_chunk, deleted_files = await upsert_file_records(
                     self.session,
                     repository_id=repository_id,
                     repo_root=root,
                     commit_sha=commit_sha,
                     file_list=file_list,
+                    force_rechunk=(indexing_mode == "full")
                 )
                 self._files_skipped = total_files - len(files_to_chunk)
                 file_list = files_to_chunk
-                
+                deleted_paths = set(deleted_files)
+                changed_paths = {f.relative_to(root).as_posix() for f in files_to_chunk if f.exists()}
+
+            if (
+                indexing_mode == "incremental"
+                and repository_id
+                and not file_list
+                and not deleted_paths
+            ):
+                chunk_count = self._count_repository_chunks(str(repository_id))
+                indexed_file_count = self._count_indexed_repository_files(str(repository_id))
+                if indexed_file_count > 0 and chunk_count == 0:
+                    file_list = self._resolve_repair_file_list(root, str(repository_id), all_files)
+                    if not file_list:
+                        file_list = list(all_files)
+                    changed_paths = {
+                        f.relative_to(root).as_posix() for f in file_list if f.exists()
+                    }
+                    mode_reason = "index repair (vectors missing)"
+                    indexing_mode = "repair"
+                    logger.warning(
+                        "index_repair - repository_id=%s indexed_files=%s chunks=%s files_to_rechunk=%s",
+                        repository_id,
+                        indexed_file_count,
+                        chunk_count,
+                        len(file_list),
+                    )
+                else:
+                    await self._update_progress(
+                        indexing_job_id,
+                        total_files,
+                        total_files,
+                        "Index up to date (no file changes)",
+                        elapsed_seconds=time.perf_counter() - started_at,
+                        stage="finalize",
+                        extra_stats={
+                            "percentage": 100,
+                            "indexing_mode": indexing_mode,
+                            "total_files": total_files,
+                            "stored_chunks": chunk_count,
+                        },
+                    )
+                    return 0
+
             self._active_total_files = total_files
             logger.info(
                 "index_repository - files discovered repo_id=%s mode=%s total_files=%s chunks_to_process=%s reason=%s",
@@ -889,25 +1171,46 @@ class IndexingService:
                 },
             )
 
-            if repository_id:
-                if indexing_mode == "full":
-                    await self._delete_all_repository_chunks(str(repository_id))
-                else:
-                    paths_to_refresh = set(changed_paths)
-                    paths_to_refresh.update(deleted_paths)
-                    paths_to_refresh.update(
-                        fp.relative_to(root).as_posix()
-                        for fp in file_list
-                        if fp.exists()
-                    )
-                    await self._delete_repository_chunks_for_paths(str(repository_id), root, paths_to_refresh)
+            if (
+                indexing_mode == "incremental"
+                and repository_id
+                and not file_list
+                and deleted_paths
+            ):
+                await self._apply_post_index_cleanup(
+                    repository_id=str(repository_id),
+                    repo_root=root,
+                    indexing_mode=indexing_mode,
+                    changed_paths=set(),
+                    deleted_paths=deleted_paths,
+                    keep_ids=set(),
+                )
+                await create_snapshot(
+                    self.session,
+                    repository_id=repository_id,
+                    commit_sha=commit_sha,
+                    files_count=self._files_indexed,
+                    files_skipped=self._files_skipped,
+                    chunks_count=0,
+                )
+                await self._update_progress(
+                    indexing_job_id,
+                    total_files,
+                    total_files,
+                    f"Removed index for {len(deleted_paths)} deleted file(s)",
+                    elapsed_seconds=time.perf_counter() - started_at,
+                    stage="finalize",
+                    extra_stats={"percentage": 100, "stored_chunks": 0},
+                )
+                return 0
 
             def _chunk_single_file(file_path: Path) -> tuple[Path, list[CodeChunk], Exception | None]:
                 try:
+                    rel_path = file_path.relative_to(root).as_posix()
                     source = file_path.read_text(encoding="utf-8", errors="ignore")
                     if file_path.suffix == ".py":
                         try:
-                            python_chunks = chunk_python_file(repo_id, commit_sha, file_path, source)
+                            python_chunks = chunk_python_file(repo_id, commit_sha, rel_path, source)
                         except Exception:
                             python_chunks = []
 
@@ -916,11 +1219,11 @@ class IndexingService:
 
                         # Keep python files searchable even when AST parsing fails
                         # or when a file has no function/class definitions.
-                        return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
-                    structured_chunks = chunk_with_tree_sitter(repo_id, commit_sha, file_path, source)
+                        return file_path, self.generic_chunk_file(repo_id, commit_sha, rel_path, source, file_path.suffix), None
+                    structured_chunks = chunk_with_tree_sitter(repo_id, commit_sha, rel_path, source, file_path)
                     if structured_chunks:
                         return file_path, structured_chunks, None
-                    return file_path, self.generic_chunk_file(repo_id, commit_sha, file_path, source), None
+                    return file_path, self.generic_chunk_file(repo_id, commit_sha, rel_path, source, file_path.suffix), None
                 except Exception as exc:
                     return file_path, [], exc
 
@@ -1002,9 +1305,9 @@ class IndexingService:
                 total_files,
                 f"Storing {len(chunks)} chunks...",
                 elapsed_seconds=time.perf_counter() - started_at,
+                stage="storage",
                 extra_stats={
-                    "stage": "storing",
-                    "mode": indexing_mode,
+                    "indexing_mode": indexing_mode,
                     "total_chunks": len(chunks),
                     "stored_chunks": 0,
                 },
@@ -1016,6 +1319,26 @@ class IndexingService:
                 self._assign_repository_ids_and_chunk_ids(repository_id, chunks)
 
             await self._upsert_chunks(chunks)
+
+            if repository_id and chunks:
+                await self._apply_post_index_cleanup(
+                    repository_id=str(repository_id),
+                    repo_root=root,
+                    indexing_mode="full" if indexing_mode in {"full", "repair"} else indexing_mode,
+                    changed_paths=changed_paths,
+                    deleted_paths=deleted_paths,
+                    keep_ids={str(chunk.id) for chunk in chunks},
+                )
+            elif repository_id and deleted_paths and indexing_mode == "incremental":
+                await self._apply_post_index_cleanup(
+                    repository_id=str(repository_id),
+                    repo_root=root,
+                    indexing_mode=indexing_mode,
+                    changed_paths=set(),
+                    deleted_paths=deleted_paths,
+                    keep_ids=set(),
+                )
+
             logger.info(
                 "Indexing completed repo_id=%s repository_id=%s files=%s chunks=%s",
                 repo_id,
@@ -1027,6 +1350,18 @@ class IndexingService:
 
             # --- Create snapshot ---
             if repository_id:
+                await self._update_progress(
+                    indexing_job_id,
+                    total_files,
+                    total_files,
+                    "Creating repository snapshot...",
+                    elapsed_seconds=time.perf_counter() - started_at,
+                    stage="finalize",
+                    extra_stats={
+                        "total_chunks": len(chunks),
+                        "stored_chunks": len(chunks),
+                    },
+                )
                 await create_snapshot(
                     self.session,
                     repository_id=repository_id,
@@ -1034,6 +1369,38 @@ class IndexingService:
                     files_count=self._files_indexed,
                     files_skipped=self._files_skipped,
                     chunks_count=len(chunks),
+                )
+
+            self._finalize_stage_timings()
+            msg = (
+                f"Index repair complete ({len(chunks)} chunks)"
+                if indexing_mode == "repair" and len(chunks) > 0
+                else f"Indexing complete ({len(chunks)} new chunks)"
+                if len(chunks) > 0
+                else "Index up to date"
+            )
+            await self._update_progress(
+                indexing_job_id,
+                total_files,
+                total_files,
+                msg,
+                elapsed_seconds=time.perf_counter() - started_at,
+                stage="finalize",
+                extra_stats={
+                    "percentage": 100,
+                    "total_chunks": len(chunks),
+                    "stored_chunks": len(chunks),
+                    "stage_timings": dict(self._stage_timings),
+                },
+            )
+
+            if cleanup_cached_repo and settings.repo_cache_persist and repository_id:
+                self._persist_repository_cache_path(repository_id, root)
+                logger.info(
+                    "index_cache_kept - repo_id=%s cache_path=%s persist=%s",
+                    repo_id,
+                    root,
+                    settings.repo_cache_persist,
                 )
 
             return len(chunks)
@@ -1046,11 +1413,12 @@ class IndexingService:
             )
             raise
         finally:
-            # Respect persistent cache setting: only delete remote clones when
-            # repo_cache_persist is False (e.g. CI environments)
+            # Keep cloned repos on disk after indexing (REPO_CACHE_PERSIST=true) for
+            # file explorer, patches, and diffs. Full re-index wipes cache at job start.
             should_delete = cleanup_cached_repo and not settings.repo_cache_persist
             if should_delete and root.exists():
                 shutil.rmtree(root, ignore_errors=True)
+                logger.info("index_cache_cleanup - removed ephemeral clone repo_id=%s", repo_id)
             self._active_indexing_job_id = None
             self._active_total_files = None
             self._active_started_at_perf = None
@@ -1073,7 +1441,14 @@ class IndexingService:
             )
             chunk.id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
 
-    def generic_chunk_file(self, repo_id: str, commit_sha: str, file_path: Path, source: str) -> list[CodeChunk]:
+    def generic_chunk_file(
+        self,
+        repo_id: str,
+        commit_sha: str,
+        rel_path: str,
+        source: str,
+        file_suffix: str = "",
+    ) -> list[CodeChunk]:
         # Simple chunking: split file into N-line chunks (e.g., 40 lines)
         chunks: list[CodeChunk] = []
         lines = source.splitlines()
@@ -1089,15 +1464,15 @@ class IndexingService:
             start_line = i + 1
             end_line = min(i + chunk_size, len(lines))
             # Use UUID5 for deterministic, Qdrant-compatible IDs
-            raw_key = f"{repo_id}|{file_path}|{start_line}|{end_line}"
+            raw_key = f"{repo_id}|{rel_path}|{start_line}|{end_line}"
             chunk_id = str(uuid.uuid5(uuid.NAMESPACE_OID, raw_key))
             chunks.append(
                 CodeChunk(
                     id=chunk_id,
                     repo_id=repo_id,
                     commit_sha=commit_sha,
-                    path=str(file_path),
-                    language=file_path.suffix.lstrip('.'),
+                    path=rel_path,
+                    language=file_suffix.lstrip("."),
                     symbol="",
                     chunk_type="generic",
                     start_line=start_line,

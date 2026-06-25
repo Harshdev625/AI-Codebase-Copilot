@@ -3,7 +3,21 @@ import * as React from 'react';
 import { repositoryService } from '../services/repository-service';
 import { useToast } from '@/components/shared/toast-provider';
 import { toApiError } from '@/core/api/errors';
-import type { AddRepositoryPayload, IndexRequestPayload } from '@/features/repositories/types/repository-types';
+import type { AddRepositoryPayload, IndexRequestPayload, WorkspaceSearchPayload } from '@/features/repositories/types/repository-types';
+import { invalidateIndexingCaches } from '@/features/repositories/utils/indexing-cache';
+import { isActiveIndexingStatus } from '@/features/dashboard/utils/indexing-status';
+import {
+  indexingMessage,
+  indexingStartedTitle,
+  patchAppliedTitle,
+  patchFailedTitle,
+  patchMessage,
+  repositoryAddedTitle,
+  repositoryDeletedTitle,
+  repositoryMessage,
+} from '@/features/notifications/notification-copy';
+import { notifyError, notifyInfo, notifySuccess } from '@/features/notifications/utils/notify';
+import { patchActionUrl } from '@/features/notifications/hooks/use-patch-notifications';
 
 
 export function useRepositories(limit = 100, offset = 0) {
@@ -12,8 +26,8 @@ export function useRepositories(limit = 100, offset = 0) {
     queryFn: () => repositoryService.listRepositories(limit, offset),
     staleTime: 20_000,
     refetchInterval: (query) => {
-      const isAnyRunning = query.state.data?.items.some(
-        (r) => r.latest_job_status === 'running' || r.latest_job_status === 'in_progress' || r.latest_job_status === 'pending'
+      const isAnyRunning = query.state.data?.items.some((r) =>
+        isActiveIndexingStatus(r.latest_job_status),
       );
       return isAnyRunning ? 3000 : false;
     },
@@ -38,9 +52,36 @@ export function useAddRepository() {
       void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Repository Added', 'Source has been linked successfully.');
+      notifySuccess(
+        repositoryAddedTitle(),
+        repositoryMessage('Repository', 'Source has been linked successfully.'),
+        { kind: 'repository' },
+      );
     },
     onError: (error) => {
       toast.error('Failed to Add Repository', toApiError(error));
+    },
+  });
+}
+
+export function useDeleteRepository() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+
+  return useMutation({
+    mutationFn: (repositoryId: string) => repositoryService.deleteRepository(repositoryId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
+      toast.success('Repository Deleted', 'The repository has been successfully removed.');
+      notifySuccess(
+        repositoryDeletedTitle(),
+        repositoryMessage('Repository', 'The repository has been successfully removed.'),
+        { kind: 'repository' },
+      );
+    },
+    onError: (error) => {
+      toast.error('Failed to Delete Repository', toApiError(error));
     },
   });
 }
@@ -51,9 +92,34 @@ export function useIndexRepository() {
 
   return useMutation({
     mutationFn: (payload: IndexRequestPayload) => repositoryService.startIndex(payload),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['repositories', 'list'] });
+    onSuccess: (data, variables) => {
+      invalidateIndexingCaches(queryClient);
+
+      const jobId = data.indexing_job_id;
+      const repositoryId = variables.repository_id;
+      if (jobId && repositoryId) {
+        const optimisticJob = {
+          id: jobId,
+          repository_id: repositoryId,
+          status: 'pending',
+          message: 'Queued for indexing…',
+          stats: { percentage: 0, current_stage: 'queued' },
+          started_at: null,
+          trigger_type: 'manual',
+        };
+        queryClient.setQueryData(['indexing-jobs', undefined], (old: unknown) => {
+          const jobs = Array.isArray(old) ? old : [];
+          if (jobs.some((job: { id?: string }) => job.id === jobId)) return jobs;
+          return [optimisticJob, ...jobs];
+        });
+      }
+
       toast.info('Indexing Started', 'The repository is being processed.');
+      notifyInfo(
+        indexingStartedTitle(),
+        indexingMessage('The repository is being processed.'),
+        { kind: 'indexing' },
+      );
     },
     onError: (error) => {
       toast.error('Indexing Failed', toApiError(error));
@@ -118,19 +184,21 @@ export function useRepositoryInsights(repositoryId: string) {
   });
 }
 
+export function useSkippedFiles(repositoryId: string, reason?: string) {
+  return useQuery({
+    queryKey: ['repositories', repositoryId, 'skipped-files', reason],
+    queryFn: () => repositoryService.listSkippedFiles(repositoryId, { limit: 300, reason }),
+    enabled: !!repositoryId,
+    staleTime: 120_000,
+  });
+}
+
 export function useContextTokens(repositoryId: string, payload: { scope_paths?: string[]; attached_files?: string[]; retrieval_query?: string }) {
   return useQuery({
     queryKey: ['repositories', repositoryId, 'context-tokens', payload.scope_paths, payload.attached_files, payload.retrieval_query],
     queryFn: () => repositoryService.getContextTokens(repositoryId, payload),
     enabled: !!repositoryId,
     staleTime: 60_000,
-  });
-}
-
-export function useProjectRetrieveMutation(projectId: string) {
-  return useMutation({
-    mutationFn: (payload: { query: string; repository_ids: string[]; top_k?: number }) =>
-      repositoryService.retrieveProject(projectId, payload),
   });
 }
 
@@ -141,24 +209,35 @@ export function useRepositoryRetrieveMutation(repositoryId: string) {
   });
 }
 
+export function useRepositoryWorkspaceSearchMutation(repositoryId: string) {
+  return useMutation({
+    mutationFn: (payload: WorkspaceSearchPayload) =>
+      repositoryService.searchWorkspace(repositoryId, payload),
+  });
+}
+
 export function useIndexingJobs(repositoryId?: string) {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ['indexing-jobs', repositoryId],
     queryFn: () => repositoryService.listIndexingJobs(repositoryId),
     refetchInterval: (query) => {
-      const isAnyRunning = query.state.data?.some(
-        (job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress'
+      const isAnyRunning = query.state.data?.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
       );
-      return isAnyRunning ? 2000 : false;
+      return isAnyRunning ? 3000 : false;
     },
   });
 
   const prevData = React.useRef(query.data);
   React.useEffect(() => {
     if (prevData.current && query.data) {
-      const prevRunning = prevData.current.some((job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress');
-      const nowRunning = query.data.some((job: any) => job.status === 'running' || job.status === 'queued' || job.status === 'in_progress');
+      const prevRunning = prevData.current.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
+      );
+      const nowRunning = query.data.some((job: { status?: string }) =>
+        isActiveIndexingStatus(job.status),
+      );
       if (prevRunning && !nowRunning && repositoryId) {
         void queryClient.invalidateQueries({ queryKey: ['repositories', repositoryId, 'insights'] });
       }
@@ -264,9 +343,29 @@ export function useApplyPatchMutation(repositoryId: string) {
       void queryClient.invalidateQueries({ queryKey: ['snapshots'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'metrics'] });
       toast.success('Patch Applied', 'The patch has been successfully applied to the repository.');
+      notifySuccess(
+        patchAppliedTitle(),
+        patchMessage(patchId, 'Successfully applied to the repository.'),
+        {
+          kind: 'patch',
+          actionLabel: 'Review patch',
+          actionUrl: patchActionUrl(repositoryId, patchId),
+          dedupeKey: `patch:${patchId}:APPLIED`,
+        },
+      );
     },
-    onError: (error) => {
+    onError: (error, patchId) => {
       toast.error('Apply Error', toApiError(error));
+      notifyError(
+        patchFailedTitle(),
+        patchMessage(patchId, toApiError(error)),
+        {
+          kind: 'patch',
+          actionLabel: 'Review patch',
+          actionUrl: patchActionUrl(repositoryId, patchId),
+          dedupeKey: `patch:${patchId}:FAILED`,
+        },
+      );
     },
   });
 }

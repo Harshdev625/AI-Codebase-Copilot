@@ -79,14 +79,27 @@ def register(req: AuthRegisterRequest, session: Session = Depends(get_db_session
 @router.post("/auth/admin/register", status_code=status.HTTP_201_CREATED)
 def admin_register(req: AuthAdminRegisterRequest, session: Session = Depends(get_db_session)) -> UserResponse:
     logger.info("admin_register - request received email=%s", req.email.lower())
-    configured_secret = settings.admin_registration_secret_key.strip()
-    if not configured_secret:
-        logger.warning("admin_register - admin registration disabled")
-        raise ServiceException("Admin registration is disabled")
 
-    if not compare_digest(req.admin_secret_key, configured_secret):
-        logger.warning("admin_register - invalid secret email=%s", req.email.lower())
-        raise AuthorizationException("Invalid admin secret key")
+    invite_token = (req.invite_token or "").strip()
+    secret_key = (req.admin_secret_key or "").strip()
+
+    if invite_token:
+        from app.services.admin_invite_service import validate_and_consume_admin_invite
+
+        validate_and_consume_admin_invite(
+            session,
+            email=req.email.lower(),
+            invite_token=invite_token,
+        )
+    else:
+        configured_secret = settings.admin_registration_secret_key.strip()
+        if not configured_secret:
+            logger.warning("admin_register - admin registration disabled")
+            raise ServiceException("Admin registration is disabled")
+
+        if not compare_digest(secret_key, configured_secret):
+            logger.warning("admin_register - invalid secret email=%s", req.email.lower())
+            raise AuthorizationException("Invalid admin secret key")
 
     # H1 FIX: Use ORM instead of raw SQL
     existing = session.query(User).filter(User.email == req.email.lower()).first()
@@ -205,3 +218,35 @@ def me(current_user: dict = Depends(get_current_user)) -> UserResponse:
             is_active=bool(current_user["is_active"]),
         ).model_dump()
     )
+
+
+@router.get("/auth/me/pending-invites")
+def my_pending_invites(
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Pending admin invites for the authenticated user's email."""
+    if normalize_role(current_user["role"]) == ROLE_ADMIN:
+        return success_response([])
+
+    from app.services.admin_invite_service import list_pending_admin_invites_for_email
+
+    rows = list_pending_admin_invites_for_email(session, email=str(current_user["email"]))
+    items = [
+        {
+            "id": row.id,
+            "kind": "admin",
+            "email": row.email,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "register_path": "/admin/register",
+            "has_account": True,
+        }
+        for row in rows
+    ]
+    logger.info(
+        "auth_pending_invites - user_id=%s count=%s",
+        current_user["id"],
+        len(items),
+    )
+    return success_response(items)

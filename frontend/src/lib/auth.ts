@@ -122,7 +122,9 @@ export function clearAuthSession(): void {
   }
   const user = getStoredUser();
   if (user) {
-    window.localStorage.removeItem(`workspace-storage-${user.id}`);
+    // Legacy key from pre-consolidation studio-specific store
+    window.localStorage.removeItem(`studio-specific-storage-${user.id}`);
+    window.localStorage.removeItem(`studio-storage-${user.id}`);
   }
   window.localStorage.removeItem(ACCESS_TOKEN_KEY);
   window.localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);

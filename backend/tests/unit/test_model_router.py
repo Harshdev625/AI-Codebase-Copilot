@@ -40,7 +40,8 @@ def test_chat_success(router):
         mock_client.return_value.post.return_value = mock_response
         result = router.chat("Say hello", context="test context")
 
-    assert result == "Hello, world!"
+    assert result.text == "Hello, world!"
+    assert result.usage["total_tokens"] >= 0
 
 
 def test_chat_success_no_context(router):
@@ -52,7 +53,7 @@ def test_chat_success_no_context(router):
         mock_client.return_value.post.return_value = mock_response
         result = router.chat("Say hi")
 
-    assert result == "Hi!"
+    assert result.text == "Hi!"
 
 
 def test_chat_http_status_error(router):
@@ -98,7 +99,7 @@ def test_chat_with_system_prompt(router):
         mock_client.return_value.post.return_value = mock_response
         result = router.chat("test", system_prompt="You are a custom AI")
 
-    assert result == "Custom answer"
+    assert result.text == "Custom answer"
 
 
 # ─────────────── stream_chat ───────────────
@@ -111,6 +112,7 @@ def test_stream_chat_success(router):
     ]
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.iter_lines.return_value = iter(lines)
     mock_response.raise_for_status = MagicMock()
     mock_response.__enter__ = lambda s: s
@@ -130,6 +132,7 @@ def test_stream_chat_empty_lines(router):
     ]
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.iter_lines.return_value = iter(lines)
     mock_response.raise_for_status = MagicMock()
     mock_response.__enter__ = lambda s: s
@@ -149,6 +152,7 @@ def test_stream_chat_invalid_json_line(router):
     ]
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.iter_lines.return_value = iter(lines)
     mock_response.raise_for_status = MagicMock()
     mock_response.__enter__ = lambda s: s

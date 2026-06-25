@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.rag.embeddings.provider import get_embedding_provider, validate_embedding_dimension
+from app.rag.retrieval.query_signals import infer_query_signals, tech_boost_for_item
 from app.services.qdrant_service import QdrantService
 
 
@@ -73,7 +74,8 @@ def _rerank_candidates(
     lexical: list[dict],
     rankings: list[list[str]],
     is_high_level: bool,
-    patch_chunk_ids: set[str] | None = None
+    patch_chunk_ids: set[str] | None = None,
+    query_signals=None,
 ) -> list[dict]:
     if len(candidates) <= 1:
         return candidates
@@ -100,9 +102,19 @@ def _rerank_candidates(
             overlap = len(query_tokens.intersection(haystack_tokens))
             overlap_score = overlap / max(len(query_tokens), 1)
 
-        docs_boost = 0.08 if is_high_level and _looks_like_docs_path(path) else 0.0
+        docs_boost = 0.0
+        if is_high_level and _looks_like_docs_path(path):
+            if not (query_signals and query_signals.is_tech_specific):
+                docs_boost = 0.08
         is_patch_chunk = item.get("is_patch_chunk") or (patch_chunk_ids and item_id in patch_chunk_ids)
         patch_boost = 0.15 if is_patch_chunk else 0.0
+        tech_boost = 0.0
+        if query_signals is not None:
+            tech_boost = tech_boost_for_item(
+                path=path,
+                language=str(item.get("language") or ""),
+                signals=query_signals,
+            )
 
         final_score = (
             0.55 * rrf_norm.get(item_id, 0.0)
@@ -111,6 +123,7 @@ def _rerank_candidates(
             + 0.10 * overlap_score
             + docs_boost
             + patch_boost
+            + tech_boost
         )
         enriched = dict(item)
         enriched["rerank_score"] = round(final_score, 6)
@@ -172,6 +185,7 @@ def _dense_search_postgres_with_embedding(
     stmt = text(
         f"""
         SELECT id, path, symbol, content, repository_id, repo_id,
+               start_line, end_line, language, chunk_type,
                {score_expression}
         FROM {table_name}
         WHERE repository_id = :repository_id
@@ -227,7 +241,7 @@ def dense_search(session: Session, repository_id: str, query: str, top_k: int = 
     status_clause = "" if patch_id else "AND status = 'ACTIVE'"
     
     stmt = text(
-        f"SELECT id, path, symbol, content, repository_id, repo_id FROM {table_name} WHERE id IN ({placeholders}) {status_clause}"
+        f"SELECT id, path, symbol, content, repository_id, repo_id, start_line, end_line, language, chunk_type FROM {table_name} WHERE id IN ({placeholders}) {status_clause}"
     )
     params = {f"mid{i}": chunk_id for i, chunk_id in enumerate(matched_ids)}
     rows = session.execute(stmt, params).mappings().all()
@@ -286,6 +300,7 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         stmt = text(
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
                    1.0 AS score
             FROM {table_name}
             WHERE repository_id = :repository_id
@@ -300,6 +315,7 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
         stmt = text(
             f"""
             SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
                    ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
             FROM {table_name}
             WHERE repository_id = :repository_id
@@ -323,6 +339,84 @@ def lexical_search(session: Session, repository_id: str, query: str, top_k: int 
     return filtered
 
 
+def path_lexical_search(
+    session: Session,
+    repository_id: str,
+    query: str,
+    top_k: int = 20,
+    scope_paths: list[str] | None = None,
+    patch_id: str | None = None,
+) -> list[dict]:
+    """Lexical search over path + symbol (complements content-only lexical_search)."""
+    if not query.strip():
+        return []
+
+    scope_clause = ""
+    params: dict[str, Any] = {"query": query, "repository_id": repository_id, "top_k": top_k}
+    if patch_id:
+        params["patch_id"] = patch_id
+    if scope_paths:
+        scope_conditions = []
+        for i, path in enumerate(scope_paths):
+            param_key = f"scope_{i}"
+            scope_conditions.append(f"path LIKE :{param_key}")
+            params[param_key] = f"{path}%"
+        scope_clause = f"AND ({' OR '.join(scope_conditions)})"
+
+    bind = getattr(session, "bind", None)
+    dialect = getattr(getattr(bind, "dialect", None), "name", None)
+    is_sqlite = bool(dialect and str(dialect).lower() == "sqlite")
+
+    table_name = "patch_chunks" if patch_id else "code_chunks"
+    status_clause = "AND patch_id = :patch_id" if patch_id else "AND status = 'ACTIVE'"
+
+    if is_sqlite:
+        stmt = text(
+            f"""
+            SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
+                   1.0 AS score
+            FROM {table_name}
+            WHERE repository_id = :repository_id
+              {status_clause}
+              {scope_clause}
+              AND (path LIKE :like_query OR symbol LIKE :like_query)
+            LIMIT :top_k
+            """
+        )
+        params["like_query"] = f"%{query}%"
+    else:
+        stmt = text(
+            f"""
+            SELECT id, path, symbol, content, repository_id, repo_id,
+                   start_line, end_line, language, chunk_type,
+                   ts_rank_cd(
+                     to_tsvector('english', coalesce(path, '') || ' ' || coalesce(symbol, '')),
+                     plainto_tsquery('english', :query)
+                   ) AS score
+            FROM {table_name}
+            WHERE repository_id = :repository_id
+              {status_clause}
+              {scope_clause}
+              AND to_tsvector('english', coalesce(path, '') || ' ' || coalesce(symbol, ''))
+                  @@ plainto_tsquery('english', :query)
+            ORDER BY score DESC
+            LIMIT :top_k
+            """
+        )
+
+    rows = session.execute(stmt, params).mappings()
+    filtered: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        if _is_noisy_path(str(item.get("path", ""))):
+            continue
+        if patch_id:
+            item["is_patch_chunk"] = True
+        filtered.append(item)
+    return filtered
+
+
 HIGH_LEVEL_QUERY_TOKENS = {
     "architecture",
     "overview",
@@ -331,8 +425,13 @@ HIGH_LEVEL_QUERY_TOKENS = {
     "how does",
     "explain",
     "what is",
+    "tell me about",
+    "about the project",
+    "about this project",
+    "about the repo",
     "document",
     "documentation",
+    "project",
 }
 
 DOC_PATH_TOKENS = {
@@ -342,6 +441,8 @@ DOC_PATH_TOKENS = {
     ".md",
     "documentation",
     "architecture",
+    "package.json",
+    "manifest.json",
 }
 
 
@@ -355,7 +456,15 @@ def _looks_like_docs_path(path: str) -> bool:
     return any(token in lower for token in DOC_PATH_TOKENS)
 
 
-def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int = 8, scope_paths: list[str] | None = None, patch_id: str | None = None) -> list[dict]:
+def hybrid_retrieve(
+    session: Session,
+    repository_id: str,
+    query: str,
+    top_k: int = 8,
+    scope_paths: list[str] | None = None,
+    patch_id: str | None = None,
+    intent: str | None = None,
+) -> list[dict]:
     logger.info("retrieval_hybrid - request repository_id=%s top_k=%s patch_id=%s", repository_id, top_k, patch_id)
     candidate_pool = max(top_k, settings.retrieval_rerank_candidate_pool)
     if scope_paths:
@@ -371,6 +480,9 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
 
     dense_base = dense_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
     lexical_base = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths)
+    path_lexical_base = path_lexical_search(
+        session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths
+    )
 
     if patch_id:
         dense_base = [item for item in dense_base if item.get("path") not in excluded_paths]
@@ -380,26 +492,29 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
         lexical_patch = lexical_search(session, repository_id, query, top_k=candidate_pool, scope_paths=scope_paths, patch_id=patch_id)
 
         dense = [*dense_base, *dense_patch]
-        lexical = [*lexical_base, *lexical_patch]
+        lexical = [*lexical_base, *lexical_patch, *path_lexical_base]
 
         dense_ids = [str(item["id"]) for item in dense_base]
         lexical_ids = [str(item["id"]) for item in lexical_base]
+        path_lexical_ids = [str(item["id"]) for item in path_lexical_base]
         patch_dense_ids = [str(item["id"]) for item in dense_patch]
         patch_lexical_ids = [str(item["id"]) for item in lexical_patch]
 
-        rankings = [dense_ids, lexical_ids, patch_dense_ids, patch_lexical_ids]
+        rankings = [dense_ids, lexical_ids, path_lexical_ids, patch_dense_ids, patch_lexical_ids]
         patch_chunk_ids = {str(item["id"]) for item in dense_patch} | {str(item["id"]) for item in lexical_patch}
     else:
         dense = dense_base
-        lexical = lexical_base
+        lexical = [*lexical_base, *path_lexical_base]
         dense_ids = [str(item["id"]) for item in dense]
-        lexical_ids = [str(item["id"]) for item in lexical]
-        rankings = [dense_ids, lexical_ids]
+        lexical_ids = [str(item["id"]) for item in lexical_base]
+        path_lexical_ids = [str(item["id"]) for item in path_lexical_base]
+        rankings = [dense_ids, lexical_ids, path_lexical_ids]
         patch_chunk_ids = set()
 
+    query_signals = infer_query_signals(query, intent=intent)
     extra_rankings: list[list[str]] = []
     is_high_level_query = _is_high_level_query(query)
-    if is_high_level_query:
+    if is_high_level_query and not query_signals.is_tech_specific:
         doc_candidates = [*lexical, *dense]
         doc_ids = [str(item["id"]) for item in doc_candidates if _looks_like_docs_path(str(item.get("path", "")))]
         if doc_ids:
@@ -418,7 +533,8 @@ def hybrid_retrieve(session: Session, repository_id: str, query: str, top_k: int
             lexical=lexical,
             rankings=rankings,
             is_high_level=is_high_level_query,
-            patch_chunk_ids=patch_chunk_ids
+            patch_chunk_ids=patch_chunk_ids,
+            query_signals=query_signals,
         )
     else:
         ordered_items = candidate_items
@@ -454,69 +570,4 @@ def _federation_score(item: dict[str, Any], query: str) -> float:
     hit_tokens = _tokenize_query(f"{path} {symbol} {content}")
     overlap = len(q_tokens.intersection(hit_tokens)) / max(len(q_tokens), 1)
     return base + (0.12 * overlap)
-
-
-def project_federated_retrieve(
-    session: Session,
-    *,
-    repository_ids: list[str],
-    query: str,
-    top_k: int = 10,
-) -> list[dict]:
-    logger.info("project_federated_retrieve - repos=%s query=%s", repository_ids, query)
-    all_candidates = {}
-    global_dense_scores = {}
-    global_lexical_scores = {}
-    
-    for repo_id in repository_ids:
-        dense = dense_search(session, repo_id, query, top_k=top_k * 2)
-        lexical = lexical_search(session, repo_id, query, top_k=top_k * 2)
-        
-        for item in [*dense, *lexical]:
-            all_candidates[str(item["id"])] = item
-            
-        # Normalize dense scores for this repo
-        if dense:
-            d_scores = {str(item["id"]): float(item.get("score") or 0.0) for item in dense}
-            min_d = min(d_scores.values())
-            max_d = max(d_scores.values())
-            denom = max_d - min_d
-            for cid, val in d_scores.items():
-                global_dense_scores[cid] = (val - min_d) / denom if denom > 0.0 else 1.0
-                
-        # Normalize lexical scores for this repo
-        if lexical:
-            l_scores = {str(item["id"]): float(item.get("score") or 0.0) for item in lexical}
-            min_l = min(l_scores.values())
-            max_l = max(l_scores.values())
-            denom = max_l - min_l
-            for cid, val in l_scores.items():
-                global_lexical_scores[cid] = (val - min_l) / denom if denom > 0.0 else 1.0
-                
-    # Sort candidates by normalized scores to get rankings for RRF
-    dense_ranking = sorted(global_dense_scores.keys(), key=lambda k: global_dense_scores[k], reverse=True)
-    lexical_ranking = sorted(global_lexical_scores.keys(), key=lambda k: global_lexical_scores[k], reverse=True)
-    
-    rankings = [dense_ranking, lexical_ranking]
-    merged_ids = reciprocal_rank_fusion(rankings)[:top_k * 2]
-    
-    candidate_items = [all_candidates[item_id] for item_id in merged_ids if item_id in all_candidates]
-    
-    # Convert lists of candidate items for dense and lexical into list[dict]
-    dense_list = [all_candidates[cid] for cid in dense_ranking if cid in all_candidates]
-    lexical_list = [all_candidates[cid] for cid in lexical_ranking if cid in all_candidates]
-    
-    if settings.retrieval_rerank_enabled:
-        ordered_items = _rerank_candidates(
-            query=query,
-            candidates=candidate_items,
-            dense=dense_list,
-            lexical=lexical_list,
-            rankings=rankings,
-            is_high_level=_is_high_level_query(query)
-        )
-    else:
-        ordered_items = candidate_items
-        
-    return ordered_items[:top_k]
 

@@ -15,13 +15,19 @@ def test_add_repository(client: TestClient, auth_headers, db_session):
     assert response.json()["data"]["repo_id"] == "test-repo"
     assert response.json()["data"]["remote_url"] == "https://github.com/test/repo"
 
-def test_list_repositories(client: TestClient, auth_headers):
-    # Setup - rely on previous test or create one
+def test_list_repositories_returns_created_repo(client: TestClient, auth_headers):
+    create = client.post(
+        "/v1/repositories",
+        headers=auth_headers,
+        json={"repo_id": "list-test-repo", "remote_url": "https://github.com/test/list"},
+    )
+    assert create.status_code == 201
+    repo_id = create.json()["data"]["id"]
+
     response = client.get("/v1/repositories", headers=auth_headers)
     assert response.status_code == 200
-    data = response.json()
-    assert "data" in data
-    assert "items" in data["data"]
+    items = response.json()["data"]["items"]
+    assert any(item["id"] == repo_id for item in items)
 
 def test_add_duplicate_repository(client: TestClient, auth_headers):
     # Add first

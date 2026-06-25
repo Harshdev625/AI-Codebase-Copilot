@@ -30,4 +30,18 @@ export const authService = {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
   },
+
+  getPendingInvites: async (): Promise<
+    Array<{
+      id: string;
+      kind: string;
+      email: string;
+      expires_at: string | null;
+      created_at: string | null;
+      register_path: string;
+      has_account?: boolean;
+    }>
+  > => {
+    return apiClient("/v1/auth/me/pending-invites", { method: "GET" });
+  },
 };

@@ -293,14 +293,21 @@ All require `ADMIN` role.
 
 ## Disabled endpoints (410 Gone)
 
-Project-scoped multi-repo APIs return `410`:
+Project-scoped multi-repo **CRUD** APIs return `410`:
 
 - `GET/POST /v1/projects`
 - `DELETE /v1/projects/{project_id}`
 - `GET/POST /v1/projects/{project_id}/repositories`
-- `POST /v1/projects/{project_id}/retrieve`
 
-Use per-repository endpoints instead.
+**Still active:** `POST /v1/projects/{project_id}/retrieve` (server-side federated retrieval; reserved for future use).
+
+### Multi-repo federation model
+
+- **Repositories** are the indexed unit (`POST /v1/repositories`, per-repo index jobs).
+- **Studio Federated Scope** (frontend) selects multiple repository IDs and runs parallel `POST /v1/repositories/{id}/retrieve` calls client-side.
+- There is no dashboard “project grouping” entity in the simplified schema; use repository-centric navigation instead.
+
+Use per-repository endpoints for CRUD and indexing.
 
 ---
 

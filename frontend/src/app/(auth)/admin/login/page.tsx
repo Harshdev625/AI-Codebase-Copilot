@@ -1,11 +1,7 @@
-"use client";
+'use client';
 
-import { AuthenticationAdminLoginForm } from "@/features/auth/components/auth-admin-login-form";
+import { AuthForm } from '@/features/auth/components/auth-form';
 
 export default function AdminLoginPage() {
-  return (
-    <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <AuthenticationAdminLoginForm />
-    </div>
-  );
+  return <AuthForm mode="admin-login" />;
 }

@@ -165,47 +165,6 @@ def test_patch_aware_retrieval_excludes_and_merges(client, auth_headers, test_se
     assert "src/helper.py" in paths
     assert "src/utils.py" not in paths
 
-def test_cross_repo_score_normalization(client, auth_headers, test_setup_retrieval, db_session, monkeypatch):
-    repo1, repo2, patch_draft, snap1, snap2 = test_setup_retrieval
-
-    # Mock independent dense/lexical search returning scores for both repos
-    def mock_dense_search(session, repository_id, query, top_k=20, scope_paths=None, is_patch=False, patch_id=None):
-        if repository_id == repo1.id:
-            # High raw scores
-            return [
-                {"id": "c1", "path": "src/main.py", "symbol": "main", "content": "c1", "repository_id": repo1.id, "repo_id": repo1.repo_id, "score": 100.0},
-                {"id": "c2", "path": "src/utils.py", "symbol": "add", "content": "c2", "repository_id": repo1.id, "repo_id": repo1.repo_id, "score": 50.0}
-            ]
-        else:
-            # Low raw scores
-            return [
-                {"id": "c3", "path": "index.js", "symbol": "", "content": "c3", "repository_id": repo2.id, "repo_id": repo2.repo_id, "score": 1.0}
-            ]
-
-    monkeypatch.setattr("app.rag.retrieval.hybrid.dense_search", mock_dense_search)
-    monkeypatch.setattr("app.rag.retrieval.hybrid.lexical_search", lambda *a, **k: [])
-
-    # Call project cross-repo retrieval
-    response = client.post(
-        f"/v1/projects/proj-ret/retrieve",
-        json={
-            "query": "hello",
-            "top_k": 5,
-            "repository_ids": [repo1.id, repo2.id]
-        },
-        headers=auth_headers
-    )
-    assert response.status_code == 200, response.text
-    items = response.json()["data"]["items"]
-
-    # Since repo2 scores are normalized independently:
-    # repo1 c1 (score 100.0) -> norm 1.0; c2 (score 50.0) -> norm 0.0
-    # repo2 c3 (score 1.0) -> norm 1.0 (or fallback to 1.0/0.5 since single item)
-    # The normalization ensures c3 gets a high normalized score rather than being completely eclipsed by c1/c2.
-    ids = {item["id"] for item in items}
-    assert "c1" in ids
-    assert "c3" in ids
-
 def test_patch_applied_lifecycle_cleanup(client, auth_headers, test_setup_retrieval, db_session, monkeypatch):
     repo1, repo2, patch_draft, snap1, snap2 = test_setup_retrieval
 

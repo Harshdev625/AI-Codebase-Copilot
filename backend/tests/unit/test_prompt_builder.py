@@ -2,7 +2,7 @@ from app.llm.prompt_builder import build_context_packet, BASE_SYSTEM_PROMPT
 
 def test_build_context_packet_empty():
     context, index = build_context_packet(query="test", snippets=[])
-    assert "Current user question: test" in context
+    assert context == ""
     assert len(index) == 0
 
 def test_build_context_packet_with_history():
@@ -15,7 +15,7 @@ def test_build_context_packet_with_history():
     assert "- User: Hello" in context
     assert "- Assistant: Hi there" in context
     assert "- User: How are you?" in context
-    assert "Current user question: what is your name" in context
+    assert "Current user question:" not in context
     assert len(index) == 0
 
 def test_build_context_packet_with_snippets():

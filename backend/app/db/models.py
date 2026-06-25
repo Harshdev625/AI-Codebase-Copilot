@@ -32,6 +32,34 @@ class User(Base):
 
     repositories: Mapped[list["Repository"]] = relationship("Repository", back_populates="owner", cascade="all, delete-orphan")
     chat_sessions: Mapped[list["ChatSession"]] = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
+    admin_invites_created: Mapped[list["AdminInvite"]] = relationship(
+        "AdminInvite",
+        back_populates="created_by",
+        cascade="all, delete-orphan",
+        foreign_keys="AdminInvite.created_by_user_id",
+    )
+
+
+class AdminInvite(Base):
+    __tablename__ = "admin_invites"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
+    created_by_user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    created_by: Mapped["User"] = relationship(
+        "User",
+        back_populates="admin_invites_created",
+        foreign_keys=[created_by_user_id],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +85,8 @@ class Repository(Base):
     #   IMPORTANT_ONLY – keep only pinned and release snapshots
     retain_snapshots_mode: Mapped[str] = mapped_column(String, nullable=False, default="LAST_N")
     retain_snapshot_count: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
@@ -351,10 +381,15 @@ class ChatSession(Base):
     session_mode: Mapped[str] = mapped_column(String, nullable=False, server_default="ASK")
     is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false", default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
+    session_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONBType(), nullable=False, default=dict
+    )
 
     user: Mapped["User"] = relationship("User", back_populates="chat_sessions")
     repository: Mapped["Repository"] = relationship("Repository", back_populates="chat_sessions")
@@ -374,6 +409,48 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.current_timestamp())
 
     chat_session: Mapped["ChatSession"] = relationship("ChatSession", back_populates="messages")
+
+
+# ---------------------------------------------------------------------------
+# Change Sets (Plan → Act workflow)
+# ---------------------------------------------------------------------------
+
+class ChangeSet(Base):
+    __tablename__ = "change_sets"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    repository_id: Mapped[str] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    chat_session_id: Mapped[str] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False, default="PLANNING")
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSONBType(), nullable=False, default=dict)
+    plan_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    patch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("act_patch_drafts.id", ondelete="SET NULL"), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+
+    repository: Mapped["Repository"] = relationship("Repository")
+    chat_session: Mapped["ChatSession"] = relationship("ChatSession")
+    patch: Mapped["ActPatchDraft | None"] = relationship("ActPatchDraft", foreign_keys=[patch_id])
 
 
 # ---------------------------------------------------------------------------

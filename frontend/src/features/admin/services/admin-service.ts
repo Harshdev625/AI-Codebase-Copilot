@@ -63,6 +63,18 @@ export interface RecentActivityResponse {
   recent_users: PaginatedData<AdminUser>;
 }
 
+export interface AdminInvite {
+  id: string;
+  email: string;
+  status: 'pending' | 'consumed' | 'expired';
+  expires_at: string;
+  consumed_at?: string | null;
+  created_at: string;
+  created_by_user_id: string;
+  invite_path?: string | null;
+  invite_token?: string | null;
+}
+
 export const adminService = {
   metrics: async (): Promise<SystemMetrics> => {
     return apiClient<SystemMetrics>("/v1/admin/system-metrics", { method: "GET" });
@@ -70,14 +82,14 @@ export const adminService = {
   health: async (): Promise<ServiceHealth[]> => {
     return apiClient<ServiceHealth[]>("/v1/admin/service-health", { method: "GET" });
   },
-  users: async (): Promise<PaginatedData<AdminUser>> => {
-    return apiClient<PaginatedData<AdminUser>>("/v1/admin/users", { method: "GET" });
+  users: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<AdminUser>> => {
+    return apiClient<PaginatedData<AdminUser>>("/v1/admin/users", { method: "GET", params });
   },
-  repositories: async (): Promise<PaginatedData<Repository>> => {
-    return apiClient<PaginatedData<Repository>>("/v1/admin/repositories", { method: "GET" });
+  repositories: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<Repository>> => {
+    return apiClient<PaginatedData<Repository>>("/v1/admin/repositories", { method: "GET", params });
   },
-  indexingStatus: async (): Promise<PaginatedData<IndexingJob>> => {
-    return apiClient<PaginatedData<IndexingJob>>("/v1/admin/indexing-status", { method: "GET" });
+  indexingStatus: async (params?: { limit?: number; offset?: number }): Promise<PaginatedData<IndexingJob>> => {
+    return apiClient<PaginatedData<IndexingJob>>("/v1/admin/indexing-status", { method: "GET", params });
   },
   updateUserRole: async (userId: string, role: "USER" | "ADMIN"): Promise<AdminUser> => {
     return apiClient<AdminUser>(`/v1/admin/users/${userId}/role`, {
@@ -101,5 +113,14 @@ export const adminService = {
   },
   recentActivity: async (): Promise<RecentActivityResponse> => {
     return apiClient<RecentActivityResponse>("/v1/admin/recent-activity", { method: "GET" });
+  },
+  listInvites: async (): Promise<AdminInvite[]> => {
+    return apiClient<AdminInvite[]>("/v1/admin/invites", { method: "GET" });
+  },
+  createInvite: async (payload: { email: string; expires_in_hours?: number }): Promise<AdminInvite> => {
+    return apiClient<AdminInvite>("/v1/admin/invites", { method: "POST", body: payload });
+  },
+  revokeInvite: async (inviteId: string): Promise<{ revoked: boolean }> => {
+    return apiClient<{ revoked: boolean }>(`/v1/admin/invites/${inviteId}`, { method: "DELETE" });
   },
 };

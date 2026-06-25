@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_BACKEND_ROOT = _BACKEND_ENV_FILE.parent
 
 
 class Settings(BaseSettings):
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     ollama_chat_model: str = "tinyllama:latest"
     ollama_timeout_seconds: float = 600.0
     ollama_chat_timeout_seconds: float = 15.0
+    ollama_plan_timeout_seconds: float = 240.0
+    ollama_act_timeout_seconds: float = 600.0
     ollama_embedding_timeout_seconds: float = 600.0
 
     qdrant_host: str = "localhost"
@@ -92,8 +95,8 @@ class Settings(BaseSettings):
     retrieval_rerank_candidate_pool: int = 32
     retrieval_cache_ttl_seconds: int = 120
     retrieval_max_chunk_chars: int = 1400
-    retrieval_context_char_budget: int = 12_000
-    retrieval_min_token_overlap: int = 1
+    retrieval_context_char_budget: int = 7_000
+    retrieval_min_token_overlap: int = 2
 
     jwt_secret_key: str = "change-me-in-production"
     jwt_issuer: str = "ai-codebase-copilot"
@@ -104,8 +107,11 @@ class Settings(BaseSettings):
 
     @property
     def repo_cache_path(self) -> str:
-        """Alias for repo_cache_dir used by IndexingService._cache_root()."""
-        return self.repo_cache_dir
+        """Absolute on-disk directory for cloned repositories."""
+        cache = Path(self.repo_cache_dir)
+        if cache.is_absolute():
+            return str(cache.resolve())
+        return str((_BACKEND_ROOT / cache).resolve())
 
     @property
     def postgres_dsn(self) -> str:

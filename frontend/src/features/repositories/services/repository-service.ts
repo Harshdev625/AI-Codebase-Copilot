@@ -11,6 +11,8 @@ import type {
   SnapshotDiffResponse,
   TreeResponse,
   RetrievalItem,
+  WorkspaceSearchPayload,
+  WorkspaceSearchResponse,
 } from "@/features/repositories/types/repository-types";
 
 export const repositoryService = {
@@ -25,6 +27,12 @@ export const repositoryService = {
     return apiClient<RepositoryRecord>("/v1/repositories", {
       method: "POST",
       body: payload,
+    });
+  },
+
+  deleteRepository(repositoryId: string): Promise<{ deleted: boolean }> {
+    return apiClient<{ deleted: boolean }>(`/v1/repositories/${repositoryId}`, {
+      method: "DELETE",
     });
   },
 
@@ -76,12 +84,15 @@ export const repositoryService = {
     repositoryId: string,
     path?: string,
     snapshotId?: string,
-    patchId?: string
+    patchId?: string,
+    cursor?: string,
+    limit = 100,
   ): Promise<TreeResponse> {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { limit: String(limit) };
     if (path) params.path = path;
     if (snapshotId) params.snapshot_id = snapshotId;
     if (patchId) params.patch_id = patchId;
+    if (cursor) params.cursor = cursor;
 
     return apiClient<TreeResponse>(`/v1/repositories/${repositoryId}/tree`, {
       method: "GET",
@@ -115,16 +126,6 @@ export const repositoryService = {
     });
   },
 
-  retrieveProject(
-    projectId: string,
-    payload: { query: string; repository_ids: string[]; top_k?: number }
-  ): Promise<{ items: RetrievalItem[] }> {
-    return apiClient<{ items: RetrievalItem[] }>(`/v1/projects/${projectId}/retrieve`, {
-      method: "POST",
-      body: payload,
-    });
-  },
-
   retrieveRepository(
     repositoryId: string,
     payload: { query: string; top_k?: number }
@@ -133,6 +134,30 @@ export const repositoryService = {
       method: "POST",
       body: payload,
     });
+  },
+
+  searchWorkspace(
+    repositoryId: string,
+    payload: WorkspaceSearchPayload,
+  ): Promise<WorkspaceSearchResponse> {
+    return apiClient<WorkspaceSearchResponse>(`/v1/repositories/${repositoryId}/search`, {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  searchFiles(
+    repositoryId: string,
+    q: string,
+    limit = 20,
+  ): Promise<{ items: Array<{ path: string; type: string; extension?: string | null }> }> {
+    return apiClient<{ items: Array<{ path: string; type: string; extension?: string | null }> }>(
+      `/v1/repositories/${repositoryId}/files/search`,
+      {
+        method: "GET",
+        params: { q, limit: String(limit) },
+      },
+    );
   },
 
   getContextTokens(repositoryId: string, payload: { scope_paths?: string[]; attached_files?: string[]; retrieval_query?: string }): Promise<{ attached_tokens: number; scope_tokens: number; retrieval_tokens: number; total_tokens: number; repository_total_tokens: number; max_tokens: number }> {
@@ -145,6 +170,25 @@ export const repositoryService = {
   getInsights(repositoryId: string): Promise<any> {
     return apiClient<any>(`/v1/repositories/${repositoryId}/insights`, {
       method: "GET",
+    });
+  },
+
+  listSkippedFiles(
+    repositoryId: string,
+    params?: { limit?: number; offset?: number; reason?: string },
+  ): Promise<{
+    items: Array<{ path: string; skip_reason: string; size_bytes?: number | null; extension?: string | null }>;
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const query: Record<string, string> = {};
+    if (params?.limit != null) query.limit = String(params.limit);
+    if (params?.offset != null) query.offset = String(params.offset);
+    if (params?.reason) query.reason = params.reason;
+    return apiClient(`/v1/repositories/${repositoryId}/files/skipped`, {
+      method: "GET",
+      params: query,
     });
   },
 

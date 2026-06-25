@@ -38,9 +38,12 @@ describe("DashboardStatsGrid", () => {
     const mockSummary = {
       metrics: {
         indexed_chunks_count: 100,
+        indexed_files_count: 50,
         repositories_count: 5,
         chat_count: 20,
+        active_indexing_jobs: 0,
       },
+      indexing_summary: { ready: 4, indexing: 1, failed: 0, idle: 0 },
     };
 
     (useDashboard as jest.Mock).mockReturnValue({

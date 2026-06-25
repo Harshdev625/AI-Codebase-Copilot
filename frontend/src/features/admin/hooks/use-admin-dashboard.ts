@@ -34,7 +34,7 @@ export function useAdminDashboard() {
   const repositoriesQuery = useQuery({
     queryKey: adminKeys.repositories,
     queryFn: async () => {
-      const data = await adminService.repositories();
+      const data = await adminService.repositories({ limit: 100, offset: 0 });
       return data.items;
     },
   });
@@ -42,7 +42,7 @@ export function useAdminDashboard() {
   const indexingQuery = useQuery({
     queryKey: adminKeys.indexing,
     queryFn: async () => {
-      const data = await adminService.indexingStatus();
+      const data = await adminService.indexingStatus({ limit: 100, offset: 0 });
       return data.items;
     },
   });

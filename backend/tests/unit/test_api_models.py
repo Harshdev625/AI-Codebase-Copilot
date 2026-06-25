@@ -9,7 +9,6 @@ from app.models.api_models import (
     AuthLoginRequest,
     AuthRegisterRequest,
     ChatRequest,
-    CreateProjectRequest,
     IndexRequest,
 )
 
@@ -32,6 +31,11 @@ def test_index_request_rejects_invalid_branch() -> None:
 def test_chat_request_valid() -> None:
     req = ChatRequest(repo_id="repo1", query="Where is auth?")
     assert req.repo_id == "repo1"
+
+
+def test_chat_request_accepts_display_query() -> None:
+    req = ChatRequest(repo_id="repo1", query="@file.ts explain", display_query="explain")
+    assert req.display_query == "explain"
 
 
 def test_chat_request_rejects_short_query() -> None:
@@ -62,11 +66,6 @@ def test_auth_admin_register_requires_secret() -> None:
 def test_auth_login_accepts_minimal_password() -> None:
     req = AuthLoginRequest(email="dev@example.com", password="x")
     assert req.password == "x"
-
-
-def test_create_project_request_limits_name_length() -> None:
-    with pytest.raises(ValidationError):
-        CreateProjectRequest(name="a")
 
 
 def test_add_repository_requires_source() -> None:

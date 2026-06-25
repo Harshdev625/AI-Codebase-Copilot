@@ -1,7 +1,6 @@
-from __future__ import annotations
-
 import logging
 import re
+import time
 from typing import Any
 
 from app.graph.state import CopilotState
@@ -68,9 +67,13 @@ def reasoning_node(state: CopilotState) -> CopilotState:
     trace.append(
         {
             "node": "reasoning",
-            "intent": intent,
-            "retrieved_count": len(retrieved),
-            "confidence": verification["confidence"],
+            "label": f"Reasoning (confidence {verification['confidence']:.0%})",
+            "ts": time.time(),
+            "detail": {
+                "intent": intent,
+                "retrieved_count": len(retrieved),
+                "confidence": verification["confidence"],
+            },
         }
     )
 

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.repository_cache import normalize_repo_path, repository_cache_dir
 from app.db.database import SessionLocal
 from app.queues.indexing_queue import enqueue_indexing_job
 from app.services.indexing_service import IndexingService
@@ -105,9 +106,14 @@ def get_repositories_for_user(
                 WHERE ij.repository_id = r.id
                 ORDER BY ij.created_at DESC
                 LIMIT 1
-              ) AS latest_job_stats
+              ) AS latest_job_stats,
+              (
+                SELECT COUNT(*)
+                FROM code_chunks cc
+                WHERE cc.repository_id = r.id
+              ) AS latest_indexed_chunks
             FROM repositories r
-            WHERE r.owner_user_id = :user_id
+            WHERE r.owner_user_id = :user_id AND COALESCE(r.is_deleted, false) = false
             ORDER BY r.created_at DESC
             {pagination_sql}
             """
@@ -131,8 +137,8 @@ def add_repository_for_user(
         session.execute(
             text(
                 """
-                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch, retain_snapshots_mode, retain_snapshot_count)
-                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch, 'LAST_N', 20)
+                INSERT INTO repositories (id, owner_user_id, repo_id, remote_url, local_path, default_branch, is_deleted, retain_snapshots_mode, retain_snapshot_count)
+                VALUES (:id, :owner_user_id, :repo_id, :remote_url, :local_path, :default_branch, :is_deleted, 'LAST_N', 20)
                 """
             ),
             {
@@ -142,6 +148,7 @@ def add_repository_for_user(
                 "remote_url": remote_url,
                 "local_path": local_path,
                 "default_branch": default_branch,
+                "is_deleted": False,
             },
         )
         session.commit()
@@ -179,7 +186,7 @@ def queue_repository_indexing(
 ) -> dict[str, str]:
     repository_db_id = str(repository_row["id"])
     effective_repo_id = str(repository_row.get("repo_id") or repository_row["id"])
-    effective_repo_path = repo_path or repository_row.get("local_path")
+    effective_repo_path = normalize_repo_path(repo_path or repository_row.get("local_path"))
     effective_repo_url = repo_url or repository_row.get("remote_url")
     effective_repo_ref = repo_ref or repository_row.get("default_branch") or "main"
     normalized_commit = str(commit_sha or "local-working-copy").strip()[:80] or "local-working-copy"
@@ -424,6 +431,7 @@ async def trigger_repository_indexing(
         )
 
         if repository_db_id is not None and indexing_job_id is not None:
+            msg = f"Indexed {total} new chunks" if total > 0 else "Index up to date (no new changes)"
             db.execute(
                 text(
                     f"""
@@ -432,7 +440,7 @@ async def trigger_repository_indexing(
                     WHERE id = :id
                     """
                 ),
-                {"id": indexing_job_id, "message": f"Indexed {total} chunks"},
+                {"id": indexing_job_id, "message": msg},
             )
             db.commit()
             logger.info(
@@ -494,8 +502,10 @@ def get_index_job_progress(session: Session, *, indexing_job_id: str, user_id: s
     if not isinstance(stats, dict):
         stats = {}
 
+    started_at = row.get("started_at")
     return {
         "indexing_job_id": str(row.get("id")),
+        "repository_id": str(row.get("repository_id") or ""),
         "job_status": str(row.get("status") or "pending"),
         "message": str(row.get("message") or "Indexing in progress..."),
         "stats": stats,
@@ -504,6 +514,9 @@ def get_index_job_progress(session: Session, *, indexing_job_id: str, user_id: s
         "percentage": int(stats.get("percentage") or 0),
         "current_file": stats.get("current_file"),
         "eta_seconds": stats.get("eta_seconds"),
+        "stage_timings": stats.get("stage_timings") or {},
+        "current_stage": stats.get("current_stage"),
+        "started_at": started_at.isoformat() if started_at else None,
     }
 
 
@@ -737,3 +750,80 @@ def get_repository_insights(session: Session, repository_id: str) -> dict[str, A
         "latest_commit": latest_commit_sha,
         "indexing_duration_seconds": indexing_duration
     }
+
+
+def list_skipped_repository_files(
+    session: Session,
+    repository_id: str,
+    *,
+    limit: int = 200,
+    offset: int = 0,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Return skipped files with paths and skip reasons for the context panel."""
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+
+    params: dict[str, Any] = {"rid": repository_id, "limit": limit, "offset": offset}
+    reason_filter = ""
+    if reason:
+        reason_filter = "AND skip_reason = :reason"
+        params["reason"] = reason
+
+    rows = session.execute(
+        text(
+            f"""
+            SELECT path, skip_reason, size_bytes, extension
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'SKIPPED'
+            {reason_filter}
+            ORDER BY path ASC
+            LIMIT :limit OFFSET :offset
+            """
+        ),
+        params,
+    ).mappings().all()
+
+    total_row = session.execute(
+        text(
+            f"""
+            SELECT COUNT(*) as total
+            FROM repository_files
+            WHERE repository_id = :rid AND status = 'SKIPPED'
+            {reason_filter}
+            """
+        ),
+        params,
+    ).mappings().first()
+
+    items = [
+        {
+            "path": str(r["path"]),
+            "skip_reason": r.get("skip_reason") or "UNKNOWN",
+            "size_bytes": r.get("size_bytes"),
+            "extension": r.get("extension"),
+        }
+        for r in rows
+    ]
+    return {
+        "items": items,
+        "total": int(total_row["total"] or 0) if total_row else 0,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def soft_delete_repository(session: Session, *, repository_id: str, user_id: str) -> None:
+    is_sqlite = _is_sqlite_session(session)
+    timestamp_sql = _timestamp_sql(sqlite=is_sqlite)
+    session.execute(
+        text(
+            f"""
+            UPDATE repositories
+            SET is_deleted = true, updated_at = {timestamp_sql}
+            WHERE id = :id AND owner_user_id = :user_id
+            """
+        ),
+        {"id": repository_id, "user_id": user_id},
+    )
+    session.commit()

@@ -4,7 +4,6 @@ from typing import Any, Literal, TypedDict
 class CopilotState(TypedDict, total=False):
     repo_id: str
     repository_id: str
-    project_id: str
     query: str
     intent: Literal["search", "debug", "refactor", "docs", "tool", "patch_generation"]
     retrieved_context: list[dict[str, Any]]

@@ -12,7 +12,8 @@ export interface RegisterPayload {
 }
 
 export interface AdminRegisterPayload extends RegisterPayload {
-  admin_secret_key: string;
+  admin_secret_key?: string;
+  invite_token?: string;
 }
 
 export interface AuthTokenResponse {

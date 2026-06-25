@@ -55,7 +55,11 @@ export const chatService = {
     });
   },
 
-  updateSession(sessionId: string, payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean }): Promise<ChatSession> {
+  getSession(sessionId: string): Promise<ChatSession> {
+    return apiClient<ChatSession>(`/v1/chat/sessions/${sessionId}`);
+  },
+
+  updateSession(sessionId: string, payload: { session_title?: string; is_pinned?: boolean; is_archived?: boolean; session_mode?: string; metadata?: Record<string, unknown> }): Promise<ChatSession> {
     return apiClient<ChatSession>(`/v1/chat/sessions/${sessionId}`, {
       method: "PATCH",
       body: payload,

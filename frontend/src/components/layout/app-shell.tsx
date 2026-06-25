@@ -1,26 +1,28 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { TopNavbar } from "@/components/layout/top-navbar";
+import { useLogout } from "@/features/auth/hooks/use-auth";
 import { useAuthStore } from "@/store/auth-store";
 import { cn } from "@/lib/utils";
+import { DASHBOARD_CONTAINER_CLASS } from "./nav-tokens";
 
 interface AppShellProps {
   title: string;
   children: React.ReactNode;
-  /** fullBleed — no padding wrapper, used for Chat full-viewport layout */
-  variant?: "default" | "fullBleed" | "workspace";
+  /** studio — full-viewport layout without TopNavbar (used by /studio) */
+  variant?: "default" | "fullBleed" | "studio";
 }
 
 export function AppShell({ title, children, variant = "default" }: AppShellProps): React.JSX.Element {
-  const { user, logout } = useAuthStore();
-  const router = useRouter();
+  const { user } = useAuthStore();
+  const pathname = usePathname();
+  const logout = useLogout();
 
   const signOut = React.useCallback(() => {
-    logout();
-    router.push("/login");
-  }, [logout, router]);
+    logout(pathname.startsWith("/admin") ? "admin" : "user");
+  }, [logout, pathname]);
 
   return (
     <div className="flex h-[100dvh] w-full overflow-hidden bg-background transition-colors duration-300">
@@ -33,12 +35,24 @@ export function AppShell({ title, children, variant = "default" }: AppShellProps
       {/* Main content area */}
       <div className="relative z-10 flex flex-1 flex-col overflow-hidden">
         {/* Top Navigation */}
-        {variant !== "workspace" && <TopNavbar sectionTitle={title} userEmail={user?.email} onSignOut={signOut} />}
+        {variant !== "studio" && (
+          <TopNavbar
+            sectionTitle={title}
+            userEmail={user?.email}
+            onSignOut={signOut}
+            variant={pathname.startsWith("/admin") ? "admin" : "user"}
+          />
+        )}
 
-        {/* Page content */}
-        <main className={cn("flex-1 overflow-auto scroll-smooth custom-scrollbar", variant === "default" && "p-0")}>
+        {/* Page content — min-h-0 + overflow-y-auto so flex child can scroll inside 100dvh shell */}
+        <main
+          className={cn(
+            "flex-1 min-h-0 scroll-smooth custom-scrollbar",
+            variant === "studio" ? "overflow-hidden" : "overflow-y-auto p-0",
+          )}
+        >
           {variant === "default" ? (
-            <div className="flex min-h-full flex-col p-4 sm:p-6 md:p-8 max-w-7xl mx-auto w-full">
+            <div className={cn("flex min-h-full flex-col", DASHBOARD_CONTAINER_CLASS)}>
               {children}
             </div>
           ) : (

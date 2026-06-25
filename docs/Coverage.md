@@ -48,7 +48,7 @@ Thresholds in `jest.config.js` (statements 72%, lines 73%, branches 54%, functio
 
 ### Excluded from coverage collection
 
-Studio shell, workspace shell, explorer tree, several repository components, and layout shells are temporarily excluded. See `collectCoverageFrom` in `frontend/jest.config.js`.
+Studio shell, explorer tree, several repository components, and layout shells are temporarily excluded. See `collectCoverageFrom` in `frontend/jest.config.js`.
 
 ---
 
@@ -85,7 +85,7 @@ cd frontend && npm run test:coverage && npm run build
 
 | Area | Status |
 |---|---|
-| Playwright E2E (`engineering_workspace.spec.ts`) | Spec exists; not in CI |
-| Studio / workspace UI shells | Excluded from Jest coverage |
+| Playwright E2E (`engineering_studio.spec.ts`) | Spec exists; not in CI |
+| Studio UI shell and panels | Excluded from Jest coverage |
 | LangGraph stochastic routing | Unit-tested at node level; no eval suite |
 | Live integration API tests | Opt-in via `RUN_LIVE_INTEGRATION_TESTS=1` |

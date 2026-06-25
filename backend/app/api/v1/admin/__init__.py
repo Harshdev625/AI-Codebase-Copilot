@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+
 import httpx
 import redis
 
@@ -32,6 +34,25 @@ class UserActiveUpdate(BaseModel):
 
     """Request to activate/deactivate user."""
     is_active: bool
+
+
+class AdminInviteCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    email: str = Field(..., min_length=3, max_length=320)
+    expires_in_hours: int = Field(default=72, ge=1, le=168)
+
+
+class AdminInviteResponse(BaseModel):
+    id: str
+    email: str
+    status: str
+    expires_at: str
+    consumed_at: str | None = None
+    created_at: str
+    created_by_user_id: str
+    invite_path: str | None = None
+    invite_token: str | None = None
 
 
 @router.get("/admin/users")
@@ -67,6 +88,92 @@ def admin_users(
         limit=pagination.limit,
         offset=pagination.offset,
     )
+
+
+@router.get("/admin/invites")
+def admin_list_invites(
+    current_user: dict = Depends(require_roles({ROLE_ADMIN})),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(current_user, {"admin:read"})
+    from app.db.models import AdminInvite
+
+    rows = (
+        session.query(AdminInvite)
+        .order_by(AdminInvite.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    items: list[dict] = []
+    for row in rows:
+        expires_at = row.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if row.consumed_at is not None:
+            status = "consumed"
+        elif expires_at < now:
+            status = "expired"
+        else:
+            status = "pending"
+        items.append(
+            {
+                "id": row.id,
+                "email": row.email,
+                "status": status,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                "consumed_at": row.consumed_at.isoformat() if row.consumed_at else None,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "created_by_user_id": row.created_by_user_id,
+            }
+        )
+    return success_response(items)
+
+
+@router.post("/admin/invites", status_code=201)
+def admin_create_invite(
+    req: AdminInviteCreateRequest,
+    current_user: dict = Depends(require_roles({ROLE_ADMIN})),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(current_user, {"admin:write"})
+    from app.services.admin_invite_service import create_admin_invite
+
+    invite, plaintext_token = create_admin_invite(
+        session,
+        email=req.email,
+        created_by_user_id=str(current_user["id"]),
+        expires_in_hours=req.expires_in_hours,
+    )
+    invite_path = f"/admin/register?invite={plaintext_token}&email={invite.email}"
+    return success_response(
+        {
+            "id": invite.id,
+            "email": invite.email,
+            "status": "pending",
+            "expires_at": invite.expires_at.isoformat(),
+            "consumed_at": None,
+            "created_at": invite.created_at.isoformat(),
+            "created_by_user_id": invite.created_by_user_id,
+            "invite_path": invite_path,
+            "invite_token": plaintext_token,
+        },
+        status_code=201,
+    )
+
+
+@router.delete("/admin/invites/{invite_id}")
+def admin_revoke_invite(
+    invite_id: str,
+    _: dict = Depends(require_roles({ROLE_ADMIN})),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(_, {"admin:write"})
+    from app.services.admin_invite_service import revoke_admin_invite
+
+    if not revoke_admin_invite(session, invite_id=invite_id):
+        raise HTTPException(status_code=404, detail="Invite not found")
+    return success_response({"revoked": True})
 
 
 @router.get("/admin/repositories")
@@ -413,17 +520,6 @@ def admin_telemetry(
     return success_response(payload)
 
 
-@router.get("/admin/architecture-graph")
-def admin_architecture_graph(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    repository_id: str | None = Query(default=None),
-    limit: int = Query(default=500, ge=100, le=1500),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Architecture graph is disabled in the simplified schema.")
-
-
 @router.get("/admin/recent-activity")
 def admin_recent_activity(
     _: dict = Depends(require_roles({ROLE_ADMIN})),
@@ -549,22 +645,3 @@ def admin_service_health(
         ]
     logger.info("admin_service_health - response sent")
     return success_response(statuses)
-
-
-@router.get("/admin/usage-overview")
-def admin_usage_overview(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Usage tracking is disabled in the simplified schema.")
-
-
-@router.get("/admin/billing-events")
-def admin_billing_events(
-    _: dict = Depends(require_roles({ROLE_ADMIN})),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(_, {"admin:read"})
-    raise HTTPException(status_code=410, detail="Billing events are disabled in the simplified schema.")

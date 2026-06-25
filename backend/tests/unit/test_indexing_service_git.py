@@ -21,6 +21,7 @@ def indexing_service(mock_qdrant):
         return IndexingService(session=session)
 
 def test_get_previous_completed_commit(indexing_service):
+    indexing_service.session.execute.return_value.scalar.return_value = None
     assert indexing_service._get_previous_completed_commit("repo1") is None
 
 @pytest.mark.asyncio

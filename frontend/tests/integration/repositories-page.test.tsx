@@ -5,6 +5,7 @@ import {
   useRepositories,
   useIndexRepository,
   useIndexingJobs,
+  useDeleteRepository,
 } from "@/features/repositories/hooks/use-repositories";
 
 import { renderWithProviders } from "../test-utils";
@@ -13,6 +14,8 @@ jest.mock("@/features/repositories/hooks/use-repositories", () => ({
   useRepositories: jest.fn(),
   useIndexRepository: jest.fn(),
   useIndexingJobs: jest.fn(),
+  useDeleteRepository: jest.fn(),
+  useRepositoryInsights: jest.fn(() => ({ data: null })),
 }));
 
 describe("DashboardRecentRepositories integration", () => {
@@ -22,6 +25,7 @@ describe("DashboardRecentRepositories integration", () => {
     jest.clearAllMocks();
     (useIndexRepository as jest.Mock).mockReturnValue({ mutate: mockMutate, isPending: false });
     (useIndexingJobs as jest.Mock).mockReturnValue({ data: [] });
+    (useDeleteRepository as jest.Mock).mockReturnValue({ mutate: jest.fn(), isPending: false });
   });
 
   it("loads repositories on mount", async () => {
@@ -73,7 +77,7 @@ describe("DashboardRecentRepositories integration", () => {
 
     renderWithProviders(<DashboardRecentRepositories />);
 
-    const reindexButton = await screen.findByRole("button", { name: /re-index/i });
+    const reindexButton = await screen.findByRole("button", { name: /update index/i });
     fireEvent.click(reindexButton);
 
     expect(mockMutate).toHaveBeenCalledWith(

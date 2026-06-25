@@ -60,12 +60,22 @@ describe("use-admin-auth hook", () => {
 
     const { result } = renderHook(() => useAdminAuth(), { wrapper: TestProviders });
 
-    result.current.register({ email: "newadmin@example.com", password: "pwd", full_name: "Admin", admin_secret: "secret" });
+    result.current.register({
+      email: "newadmin@example.com",
+      password: "pwd",
+      full_name: "Admin",
+      admin_secret_key: "secret",
+    });
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/admin/login");
+      expect(mockReplace).toHaveBeenCalledWith("/admin/login?registered=1");
     });
-    
-    expect(authService.adminRegister).toHaveBeenCalledWith({ email: "newadmin@example.com", password: "pwd", full_name: "Admin", admin_secret: "secret" });
+
+    expect(authService.adminRegister).toHaveBeenCalledWith({
+      email: "newadmin@example.com",
+      password: "pwd",
+      full_name: "Admin",
+      admin_secret_key: "secret",
+    });
   });
 });

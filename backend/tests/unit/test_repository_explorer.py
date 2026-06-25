@@ -107,8 +107,9 @@ def test_lazy_tree_pagination(client, auth_headers, test_setup):
     data = response.json()["data"]
     items = data["items"]
     assert len(items) == 2
-    assert items[0]["path"] == "README.md"
-    assert items[1]["path"] == "package.json"
+    # Directories sort before files; then alphabetical
+    assert items[0]["path"] == "package.json"
+    assert items[1]["path"] == "README.md"
     
     next_cursor = data["next_cursor"]
     assert next_cursor is not None

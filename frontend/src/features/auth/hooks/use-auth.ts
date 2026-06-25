@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 
@@ -5,8 +6,13 @@ import { authService } from "@/features/auth/services/auth-service";
 import { useAuthStore } from "@/store/auth-store";
 import { useToast } from "@/components/shared/toast-provider";
 import { toApiError } from "@/core/api/errors";
-import { isStudioEnabled } from "@/lib/feature-flags";
 import type { LoginPayload, RegisterPayload } from "@/features/auth/types/auth-types";
+import {
+  consumePendingOnboardingEmail,
+  markBrandNewUser,
+  markPendingOnboardingEmail,
+} from "@/store/onboarding-store";
+import { useNotificationStore } from "@/store/notification-store";
 
 export const authKeys = {
   me: ["auth", "me"] as const,
@@ -30,7 +36,7 @@ export function useAuth() {
         if (role === "ADMIN") {
           router.replace("/admin/dashboard");
         } else {
-          router.replace(isStudioEnabled() ? "/studio" : "/dashboard");
+          router.replace("/dashboard");
         }
       },
     });
@@ -39,7 +45,7 @@ export function useAuth() {
   const register = (payload: RegisterPayload) => {
     registerMutation.mutate(payload, {
       onSuccess: () => {
-        router.replace("/login");
+        router.replace("/login?registered=1");
       },
     });
   };
@@ -72,6 +78,10 @@ export function useLoginMutation() {
     onSuccess: ({ tokenPayload, me }) => {
       const normalizedRole = String(me.role).toUpperCase() === "ADMIN" ? "ADMIN" : "USER";
       setAuth({ ...me, role: normalizedRole }, tokenPayload.access_token);
+      useNotificationStore.getState().hydrateForUser(me.id);
+      if (normalizedRole === "USER" && consumePendingOnboardingEmail(me.email)) {
+        markBrandNewUser(me.id);
+      }
       void queryClient.invalidateQueries({ queryKey: authKeys.me });
     },
     onError: (error) => {
@@ -86,9 +96,12 @@ export function useRegisterMutation() {
 
   return useMutation({
     mutationFn: (payload: RegisterPayload) => authService.register(payload),
+    onSuccess: (_data, payload) => {
+      markPendingOnboardingEmail(payload.email);
+    },
     onError: (error) => {
       toast.error("Registration Failed", toApiError(error));
-    }
+    },
   });
 }
 
@@ -105,12 +118,22 @@ export function useMeQuery() {
   });
 }
 
-export function useLogoutAction() {
-  const logout = useAuthStore((state) => state.logout);
+export type LogoutContext = "admin" | "user";
+
+export function useLogout() {
+  const router = useRouter();
+  const logoutStore = useAuthStore((state) => state.logout);
   const queryClient = useQueryClient();
 
-  return () => {
-    logout();
-    void queryClient.clear();
-  };
+  return React.useCallback(
+    (context?: LogoutContext) => {
+      const role = useAuthStore.getState().user?.role;
+      logoutStore();
+      useNotificationStore.getState().hydrateForUser(null);
+      void queryClient.clear();
+      const toAdmin = role === "ADMIN" || context === "admin";
+      router.replace(toAdmin ? "/admin/login" : "/login");
+    },
+    [router, logoutStore, queryClient]
+  );
 }

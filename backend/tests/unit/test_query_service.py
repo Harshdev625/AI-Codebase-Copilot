@@ -211,16 +211,16 @@ async def test_ensure_session_with_existing_id(query_service):
 
 @pytest.mark.asyncio
 async def test_ensure_session_creates_new(query_service, mock_session):
-    mock_session.execute.return_value = MagicMock()
     result = await query_service._ensure_session(None, "user-1", "repo-1")
     assert result is not None
     assert len(result) > 0
+    mock_session.add.assert_called_once()
     mock_session.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_ensure_session_db_failure(query_service, mock_session):
-    mock_session.execute.side_effect = Exception("DB Error")
+    mock_session.add.side_effect = Exception("DB Error")
     with pytest.raises(DatabaseException, match="Failed to create new chat session"):
         await query_service._ensure_session(None, "user-1", "repo-1")
     mock_session.rollback.assert_called_once()
@@ -287,6 +287,57 @@ async def test_record_agent_run_with_session(query_service, mock_session):
 
 
 @pytest.mark.asyncio
+async def test_record_agent_run_uses_display_content(query_service, mock_session):
+    import json
+
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="@src/auth.py what is auth?",
+        display_content="what is auth?",
+        scope_paths=["src/auth.py"],
+        answer="Auth is in auth.py",
+    )
+    user_call = mock_session.execute.call_args_list[0]
+    params = user_call.args[1] if len(user_call.args) > 1 else user_call.kwargs
+    assert params["content"] == "what is auth?"
+    metadata = json.loads(params["metadata"])
+    assert metadata["display_content"] == "what is auth?"
+    assert metadata["scope_paths"] == ["src/auth.py"]
+
+
+@pytest.mark.asyncio
+async def test_record_agent_run_skips_empty_user_content(query_service, mock_session):
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="",
+        display_content="",
+        answer="assistant only",
+    )
+    assert mock_session.execute.call_count == 1
+    params = mock_session.execute.call_args.args[1]
+    assert params["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_record_agent_run_persists_sources_and_source_index(query_service, mock_session):
+    import json
+
+    sources = [{"path": "src/auth.py", "score": 0.9}]
+    await query_service._record_agent_run(
+        session_id="session-1",
+        query="what is auth?",
+        answer="Auth is in auth.py",
+        source_index=sources,
+    )
+    assistant_call = mock_session.execute.call_args_list[-1]
+    params = assistant_call.args[1] if len(assistant_call.args) > 1 else assistant_call.kwargs
+    metadata_raw = params["metadata"]
+    metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+    assert metadata["source_index"] == sources
+    assert metadata["sources"] == sources
+
+
+@pytest.mark.asyncio
 async def test_record_agent_run_db_failure(query_service, mock_session):
     mock_session.execute.side_effect = Exception("DB Error")
     with pytest.raises(DatabaseException, match="Failed to record agent run"):
@@ -318,10 +369,17 @@ async def test_finalize_result_success(query_service, mock_session):
         "cache_key",
         user_id="user-1",
         session_id="sess-1",
+        query="user question",
+        display_query="visible question",
+        scope_paths=["src/a.ts"],
     )
     assert result["answer"] == "This is the answer"
     query_service.cache.set_json.assert_called_once()
     query_service._record_agent_run.assert_awaited_once()
+    kwargs = query_service._record_agent_run.await_args.kwargs
+    assert kwargs["query"] == "user question"
+    assert kwargs["display_content"] == "visible question"
+    assert kwargs["scope_paths"] == ["src/a.ts"]
 
 
 @pytest.mark.asyncio

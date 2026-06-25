@@ -4,6 +4,7 @@ import {
   useRepositories,
   useIndexRepository,
   useIndexingJobs,
+  useDeleteRepository,
 } from "@/features/repositories/hooks/use-repositories";
 import { TestProviders } from "../test-utils";
 
@@ -11,6 +12,8 @@ jest.mock("@/features/repositories/hooks/use-repositories", () => ({
   useRepositories: jest.fn(),
   useIndexRepository: jest.fn(),
   useIndexingJobs: jest.fn(),
+  useDeleteRepository: jest.fn(),
+  useRepositoryInsights: jest.fn(() => ({ data: null })),
 }));
 
 describe("DashboardRecentRepositories", () => {
@@ -18,6 +21,7 @@ describe("DashboardRecentRepositories", () => {
     jest.clearAllMocks();
     (useIndexRepository as jest.Mock).mockReturnValue({ mutate: jest.fn(), isPending: false });
     (useIndexingJobs as jest.Mock).mockReturnValue({ data: [] });
+    (useDeleteRepository as jest.Mock).mockReturnValue({ mutate: jest.fn(), isPending: false });
   });
 
   it("renders loading skeleton", () => {

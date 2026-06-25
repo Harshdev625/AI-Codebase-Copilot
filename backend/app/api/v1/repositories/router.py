@@ -98,47 +98,6 @@ def _to_payload(row: dict) -> dict:
 
     return payload
 
-@router.get("/projects")
-def list_projects(
-    current_user: dict = Depends(get_current_user),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.post("/projects", status_code=status.HTTP_201_CREATED)
-def create_project(
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.delete("/projects/{project_id}", status_code=status.HTTP_200_OK)
-def delete_project(
-    project_id: str,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Projects are disabled in the simplified schema.")
-
-@router.get("/projects/{project_id}/repositories")
-def list_repositories(
-    project_id: str,
-    current_user: dict = Depends(get_current_user),
-    pagination: PaginationParams = Depends(get_pagination),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Project repositories are disabled in the simplified schema.")
-
-@router.post("/projects/{project_id}/repositories", status_code=status.HTTP_201_CREATED)
-def add_repository(
-    project_id: str,
-    req: AddRepositoryRequest,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    raise HTTPException(status_code=410, detail="Project repositories are disabled in the simplified schema.")
-
 @router.post("/index", status_code=status.HTTP_202_ACCEPTED)
 def index_repo(
     req: IndexRequest,
@@ -163,6 +122,7 @@ def index_repo(
             repo_ref=req.repo_ref,
             source="manual",
             prevent_duplicate_commit=False,
+            full_reindex=bool(req.full_reindex),
         )
     except service.IndexingAlreadyRunningError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -278,6 +238,22 @@ def add_user_repository(
     )
 
 
+@router.delete("/repositories/{repository_id}")
+def delete_user_repository(
+    repository_id: str,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    assert_scopes(current_user, {"repository:write"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+    service.soft_delete_repository(
+        session,
+        repository_id=repository_id,
+        user_id=str(current_user["id"]),
+    )
+    return success_response({"deleted": True})
+
+
 # ---------------------------------------------------------------------------
 # ACT Patch Draft
 # ---------------------------------------------------------------------------
@@ -324,42 +300,44 @@ def get_patch(
     if not patch:
         raise HTTPException(status_code=404, detail="Patch not found")
 
-    import re
     import subprocess
-    from pathlib import Path as _Path
     from app.db.models import Repository
+    from app.services.repository_cache import resolve_repository_workspace
 
     repo = session.query(Repository).filter(Repository.id == repository_id).first()
     base_sha = patch.base_commit_sha or ""
 
     def _fetch_original(file_path: str) -> str:
         """Best-effort: read the file at base_commit_sha from the local repo cache."""
-        if not base_sha or not repo:
+        if not repo:
             return ""
         repo_id_str = repo.repo_id or repository_id
-        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", repo_id_str)
-        cache_path = _Path(settings.repo_cache_path).resolve() / slug
-        if not cache_path.exists():
+        cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
+        if not cache_path:
             return ""
-        cmd = ["git", "-C", str(cache_path), "show", f"{base_sha}:{file_path}"]
-        try:
-            res = subprocess.run(cmd, capture_output=True, timeout=10)
-            if res.returncode == 0:
-                return res.stdout.decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        return ""
+        from app.services.repository_cache import read_repository_file
 
-    patch_files = [
-        {
-            "path": f.file_path,
-            "action": f.action,
-            "original_content": _fetch_original(f.file_path) if f.action != "create" else "",
-            "modified_content": f.file_diff,
-            "file_diff": f.file_diff,
-        }
-        for f in patch.patch_files
-    ]
+        raw = read_repository_file(cache_path, file_path, base_sha or None)
+        if raw is None:
+            return ""
+        return raw.decode("utf-8", errors="replace")
+
+    from app.utils.diff_utils import apply_unified_diff
+
+    patch_files = []
+    for f in patch.patch_files:
+        original = _fetch_original(f.file_path) if f.action != "create" else ""
+        file_diff = f.file_diff or ""
+        modified = apply_unified_diff(original, file_diff) if original and file_diff else file_diff
+        patch_files.append(
+            {
+                "path": f.file_path,
+                "action": f.action,
+                "original_content": original,
+                "modified_content": modified,
+                "file_diff": file_diff,
+            }
+        )
 
     return success_response({
         "id": patch.id,
@@ -457,7 +435,7 @@ def get_file_content(
     session: Session = Depends(get_db_session),
 ) -> dict:
     """
-    Return raw file content using git show {commit_sha}:{path}.
+    Return raw file content from the repository workspace (git show or working tree).
     """
     assert_scopes(current_user, {"repository:read"})
     ensure_repository_access_by_id(session, repository_id, current_user["id"])
@@ -470,6 +448,26 @@ def get_file_content(
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
+    from app.services.repository_cache import (
+        normalize_repository_file_path,
+        read_repository_file,
+        resolve_repository_workspace,
+    )
+
+    repo_id_str = repo.repo_id or repository_id
+    cache_path = resolve_repository_workspace(repo_id_str, repo.local_path)
+
+    if not cache_path:
+        raise HTTPException(status_code=404, detail="Repository cache not found on disk")
+
+    path = normalize_repository_file_path(
+        path,
+        workspace=cache_path,
+        local_path=repo.local_path,
+    )
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
     target_commit = commit_sha
     if not target_commit:
         job = session.query(IndexingJob).filter(
@@ -480,34 +478,21 @@ def get_file_content(
             raise HTTPException(status_code=404, detail="No indexed commit found")
         target_commit = job.commit_sha
 
-    import re
-    import subprocess
-    from pathlib import Path
-    from app.core.config import settings
+    raw = read_repository_file(cache_path, path, target_commit)
+    if raw is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"File '{path}' not found in repository workspace",
+        )
 
-    repo_id_str = repo.repo_id or repository_id
-    slug = re.sub(r'[^a-zA-Z0-9_-]', '_', repo_id_str)
-    cache_path = Path(settings.repo_cache_path).resolve() / slug
-
-    if not cache_path.exists():
-        raise HTTPException(status_code=404, detail="Repository cache not found on disk")
-
-    cmd = ["git", "-C", str(cache_path), "show", f"{target_commit}:{path}"]
-    res = subprocess.run(cmd, capture_output=True)
-    if res.returncode != 0:
-        err = res.stderr.decode("utf-8", errors="replace")
-        if "exists on disk, but not in" in err or "does not exist in" in err or "Not a valid object name" in err or "Path" in err:
-            raise HTTPException(status_code=404, detail=f"File '{path}' not found in commit {target_commit}")
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {err}")
-
-    content = res.stdout.decode("utf-8", errors="replace")
+    content = raw.decode("utf-8", errors="replace")
     ext = path.split(".")[-1] if "." in path else ""
 
     return success_response({
         "path": path,
         "content": content,
         "language": ext,
-        "size_bytes": len(res.stdout)
+        "size_bytes": len(raw)
     })
 
 # ---------------------------------------------------------------------------
@@ -869,7 +854,7 @@ def get_file_tree(
                     "status": "INDEXED"
                 })
 
-    items.sort(key=lambda x: x["path"])
+    items.sort(key=lambda x: (0 if x["type"] == "DIRECTORY" else 1, x["path"].split("/")[-1].lower()))
 
     next_cursor = None
     if len(rows) == limit:
@@ -881,6 +866,77 @@ def get_file_tree(
         "items": items,
         "next_cursor": next_cursor
     })
+
+
+@router.get("/repositories/{repository_id}/files/search")
+def search_repository_files(
+    repository_id: str,
+    q: str = "",
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Fuzzy path search for @-mention autocomplete in the composer."""
+    assert_scopes(current_user, {"repository:read"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+
+    limit = max(1, min(limit, 50))
+    query = (q or "").strip().lower()
+
+    if not query:
+        rows = session.execute(
+            text(
+                """
+                SELECT path, type, extension
+                FROM repository_files
+                WHERE repository_id = :repository_id
+                  AND status = 'INDEXED'
+                ORDER BY path ASC
+                LIMIT :limit
+                """
+            ),
+            {"repository_id": repository_id, "limit": limit},
+        ).mappings().all()
+        items = [
+            {"path": str(row["path"]), "type": "FILE", "extension": row.get("extension")}
+            for row in rows
+        ]
+        return success_response({"items": items})
+
+    like_pattern = f"%{query}%"
+    rows = session.execute(
+        text(
+            """
+            SELECT path, type, extension
+            FROM repository_files
+            WHERE repository_id = :repository_id
+              AND status = 'INDEXED'
+              AND LOWER(path) LIKE :like_pattern
+            ORDER BY path ASC
+            LIMIT :limit
+            """
+        ),
+        {"repository_id": repository_id, "like_pattern": like_pattern, "limit": limit},
+    ).mappings().all()
+
+    items: list[dict[str, Any]] = []
+    seen_dirs: set[str] = set()
+    for row in rows:
+        path = str(row["path"])
+        items.append({
+            "path": path,
+            "type": "FILE",
+            "extension": row.get("extension"),
+        })
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            dir_path = "/".join(parts[:i])
+            if query in dir_path.lower() and dir_path not in seen_dirs:
+                seen_dirs.add(dir_path)
+                items.append({"path": dir_path, "type": "DIRECTORY", "extension": None})
+
+    items.sort(key=lambda x: (0 if x["type"] == "DIRECTORY" else 1, x["path"].lower()))
+    return success_response({"items": items[:limit]})
 
 
 @router.get("/repositories/{repository_id}/snapshots/{snapshot_id}/diff")
@@ -957,6 +1013,28 @@ def get_snapshot_diff(
         "modified": sorted(modified),
         "renamed": renamed
     })
+
+
+@router.get("/repositories/{repository_id}/files/skipped")
+def list_skipped_files(
+    repository_id: str,
+    limit: int = 200,
+    offset: int = 0,
+    reason: str | None = None,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """List files excluded from indexing with skip reasons."""
+    assert_scopes(current_user, {"repository:read"})
+    ensure_repository_access_by_id(session, repository_id, current_user["id"])
+    result = service.list_skipped_repository_files(
+        session,
+        repository_id,
+        limit=limit,
+        offset=offset,
+        reason=reason,
+    )
+    return success_response(result)
 
 
 @router.get("/repositories/{repository_id}/insights")
@@ -1449,10 +1527,29 @@ def apply_patch(
         session.commit()
         raise HTTPException(status_code=500, detail=f"Failed to apply patch: {str(exc)}")
 
+    from app.db.models import ChangeSet
+    cs = session.query(ChangeSet).filter(ChangeSet.patch_id == patch_id).first()
+    if cs and cs.status == "PATCH_APPROVED":
+        cs.status = "APPLIED"
+        cs.updated_at = datetime.now(timezone.utc)
+
+    session.commit()
+
     return success_response({
         "patch_id": patch_id,
         "status": "APPLIED"
     })
+
+
+class WorkspaceSearchPayload(BaseModel):
+    query: str
+    case_sensitive: bool = False
+    whole_word: bool = False
+    use_regex: bool = False
+    include_globs: Optional[List[str]] = None
+    exclude_globs: Optional[List[str]] = None
+    max_results: Optional[int] = 500
+    max_matches_per_file: Optional[int] = 50
 
 
 class RetrieveRepositoryPayload(BaseModel):
@@ -1462,10 +1559,51 @@ class RetrieveRepositoryPayload(BaseModel):
     patch_id: Optional[str] = None
 
 
-class RetrieveProjectPayload(BaseModel):
-    query: str
-    top_k: Optional[int] = 10
-    repository_ids: List[str]
+@router.post("/repositories/{repository_id}/search")
+def search_repository_workspace(
+    repository_id: str,
+    payload: WorkspaceSearchPayload,
+    current_user: dict = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """VS Code-style text search across repository files (ripgrep or Python fallback)."""
+    assert_scopes(current_user, {"repository:read"})
+    repo_row = ensure_repository_access_by_id(session, repository_id, current_user["id"])
+
+    from app.services.repository_cache import resolve_repository_workspace
+    from app.services.workspace_search import search_workspace
+
+    workspace = resolve_repository_workspace(str(repo_row.get("repo_id") or ""), repo_row.get("local_path"))
+    if workspace is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Repository workspace not found on disk. Clone or index the repository first.",
+        )
+
+    query = payload.query.strip()
+    if not query:
+        return success_response(
+            {
+                "files": [],
+                "total_matches": 0,
+                "total_files": 0,
+                "truncated": False,
+                "engine": "none",
+            }
+        )
+
+    result = search_workspace(
+        workspace,
+        query,
+        case_sensitive=payload.case_sensitive,
+        whole_word=payload.whole_word,
+        use_regex=payload.use_regex,
+        include_globs=payload.include_globs,
+        exclude_globs=payload.exclude_globs,
+        max_results=min(int(payload.max_results or 500), 2000),
+        max_matches_per_file=min(int(payload.max_matches_per_file or 50), 100),
+    )
+    return success_response(result.to_dict())
 
 
 @router.post("/repositories/{repository_id}/retrieve")
@@ -1491,30 +1629,26 @@ def retrieve_repository_endpoint(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Retrieval failed: {str(exc)}")
 
-    return success_response({"items": items})
+    from app.db.models import Repository
+    from app.services.repository_cache import (
+        normalize_repository_file_path,
+        resolve_repository_workspace,
+    )
 
+    repo = session.query(Repository).filter(Repository.id == repository_id).first()
+    cache_path = None
+    local_path = None
+    if repo:
+        local_path = repo.local_path
+        cache_path = resolve_repository_workspace(repo.repo_id or repository_id, repo.local_path)
 
-@router.post("/projects/{project_id}/retrieve")
-def retrieve_project_endpoint(
-    project_id: str,
-    payload: RetrieveProjectPayload,
-    current_user: dict = Depends(get_current_user),
-    session: Session = Depends(get_db_session),
-) -> dict:
-    assert_scopes(current_user, {"repository:read"})
-    for rid in payload.repository_ids:
-        ensure_repository_access_by_id(session, rid, current_user["id"])
-
-    from app.rag.retrieval.hybrid import project_federated_retrieve
-    try:
-        items = project_federated_retrieve(
-            session,
-            repository_ids=payload.repository_ids,
-            query=payload.query,
-            top_k=payload.top_k
+    for item in items:
+        raw_path = str(item.get("path") or "")
+        item["path"] = normalize_repository_file_path(
+            raw_path,
+            workspace=cache_path,
+            local_path=local_path,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Project retrieval failed: {str(exc)}")
 
     return success_response({"items": items})
 

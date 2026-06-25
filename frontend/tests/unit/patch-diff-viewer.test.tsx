@@ -20,6 +20,19 @@ jest.mock("@/features/repositories/hooks/use-repositories", () => ({
   useIndexRepository: jest.fn(),
 }));
 
+jest.mock("@/features/repositories/services/repository-service", () => ({
+  repositoryService: {
+    getFileContent: jest.fn().mockResolvedValue({ content: "old line\nunchanged line" }),
+  },
+}));
+
+jest.mock("next/dynamic", () => () => {
+  const MockDiff = ({ originalContent, modifiedContent }: { originalContent: string; modifiedContent: string }) => (
+    <div data-testid="monaco-diff">{originalContent}|{modifiedContent}</div>
+  );
+  return MockDiff;
+});
+
 jest.mock("uuid", () => ({
   v4: () => "mock-uuid"
 }));
@@ -62,14 +75,23 @@ describe("PatchDiffViewer", () => {
     expect(screen.getByText("Validate Patch")).toBeInTheDocument();
   });
 
-  it("calls apply patch mutation on click", async () => {
-    render(<PatchDiffViewer repositoryId="repo-1" diff="diff" />, { wrapper: TestProviders });
+  it("calls apply patch mutation after validation", async () => {
+    render(<PatchDiffViewer repositoryId="repo-1" diff="diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt" />, {
+      wrapper: TestProviders,
+    });
 
-    const btn = screen.getByText("Apply to Codebase");
-    fireEvent.click(btn);
+    fireEvent.click(screen.getByText("Validate Patch"));
 
     await waitFor(() => {
       expect(createMock).toHaveBeenCalled();
+      expect(validateMock).toHaveBeenCalledWith({ repositoryId: "repo-1", patchId: "mock-patch-123" });
+    });
+
+    const applyBtn = screen.getByText("Apply to Codebase");
+    expect(applyBtn).not.toBeDisabled();
+    fireEvent.click(applyBtn);
+
+    await waitFor(() => {
       expect(applyMock).toHaveBeenCalledWith({ repositoryId: "repo-1", patchId: "mock-patch-123" });
     });
   });
