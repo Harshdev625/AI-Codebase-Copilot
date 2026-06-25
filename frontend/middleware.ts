@@ -3,16 +3,45 @@ import { NextResponse } from "next/server";
 
 const AUTH_PATHS = ["/login", "/register"];
 const ADMIN_AUTH_PATHS = ["/admin/login", "/admin/register"];
-const USER_PATHS = ["/dashboard", "/repositories", "/chat"];
+const USER_PATHS = ["/studio", "/dashboard"];
+
+/**
+ * Decode the JWT payload and return true if the token is valid and not expired.
+ * Runs at the edge without any crypto library - just base64-decodes the payload.
+ */
+function isTokenValid(token: string | undefined): boolean {
+  if (!token) return false;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return false;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(Buffer.from(base64, "base64").toString("utf-8"));
+    const exp = payload?.exp;
+    if (typeof exp !== "number") return false;
+    // exp is in seconds; Date.now() is in milliseconds
+    return Date.now() / 1000 < exp;
+  } catch {
+    return false;
+  }
+}
 
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get("tm_token")?.value;
+  const rawToken = request.cookies.get("tm_token")?.value;
   const role = String(request.cookies.get("tm_role")?.value ?? "").toUpperCase();
 
-  const isAuthPath = AUTH_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
-  const isAdminAuthPath = ADMIN_AUTH_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
-  const isUserPath = USER_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+  // An expired token must be treated the same as no token
+  const token = isTokenValid(rawToken) ? rawToken : undefined;
+
+  const isAuthPath = AUTH_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  );
+  const isAdminAuthPath = ADMIN_AUTH_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  );
+  const isUserPath = USER_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`)
+  );
   const isAdminPath = pathname === "/admin" || pathname.startsWith("/admin/");
 
   if (isAdminAuthPath) {
@@ -28,12 +57,23 @@ export function middleware(request: NextRequest): NextResponse {
       const redirectPath = role === "ADMIN" ? "/admin/dashboard" : "/dashboard";
       return NextResponse.redirect(new URL(redirectPath, request.url));
     }
+    if (rawToken && !token) {
+      const response = NextResponse.next();
+      response.cookies.delete("tm_token");
+      response.cookies.delete("tm_role");
+      return response;
+    }
     return NextResponse.next();
   }
 
   if (isAdminPath) {
     if (!token) {
-      return NextResponse.redirect(new URL("/admin/login", request.url));
+      const response = NextResponse.redirect(new URL("/admin/login", request.url));
+      if (rawToken) {
+        response.cookies.delete("tm_token");
+        response.cookies.delete("tm_role");
+      }
+      return response;
     }
     if (role !== "ADMIN") {
       return NextResponse.redirect(new URL("/dashboard", request.url));
@@ -41,7 +81,12 @@ export function middleware(request: NextRequest): NextResponse {
   }
 
   if (isUserPath && !token) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    if (rawToken) {
+      response.cookies.delete("tm_token");
+      response.cookies.delete("tm_role");
+    }
+    return response;
   }
 
   return NextResponse.next();

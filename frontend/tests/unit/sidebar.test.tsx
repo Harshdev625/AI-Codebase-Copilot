@@ -1,86 +1,41 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { Sidebar } from "@/components/layout/sidebar";
-import { LayoutDashboard } from "lucide-react";
+import { StudioNavRail } from "@/features/studio/components/studio-nav-rail";
 import { TestProviders } from "../test-utils";
 
-jest.mock("next/navigation", () => ({
-  usePathname: () => "/dashboard",
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn() }),
+const mockFocusSidebar = jest.fn();
+
+jest.mock("@/features/studio/store/studio-store", () => ({
+  useStudioStore: () => ({
+    primarySidebar: "sessions",
+    focusSidebar: mockFocusSidebar,
+  }),
 }));
 
-describe("Sidebar", () => {
-  const items = [
-    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  ];
-
-  it("renders desktop sidebar content", () => {
-    render(
-      <Sidebar 
-        title="Test App" 
-        items={items} 
-        isOpen={false} 
-        collapsed={false} 
-        onToggleCollapsed={jest.fn()} 
-        onClose={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
-
-    expect(screen.getByText("Test App")).toBeInTheDocument();
-    expect(screen.getByText("Dashboard")).toBeInTheDocument();
+describe("StudioNavRail", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  it("renders collapsed mode without title text", () => {
-    render(
-      <Sidebar 
-        title="Test App" 
-        items={items} 
-        isOpen={false} 
-        collapsed={true} 
-        onToggleCollapsed={jest.fn()} 
-        onClose={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
+  it("renders studio navigation items", () => {
+    render(<StudioNavRail />, { wrapper: TestProviders });
 
-    // Title should be hidden in collapsed mode
-    expect(screen.queryByText("Test App")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Studio navigation")).toBeInTheDocument();
+    expect(screen.getByLabelText("Chat & Sessions")).toBeInTheDocument();
+    expect(screen.getByLabelText("Explorer")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search")).toBeInTheDocument();
   });
 
-  it("calls onToggleCollapsed when button is clicked", () => {
-    const toggleSpy = jest.fn();
-    render(
-      <Sidebar 
-        title="Test App" 
-        items={items} 
-        isOpen={false} 
-        collapsed={false} 
-        onToggleCollapsed={toggleSpy} 
-        onClose={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
+  it("focuses sessions when chat is clicked", () => {
+    render(<StudioNavRail />, { wrapper: TestProviders });
 
-    // Click the toggle button (ChevronLeft icon)
-    const toggleBtn = screen.getAllByRole("button")[0];
-    fireEvent.click(toggleBtn);
-    expect(toggleSpy).toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Chat & Sessions"));
+    expect(mockFocusSidebar).toHaveBeenCalledWith("sessions");
   });
 
-  it("renders mobile drawer when isOpen is true", () => {
-    render(
-      <Sidebar 
-        title="Mobile App" 
-        items={items} 
-        isOpen={true} 
-        collapsed={false} 
-        onToggleCollapsed={jest.fn()} 
-        onClose={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
+  it("focuses explorer when explorer is clicked", () => {
+    render(<StudioNavRail />, { wrapper: TestProviders });
 
-    // Since Framer motion is mocked to render immediately
-    expect(screen.getAllByText("Mobile App").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByLabelText("Explorer"));
+    expect(mockFocusSidebar).toHaveBeenCalledWith("explorer");
   });
 });

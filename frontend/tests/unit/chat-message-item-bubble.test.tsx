@@ -3,7 +3,11 @@ import { ChatMessageItemBubble } from "@/features/chat/components/chat-message-i
 import { TestProviders } from "../test-utils";
 
 jest.mock("next/navigation", () => ({
-  useParams: () => ({ repositoryId: "repo-1" }),
+  useRouter: () => ({ push: jest.fn() }),
+}));
+
+jest.mock("@/features/studio/store/studio-store", () => ({
+  useStudioStore: () => ({ selectedRepositoryId: "repo-1" }),
 }));
 
 jest.mock("uuid", () => ({
@@ -19,6 +23,7 @@ describe("ChatMessageItemBubble", () => {
       role: "user" as const,
       content: "Hello AI",
       created_at: new Date().toISOString(),
+      metadata: {},
     };
 
     render(<ChatMessageItemBubble message={message} />, { wrapper: TestProviders });
@@ -38,7 +43,7 @@ describe("ChatMessageItemBubble", () => {
 
     render(<ChatMessageItemBubble message={message} />, { wrapper: TestProviders });
 
-    expect(screen.getByText("TimeMachine")).toBeInTheDocument();
+    expect(screen.getByText("AI Assistant")).toBeInTheDocument();
     expect(screen.getByText("greeting")).toBeInTheDocument();
   });
 });

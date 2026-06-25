@@ -19,7 +19,7 @@ def test_generic_chunk_file_basic(indexing_service, tmp_path):
     source = "\n".join([f"line {i}" for i in range(50)])
     file_path.write_text(source)
 
-    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", file_path, source)
+    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", "test.js", source, ".js")
     assert len(chunks) == 2  # 50 lines / 40 chunk_size = 2 chunks
     assert chunks[0].chunk_type == "generic"
     assert chunks[0].start_line == 1
@@ -35,7 +35,7 @@ def test_generic_chunk_file_truncates_long_content(indexing_service, tmp_path):
     source = long_line
     file_path.write_text(source)
 
-    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", file_path, source)
+    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", "test.js", source, ".js")
     assert len(chunks) == 1
     assert len(chunks[0].content) <= 15000 + 20  # truncated + suffix text
 
@@ -44,7 +44,7 @@ def test_generic_chunk_file_empty_source(indexing_service, tmp_path):
     """Empty source should produce 0 chunks."""
     file_path = tmp_path / "empty.py"
     file_path.write_text("")
-    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", file_path, "")
+    chunks = indexing_service.generic_chunk_file("repo-1", "abc123", "empty.py", "", ".py")
     assert chunks == []
 
 

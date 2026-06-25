@@ -1,5 +1,8 @@
-﻿@import "tailwindcss";
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
 
+@custom-variant dark (&:where(.dark, .dark *));
 @theme {
   /* ── Spacing Scale ─────────────────────────────────────── */
   --spacing-1:  0.25rem;
@@ -43,16 +46,20 @@
   --color-glow:                hsl(var(--glow));
   --color-cyan:                hsl(var(--cyan));
 
+  /* ── Navigation chrome ─────────────────────────────────── */
+  --spacing-nav-height: 3.5rem;
+  --spacing-nav-height-lg: 4rem;
+
   /* ── Radius ────────────────────────────────────────────── */
   --radius-xl: calc(var(--radius) + 4px);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 
-  /* ── Typography ────────────────────────────────────────── */
-  --font-sans: var(--font-space-grotesk), sans-serif;
-  --font-display: var(--font-fraunces), serif;
-  --font-mono: var(--font-plex-mono), monospace;
+  /* ── Typography (aligned with app/layout.tsx font variables) ── */
+  --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono), ui-monospace, monospace;
 
   /* ── Named animations ──────────────────────────────────── */
   --animate-fade-up:      fade-up 350ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
@@ -161,46 +168,53 @@
   --warning-foreground:    0 0% 100%;
   --error:                 0 72% 52%;
   --error-foreground:      0 0% 100%;
-  --ai:                    18 80% 55%;
+  --ai:                    199 89% 50%;
   --ai-foreground:         0 0% 100%;
-  --glow:                  32 85% 55%;
-  --cyan:                  190 70% 45%;
-  --radius:                0.9rem;
+  --plan:                  255 92% 66%;
+  --act:                   38 92% 40%;
+  --glow:                  239 84% 57%;
+  --cyan:                  190 70% 35%;
+  --radius:                0.75rem;
 }
 
 /* ══════════════════════════════════════════════════════════
   DARK MODE - Night Studio
 ══════════════════════════════════════════════════════════ */
 .dark {
-  --background:            210 16% 9%;
-  --foreground:            32 20% 92%;
-  --card:                  210 16% 12%;
-  --card-foreground:       32 20% 92%;
-  --primary:               176 55% 45%;
-  --primary-foreground:    210 16% 10%;
-  --secondary:             210 12% 18%;
-  --secondary-foreground:  32 15% 80%;
-  --muted:                 210 12% 16%;
-  --muted-foreground:      32 12% 65%;
-  --accent:                210 12% 20%;
-  --accent-foreground:     32 20% 88%;
-  --destructive:           0 65% 52%;
-  --destructive-foreground:0 0% 100%;
-  --border:                210 10% 24%;
-  --input:                 210 10% 18%;
-  --ring:                  176 55% 45%;
+  --background:            240 9% 4%;
+  --foreground:            0 0% 98%;
+  --card:                  240 8% 7%;
+  --card-foreground:       0 0% 98%;
+  --primary:               239 84% 67%;
+  --primary-foreground:    0 0% 98%;
+  --secondary:             240 4% 16%;
+  --secondary-foreground:  0 0% 98%;
+  --muted:                 240 5% 12%;
+  --muted-foreground:      240 5% 65%;
+  --accent:                240 5% 12%;
+  --accent-foreground:     0 0% 98%;
+  --destructive:           0 62.8% 30.6%;
+  --destructive-foreground:0 0% 98%;
+  --border:                240 4% 16%;
+  --input:                 240 4% 16%;
+  --ring:                  239 84% 67%;
 
   --success:               142 50% 45%;
   --success-foreground:    0 0% 100%;
-  --warning:               36 85% 55%;
+  --warning:               38 92% 50%;
   --warning-foreground:    0 0% 100%;
   --error:                 0 65% 55%;
   --error-foreground:      0 0% 100%;
-  --ai:                    18 80% 60%;
+  
+  /* Modes */
+  --ai:                    199 89% 60%; /* ASK mode */
   --ai-foreground:         0 0% 100%;
-  --glow:                  32 85% 60%;
+  --plan:                  255 92% 76%; /* PLAN mode */
+  --act:                   38 92% 50%;  /* ACT mode */
+  
+  --glow:                  239 84% 67%;
   --cyan:                  190 70% 45%;
-  --radius:                0.9rem;
+  --radius:                0.75rem;
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -673,4 +687,82 @@ select {
       font-size: 1rem;
     }
   }
+}
+
+/* Scrollbar utilities (used across studio + dashboard) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Studio V2 workbench chrome */
+.studio-workbench {
+  --studio-bg: #0b0d14;
+  --studio-surface: #13151a;
+  --studio-border: #1e212b;
+  --studio-accent: #58a6ff;
+  --studio-text: #c9d1d9;
+  --studio-muted: #8b949e;
+  --studio-nav-btn: 2.5rem;
+  --studio-nav-icon: 18px;
+}
+@media (min-width: 1280px) {
+  .studio-workbench {
+    --studio-nav-btn: 2.75rem;
+    --studio-nav-icon: 20px;
+  }
+}
+.studio-chrome-bg {
+  background-color: var(--studio-bg);
+}
+
+/* Monaco: line range highlighted when opened from search */
+.monaco-editor .view-overlays .studio-editor-search-line {
+  background-color: rgba(227, 179, 65, 0.22) !important;
+  border-left: 3px solid #e3b341;
+}
+.monaco-editor .view-overlays .studio-editor-search-match {
+  background-color: rgba(255, 213, 0, 0.5) !important;
+  border-radius: 2px;
+}
+
+/* Studio markdown preview — README HTML blocks, badges, centered headers */
+.studio-markdown-preview [align="center"] {
+  text-align: center;
+}
+.studio-markdown-preview [align="center"] img {
+  display: inline-block;
+  margin: 0.15rem;
+  vertical-align: middle;
+}
+.studio-markdown-preview > div:first-child[align="center"] {
+  margin-bottom: 1.5rem;
+}
+.studio-markdown-preview > div:first-child[align="center"] h1 {
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.studio-markdown-preview > div:first-child[align="center"] h3 {
+  margin-top: 0;
+  font-weight: 500;
+  color: #8b949e;
+}
+.studio-markdown-preview > div:first-child[align="center"] p {
+  margin-top: 0.75rem;
+  margin-bottom: 0;
 }

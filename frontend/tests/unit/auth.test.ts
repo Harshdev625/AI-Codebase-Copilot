@@ -45,7 +45,7 @@ describe("auth session helpers", () => {
     const sessionUser = await storeSession("token-xyz");
 
     expect(global.fetch).toHaveBeenCalledWith(
-      "/api/auth/me",
+      "/api/v1/auth/me",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({ Authorization: "Bearer token-xyz" }),

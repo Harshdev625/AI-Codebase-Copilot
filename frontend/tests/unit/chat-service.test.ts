@@ -74,14 +74,52 @@ describe('chatService', () => {
     });
   });
 
-  it('calls applyPatch API', async () => {
-    const mockResponse = { applied: true, message: 'ok' };
+  it('calls createPatchDraft API', async () => {
+    const mockResponse = { patch_id: 'patch-1', status: 'DRAFT', created_at: '2026-06-04' };
     (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
 
-    const result = await chatService.applyPatch('repo-1', 'diff');
+    const payload = {
+      base_commit_sha: 'base-sha',
+      patch_files: [{ file_path: 'file.py', action: 'MODIFY', file_diff: 'diff' }]
+    };
+    const result = await chatService.createPatchDraft('repo-1', payload);
     expect(result).toEqual(mockResponse);
-    expect(apiClient).toHaveBeenCalledWith('/v1/chat/apply-patch', {
-      body: { repository_id: 'repo-1', diff: 'diff' },
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/patches', {
+      method: 'POST',
+      body: payload,
+    });
+  });
+
+  it('calls validatePatch API', async () => {
+    const mockResponse = { patch_id: 'patch-1', status: 'APPROVED', validation_logs: 'logs' };
+    (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
+
+    const result = await chatService.validatePatch('repo-1', 'patch-1');
+    expect(result).toEqual(mockResponse);
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/patches/patch-1/validate', {
+      method: 'POST',
+    });
+  });
+
+  it('calls applyPatch API', async () => {
+    const mockResponse = { patch_id: 'patch-1', status: 'APPLIED' };
+    (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
+
+    const result = await chatService.applyPatch('repo-1', 'patch-1');
+    expect(result).toEqual(mockResponse);
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/patches/patch-1/apply', {
+      method: 'POST',
+    });
+  });
+
+  it('calls cancelPatchDraft API', async () => {
+    const mockResponse = { deleted: true };
+    (apiClient as jest.Mock).mockResolvedValueOnce(mockResponse);
+
+    const result = await chatService.cancelPatchDraft('repo-1', 'patch-1');
+    expect(result).toEqual(mockResponse);
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/patches/patch-1', {
+      method: 'DELETE',
     });
   });
 
@@ -128,8 +166,8 @@ describe('chatService', () => {
       (getAccessToken as jest.Mock).mockReturnValue('token');
 
       const mockChunks = [
-        '{"success":true,"data":{"type":"chunk","delta":"hello "}}\n',
-        '{"success":true,"data":{"type":"chunk","delta":"world"}}\n',
+        'data: {"success":true,"data":{"type":"chunk","delta":"hello "}}\n\n',
+        'data: {"success":true,"data":{"type":"chunk","delta":"world"}}\n\n',
       ];
 
       const stream = new ReadableStream({
@@ -157,8 +195,8 @@ describe('chatService', () => {
       (getAccessToken as jest.Mock).mockReturnValue('token');
 
       const mockChunks = [
-        '{"success":true,"data":{"type":"chunk","delta":"hello "}}\n',
-        '{"success":false,"error":"Stream failed mid-way"}\n',
+        'data: {"success":true,"data":{"type":"chunk","delta":"hello "}}\n\n',
+        'data: {"success":false,"error":"Stream failed mid-way"}\n\n',
       ];
 
       const stream = new ReadableStream({

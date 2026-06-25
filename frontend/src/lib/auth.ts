@@ -120,6 +120,12 @@ export function clearAuthSession(): void {
   if (!isBrowser()) {
     return;
   }
+  const user = getStoredUser();
+  if (user) {
+    // Legacy key from pre-consolidation studio-specific store
+    window.localStorage.removeItem(`studio-specific-storage-${user.id}`);
+    window.localStorage.removeItem(`studio-storage-${user.id}`);
+  }
   window.localStorage.removeItem(ACCESS_TOKEN_KEY);
   window.localStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
@@ -146,7 +152,7 @@ export async function storeSession(token: string): Promise<CurrentUser> {
 
   let response: Response;
   try {
-    response = await fetch("/api/auth/me", {
+    response = await fetch("/api/v1/auth/me", {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,

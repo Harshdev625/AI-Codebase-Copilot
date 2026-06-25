@@ -3,19 +3,46 @@
 import * as React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Bot, UserRound, Copy, Check, FileCode } from 'lucide-react';
+import { Bot, UserRound, Copy, Check, ChevronDown, FileCode } from 'lucide-react';
 import { ChatMessage } from '@/features/chat/types/chat-types';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { CodeBlock } from '@/components/ui/code-block';
 import { PatchDiffViewer } from './patch-diff-viewer';
-import { useParams } from 'next/navigation';
+import type { Source } from '@/features/chat/types/chat-types';
+import { getDisplayContent, normalizeRepoPath, normalizeSourcesFromMetadata } from '@/features/chat/utils/chat-message-utils';
+import { stripPlanJsonBlock, extractPlanSummaryFromContent, messageLooksLikePlan } from '@/features/change-sets/utils/plan-display-utils';
+import { formatChatTimestamp } from '@/features/chat/utils/chat-timestamp-utils';
+import { formatTokenCount, getMessageUsage } from '@/features/chat/utils/token-usage-utils';
+import { FileIcon } from '@/features/studio/components/file-icon';
+import { useStudioStore } from '@/features/studio/store/studio-store';
+import { LiveThinkingStrip } from "./live-thinking-strip";
+import { PlanMessageCard } from "./plan-message-card";
 
 interface ChatMessageBubbleProps {
   message: ChatMessage;
+  mode?: string;
+  repositoryId?: string;
 }
 
-/* ── Copy button ─────────────────────────────────────── */
+const USER_BUBBLE =
+  'border-[#818cf8]/35 bg-[#1e1b4b]/55 text-[#e8eaf6] shadow-[inset_0_1px_0_0_rgba(129,140,248,0.08)]';
+const USER_AVATAR = 'border-[#818cf8]/40 bg-[#818cf8]/15 text-[#a5b4fc]';
+const ASSISTANT_BUBBLE =
+  'border-[#5CD4C2]/35 bg-[#0f2a28]/80 text-[#e6fffa] shadow-[inset_0_1px_0_0_rgba(92,212,194,0.1)]';
+const ASSISTANT_AVATAR = 'border-[#5CD4C2]/40 bg-[#5CD4C2]/15 text-[#5CD4C2]';
+
+const PROSE_CLASSES = cn(
+  'prose prose-sm dark:prose-invert max-w-full min-w-0',
+  'prose-p:my-1 prose-p:leading-relaxed prose-p:break-words',
+  'prose-headings:break-words prose-li:break-words',
+  'prose-code:break-words prose-code:text-[#5CD4C2] prose-code:bg-[#5CD4C2]/10',
+  'prose-code:rounded prose-code:px-1 prose-code:text-[0.85em] prose-code:before:content-none prose-code:after:content-none',
+  'prose-pre:max-w-full prose-pre:overflow-x-auto',
+  'prose-table:block prose-table:max-w-full prose-table:overflow-x-auto',
+  '[&_*]:max-w-full',
+);
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = React.useState(false);
 
@@ -27,137 +54,228 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <button
+      type="button"
       onClick={handleCopy}
-      className="opacity-0 group-hover:opacity-100 flex items-center gap-1.5 rounded-lg border border-border/50 px-2.5 py-1 text-[9px] font-bold text-muted-foreground hover:bg-accent hover:text-foreground transition-all"
+      className="opacity-0 group-hover:opacity-100 flex items-center gap-1 rounded-md border border-white/10 px-2 py-0.5 text-[9px] font-semibold text-white/60 hover:bg-white/10 hover:text-white transition-all"
     >
-      {copied ? <Check className="h-4 w-4 text-success" /> : <Copy className="h-4 w-4" />}
-      {copied ? 'Copied!' : 'Copy'}
+      {copied ? <Check className="h-3 w-3 text-[#5CD4C2]" /> : <Copy className="h-3 w-3" />}
+      {copied ? 'Copied' : 'Copy'}
     </button>
   );
 }
 
-/* ── Message bubble ────────────────────────────────────── */
-export function ChatMessageItemBubble({ message }: ChatMessageBubbleProps) {
-  const isAssistant = message.role === 'assistant';
-  const metadata = message.metadata ?? {};
-  const intent = typeof metadata.intent === 'string' ? metadata.intent : '';
-  const sources = Array.isArray(metadata.sources) ? metadata.sources : [];
-  
-  const patchProposal = sources.find((src) => src.kind === 'patch_proposal');
-  const normalSources = sources.filter((src) => src.kind !== 'patch_proposal');
+function SourceExplorerV2({ sources }: { sources: Source[] }) {
+  const { openFileTab } = useStudioStore();
+  const [open, setOpen] = React.useState(false);
 
-  const params = useParams();
-  const repositoryId = typeof params.repositoryId === 'string' ? params.repositoryId : '';
+  if (sources.length === 0) return null;
 
   return (
-    <div className={cn(
-      'relative flex gap-4 py-7 group transition-all duration-300 px-5 rounded-3xl mx-2 my-1',
-      isAssistant
-        ? 'bg-card border border-primary/12 shadow-[0_4px_24px_-8px] shadow-primary/8 animate-fade-in'
-        : 'bg-transparent hover:bg-accent/20 border border-transparent hover:border-border'
-    )}>
-      {/* Gradient left border for AI messages */}
-      {isAssistant && (
-        <div className="absolute left-0 top-4 bottom-4 w-0.5 rounded-r-full bg-gradient-to-b from-primary/60 via-primary/40 to-transparent" />
-      )}
-
-      {/* Avatar */}
-      <div className="flex flex-col items-center gap-2 px-1 shrink-0 pt-0.5">
-        <div className={cn(
-          'flex h-9 w-9 items-center justify-center rounded-2xl border transition-all duration-300',
-          isAssistant
-            ? 'bg-primary/30 border-primary/20 text-primary shadow-[0_0_16px_-4px] shadow-primary/40 group-hover:shadow-[0_0_24px_-4px] group-hover:shadow-primary/60 group-hover:scale-105'
-            : 'bg-accent/40 border-border/50 text-muted-foreground group-hover:bg-accent/60'
-        )}>
-          {isAssistant ? <Bot className="h-5 w-5" /> : <UserRound className="h-5 w-5" />}
-        </div>
-      </div>
-
-      {/* Content column */}
-      <div className="flex-1 min-w-0 pr-3">
-        {/* Header */}
-        <div className="flex items-center gap-3 mb-3">
-          <span className={cn(
-            'text-[10px] font-bold uppercase tracking-[0.15em]',
-            isAssistant ? 'text-primary' : 'text-muted-foreground'
-          )}>
-            {isAssistant ? 'TimeMachine' : 'You'}
-          </span>
-          <span className="text-[9px] font-medium text-muted-foreground/60">
-            {message.created_at ? formatTime(message.created_at) : 'Just now'}
-          </span>
-          {isAssistant && intent && (
-            <Badge
-              variant="secondary"
-              className="px-1.5 py-0 text-[8px] font-bold bg-primary/15 border-primary/25 text-primary/70"
+    <details
+      className="mt-3 min-w-0 group"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer list-none flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-[#5CD4C2]/80 hover:text-[#5CD4C2]">
+        <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+        <FileCode className="h-3 w-3" />
+        Retrieved Context ({sources.length})
+      </summary>
+      <div className="mt-2 grid min-w-0 grid-cols-1 gap-1.5">
+        {sources.map((src, idx) => {
+          const score = typeof src.rerank_score === 'number' ? src.rerank_score : (typeof src.score === 'number' ? src.score : null);
+          const scoreDisplay = score !== null ? (score * 100).toFixed(0) : '—';
+          const displayPath = normalizeRepoPath(src.path);
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => openFileTab(src.path, src.start_line)}
+              className="min-w-0 text-left rounded-lg border border-[#5CD4C2]/20 bg-black/20 px-2.5 py-2 hover:bg-[#5CD4C2]/10 transition-colors"
             >
-              {intent}
-            </Badge>
-          )}
-        </div>
-
-        {/* Body */}
-        <div className={cn(
-          'text-[14px] leading-[1.75] tracking-tight antialiased',
-          isAssistant ? 'text-foreground/90 font-medium' : 'text-foreground/70'
-        )}>
-          {isAssistant ? (
-            <div className="prose prose-sm dark:prose-invert max-w-none
-              prose-p:mt-0 prose-p:mb-3 prose-p:leading-[1.8] prose-p:text-foreground/70
-              prose-headings:text-foreground prose-headings:font-bold prose-headings:tracking-tight
-              prose-code:text-primary/90 prose-code:bg-primary/15 prose-code:rounded-lg prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.82em] prose-code:font-bold prose-code:border prose-code:border-primary/25
-              prose-pre:p-0 prose-pre:bg-transparent prose-pre:border-0
-              prose-strong:text-foreground prose-strong:font-bold
-              prose-ul:text-foreground/70 prose-li:text-foreground/70
-            ">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  code({ className, children, ...props }) {
-                    const match = /language-(\w+)/.exec(className || '');
-                    const isInline = !match;
-                    if (isInline) {
-                      return <code className={className} {...props}>{children}</code>;
-                    }
-                    return (
-                      <CodeBlock
-                        code={String(children).replace(/\n$/, '')}
-                        language={match[1]}
-                        className="my-5"
-                      />
-                    );
-                  },
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
-              
-              {isAssistant && patchProposal && patchProposal.proposal && repositoryId && (
-                <PatchDiffViewer 
-                  repositoryId={repositoryId}
-                  diff={patchProposal.proposal.diff}
-                  summary={patchProposal.proposal.summary}
-                />
-              )}
-            </div>
-          ) : (
-            <div className="whitespace-pre-wrap">{message.content}</div>
-          )}
-        </div>
-
-        {/* Copy button */}
-        <div className="mt-4 flex flex-wrap items-center gap-2 justify-end">
-          <CopyButton text={message.content} />
-        </div>
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FileIcon path={src.path} className="h-3 w-3 shrink-0" />
+                  <span className="truncate text-[11px] font-semibold" title={src.path}>{displayPath}</span>
+                </span>
+                <Badge variant="outline" className="shrink-0 border-[#5CD4C2]/30 text-[8px] px-1 py-0 h-3.5" title="Relevance score">{scoreDisplay}</Badge>
+              </div>
+            </button>
+          );
+        })}
       </div>
-    </div>
+    </details>
   );
 }
 
-function formatTime(dateStr: string) {
-  try {
-    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return dateStr;
-  }
+export function ChatMessageItemBubble({ message, repositoryId: repositoryIdProp }: ChatMessageBubbleProps) {
+  const { selectedRepositoryId } = useStudioStore();
+  const isAssistant = message.role === 'assistant';
+  const metadata = message.metadata ?? {};
+  const intent = typeof metadata.intent === 'string' ? metadata.intent : '';
+  const sources = normalizeSourcesFromMetadata(metadata);
+  const displayContent = getDisplayContent(message.content, message.role, metadata);
+
+  const patchProposal = sources.find((src) => src.kind === 'patch_proposal');
+  const normalSources = sources.filter((src) => src.kind !== 'patch_proposal');
+  const usage = isAssistant ? getMessageUsage(metadata) : null;
+
+  const repositoryId = repositoryIdProp || selectedRepositoryId || '';
+  const timestamp = message.created_at ? formatChatTimestamp(message.created_at) : 'Just now';
+  const isStreaming = Boolean(metadata.isStreaming);
+  const hasPlanMeta = isAssistant && Boolean(metadata.change_set_id) && !isStreaming;
+  const hasPlanContent = isAssistant && !isStreaming && messageLooksLikePlan(message.content ?? "");
+  const hasPlan = hasPlanMeta || hasPlanContent;
+  const renderedContent = hasPlan ? stripPlanJsonBlock(displayContent) : displayContent;
+  const planSummary =
+    (typeof metadata.plan_summary === "string" ? metadata.plan_summary : null) ||
+    extractPlanSummaryFromContent(message.content ?? "");
+  const planStepCount =
+    typeof metadata.plan_step_count === "number"
+      ? metadata.plan_step_count
+      : undefined;
+
+  const sortedSources = React.useMemo(() => {
+    return [...normalSources].sort((a, b) => {
+      const scoreA =
+        typeof a.rerank_score === 'number' ? a.rerank_score : typeof a.score === 'number' ? a.score : 0;
+      const scoreB =
+        typeof b.rerank_score === 'number' ? b.rerank_score : typeof b.score === 'number' ? b.score : 0;
+      return scoreB - scoreA;
+    });
+  }, [normalSources]);
+
+  return (
+    <div className="group w-full min-w-0 box-border px-3 py-2">
+      <div
+        className={cn(
+          'flex w-full min-w-0 items-end gap-2',
+          isAssistant ? 'justify-end' : 'justify-start',
+        )}
+      >
+        {!isAssistant && (
+          <div
+            className={cn(
+              'mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
+              USER_AVATAR,
+            )}
+          >
+            <UserRound className="h-3.5 w-3.5" />
+          </div>
+        )}
+
+        <div
+          className={cn(
+            'min-w-0 max-w-[min(88%,48rem)] overflow-hidden rounded-2xl border px-4 py-3',
+            isAssistant ? cn(ASSISTANT_BUBBLE, 'rounded-br-md') : cn(USER_BUBBLE, 'rounded-bl-md'),
+          )}
+        >
+          <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="text-[12px] font-semibold">
+              {isAssistant ? 'AI Assistant' : 'You'}
+            </span>
+            <span className="text-[10px] opacity-60">{timestamp}</span>
+            {isAssistant && intent && (
+              <Badge className="border-[#5CD4C2]/30 bg-[#5CD4C2]/15 px-1.5 py-0 text-[8px] font-bold text-[#5CD4C2]">
+                {intent}
+              </Badge>
+            )}
+            {usage?.total_tokens != null && usage.total_tokens > 0 && (
+              <Badge variant="outline" className="border-white/15 px-1.5 py-0 text-[8px] font-mono opacity-70">
+                {formatTokenCount(usage.total_tokens)} tok
+              </Badge>
+            )}
+          </div>
+
+          {isAssistant && isStreaming && (
+            <LiveThinkingStrip metadata={metadata} sources={sortedSources as Source[]} />
+          )}
+
+          {hasPlan && (
+            <PlanMessageCard
+              summary={planSummary}
+              planVersion={metadata.plan_version as number | undefined}
+              stepCount={planStepCount}
+              status={metadata.plan_status as string | undefined}
+            />
+          )}
+
+          <div className="min-w-0 overflow-x-hidden text-[14px] leading-relaxed">
+            {isAssistant ? (
+              <div className={PROSE_CLASSES}>
+                {!hasPlan && renderedContent ? (
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        if (!match) {
+                          return <code className={className} {...props}>{children}</code>;
+                        }
+                        return (
+                          <div className="my-3 min-w-0 max-w-full overflow-x-auto">
+                            <CodeBlock
+                              code={String(children).replace(/\n$/, '')}
+                              language={match[1]}
+                            />
+                          </div>
+                        );
+                      },
+                    }}
+                  >
+                    {renderedContent}
+                  </ReactMarkdown>
+                ) : null}
+                {patchProposal?.proposal && repositoryId && (
+                  <div className="min-w-0 max-w-full overflow-x-auto">
+                    <PatchDiffViewer
+                      repositoryId={repositoryId}
+                      diff={patchProposal.proposal.diff}
+                      summary={patchProposal.proposal.summary}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{displayContent}</div>
+            )}
+          </div>
+
+          {!isAssistant && Array.isArray(metadata.scope_paths) && metadata.scope_paths.length > 0 && (
+            <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+              {metadata.scope_paths.map((path: string, idx: number) => (
+                <span
+                  key={idx}
+                  className="inline-flex max-w-full items-center gap-1 rounded border border-[#818cf8]/30 bg-[#818cf8]/10 px-1.5 py-0.5 text-[10px] font-mono truncate"
+                  title={path}
+                >
+                  <FileIcon path={path} className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{path.split('/').pop()}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {isAssistant && !isStreaming && sortedSources.length > 0 && (
+            <SourceExplorerV2 sources={sortedSources as Source[]} />
+          )}
+
+          <div className="mt-2 flex justify-end">
+            <CopyButton text={displayContent} />
+          </div>
+        </div>
+
+        {isAssistant && (
+          <div
+            className={cn(
+              'mb-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
+              ASSISTANT_AVATAR,
+            )}
+          >
+            <Bot className="h-4 w-4" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

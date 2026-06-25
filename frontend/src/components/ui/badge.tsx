@@ -26,7 +26,7 @@ const badgeVariants = cva(
         muted:
           "bg-muted text-muted-foreground border border-border/20",
         live:
-          "bg-success/10 text-success border border-success/20 animate-pulse-slow",
+          "bg-success/10 text-success border border-success/20 animate-glow-pulse",
       },
     },
     defaultVariants: {

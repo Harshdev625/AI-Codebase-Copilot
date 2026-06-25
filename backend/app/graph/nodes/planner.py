@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 
 from app.graph.state import CopilotState
 
@@ -29,9 +30,21 @@ def planner_node(state: CopilotState) -> CopilotState:
         intent = "docs"
     elif any(token in query for token in ["document", "docs", "readme", "architecture", "design", "structure", "overview"]):
         intent = "docs"
+    elif re.search(r"\b(about|tell me about|what is this|what is the project|describe the project)\b", query):
+        intent = "docs"
     else:
         intent = "search"
     if confidence < 0.25 and intent in {"docs", "refactor", "patch_generation"}:
         intent = "search"
     logger.debug("graph_planner - response intent=%s retrieval_count=%s confidence=%s", intent, retrieval_count, confidence)
-    return {"intent": intent}
+
+    trace = list(state.get("run_trace") or [])
+    trace.append(
+        {
+            "node": "planner",
+            "label": f"Planning intent: {intent}",
+            "ts": time.time(),
+            "detail": {"intent": intent},
+        }
+    )
+    return {"intent": intent, "run_trace": trace}

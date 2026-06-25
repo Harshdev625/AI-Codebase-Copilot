@@ -1,4 +1,5 @@
 import logging
+import time
 
 from app.graph.state import CopilotState
 
@@ -39,4 +40,13 @@ def answer_node(state: CopilotState) -> CopilotState:
 
     answer = "\n\n".join(parts) if parts else "No answer generated."
     logger.debug("graph_answer - response chars=%s", len(answer))
-    return {"answer": answer}
+    trace = list(state.get("run_trace") or [])
+    trace.append(
+        {
+            "node": "answer",
+            "label": "Formatted response",
+            "ts": time.time(),
+            "detail": {"retrieved_count": verification.get("retrieved_count") if verification else None},
+        }
+    )
+    return {"answer": answer, "run_trace": trace}

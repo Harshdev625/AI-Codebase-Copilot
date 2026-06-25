@@ -2,181 +2,224 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { LucideIcon } from "lucide-react";
-import { LogOut, LayoutDashboard, FolderGit2, Bot, ChevronRight, Settings } from "lucide-react";
-import { motion } from "framer-motion";
-import { NotificationDropdown } from "@/components/navbar/NotificationDropdown";
+import { usePathname, useRouter } from "next/navigation";
+import { LogOut, ChevronRight, Settings, Search, Menu, X } from "lucide-react";
 import { ThemeToggle } from "@/components/shared/theme-toggle";
+import { NotificationBell } from "@/features/notifications/components/notification-bell";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-export interface NavItem {
-  label: string;
-  href: string;
-  icon: LucideIcon;
-  badge?: string;
-}
-
-const mainNavItems: NavItem[] = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Repositories", href: "/repositories", icon: FolderGit2 },
-  { label: "Chat", href: "/chat", icon: Bot },
-];
+import { NAV_BAR_CLASS, NAV_MOBILE_MENU_TOP } from "./nav-tokens";
 
 interface TopNavbarProps {
   sectionTitle: string;
   userEmail?: string;
   onSignOut: () => void;
+  variant?: "user" | "admin";
 }
 
-export function TopNavbar({ sectionTitle, userEmail, onSignOut }: TopNavbarProps): React.JSX.Element {
+export function TopNavbar({
+  sectionTitle,
+  userEmail,
+  onSignOut,
+  variant = "user",
+}: TopNavbarProps): React.JSX.Element {
   const pathname = usePathname();
-  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const router = useRouter();
+  const [mobileOpen, setMobileOpen] = React.useState(false);
+  const isAdmin = variant === "admin";
+  const isDashboardHome = pathname === "/dashboard";
+  const showCodebaseCrumb = !isAdmin && !isDashboardHome;
 
-  const isActive = (href: string): boolean => {
-    return pathname === href || (href !== "/" && pathname.startsWith(href));
+  const openCommandPalette = () => {
+    window.dispatchEvent(new CustomEvent("studio:open-command-palette"));
   };
 
   return (
-    <header className="sticky top-0 z-30 shrink-0">
-      <div className="border-b border-border/60 bg-background/80 backdrop-blur-2xl">
-        <div className="h-[1px] w-full bg-gradient-to-r from-transparent via-primary/60 to-transparent" />
+    <>
+      <header className="sticky top-0 z-30 shrink-0 w-full">
+        <div className="relative border-b border-border/40 bg-card/70 backdrop-blur-2xl transition-colors duration-300">
+          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent pointer-events-none" />
 
-        <div className="flex h-14 w-full items-center justify-between px-4 sm:px-5 lg:px-6">
-          {/* Left: Logo + Primary Nav */}
-          <div className="flex items-center gap-6 min-w-0">
-            {/* Logo */}
-            <Link
-              href="/dashboard"
-              className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity"
-            >
-              <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15">
-                <div className="text-[10px] font-bold text-primary">ACC</div>
-              </div>
-              <span className="hidden sm:block text-xs font-bold tracking-tight text-foreground">{sectionTitle}</span>
-            </Link>
-
-            {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center gap-0.5">
-              {mainNavItems.map((item) => {
-                const Icon = item.icon;
-                const active = isActive(item.href);
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "relative flex items-center gap-2 h-9 px-3 rounded-lg text-sm font-medium transition-all",
-                      active
-                        ? "text-foreground bg-primary/8"
-                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                    )}
-                  >
-                    {active && (
-                      <motion.div
-                        layoutId="navbar-indicator"
-                        className="absolute inset-0 rounded-lg border border-primary/20 bg-primary/8"
-                        transition={{ type: "spring", bounce: 0.2, duration: 0.4 }}
-                      />
-                    )}
-                    <Icon className={cn("h-4 w-4 relative z-10", active && "text-primary")} />
-                    <span className="relative z-10">{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
-          </div>
-
-          {/* Right: Actions */}
-          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-            {/* Mobile menu toggle */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="md:hidden text-muted-foreground hover:text-foreground hover:bg-accent"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            >
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </Button>
-
-            <div className="h-4 w-px bg-border/40 mx-0.5 hidden sm:block" />
-
-            {/* Notification dropdown */}
-            <NotificationDropdown />
-
-            <div className="h-4 w-px bg-border/40 mx-0.5 hidden sm:block" />
-
-            {/* Theme toggle */}
-            <ThemeToggle />
-
-            {/* User email */}
-            {userEmail && (
-              <span className="hidden lg:block text-[11px] font-medium text-muted-foreground max-w-[140px] truncate">
-                {userEmail}
-              </span>
+          <div
+            className={cn(
+              "flex w-full items-center justify-between gap-2 px-3 sm:px-4 lg:px-6 xl:px-8",
+              NAV_BAR_CLASS
             )}
+          >
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 touch-target-sm md:hidden text-muted-foreground hover:text-foreground"
+                onClick={() => setMobileOpen((v) => !v)}
+                aria-label="Toggle navigation"
+              >
+                {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              </Button>
 
-            {/* Settings */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="text-muted-foreground hover:text-foreground hover:bg-accent"
-              title="Settings"
-            >
-              <Settings className="h-4 w-4" />
-            </Button>
+              <Link
+                href={isAdmin ? "/admin/dashboard" : "/dashboard"}
+                className="group flex shrink-0 items-center gap-2 transition-all"
+              >
+                <div className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 transition-all duration-200 group-hover:scale-105 group-hover:bg-primary/20 xl:h-10 xl:w-10">
+                  <span className="select-none text-xs font-bold text-primary xl:text-sm">AC</span>
+                </div>
+                <span className="hidden text-sm font-semibold text-foreground/80 transition-colors group-hover:text-foreground sm:inline-block xl:text-base">
+                  Copilot
+                </span>
+              </Link>
 
-            {/* Sign out */}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="text-muted-foreground hover:text-destructive hover:bg-destructive/8 transition-colors"
-              onClick={onSignOut}
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </Button>
+              <div className="hidden min-w-0 items-center gap-1 font-medium text-muted-foreground sm:flex text-sm xl:text-base">
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                {isAdmin ? (
+                  <>
+                    <span className="shrink-0 text-muted-foreground">Admin</span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
+                      {sectionTitle}
+                    </span>
+                  </>
+                ) : isDashboardHome ? (
+                  <>
+                    <span className="shrink-0 text-muted-foreground">Dashboard</span>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
+                      {sectionTitle}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Link href="/dashboard" className="shrink-0 transition-colors hover:text-foreground">
+                      Dashboard
+                    </Link>
+                    {showCodebaseCrumb && (
+                      <>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                        <Link href="/studio" className="shrink-0 transition-colors hover:text-foreground">
+                          Codebase
+                        </Link>
+                      </>
+                    )}
+                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/30" />
+                    <span className="truncate font-semibold text-foreground/80 max-w-[100px] sm:max-w-[180px] lg:max-w-[280px] xl:max-w-[360px]">
+                      {sectionTitle}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              <span className="truncate text-sm font-semibold text-foreground/80 sm:hidden max-w-[140px]">
+                {sectionTitle}
+              </span>
+            </div>
+
+            <div className="flex max-w-sm flex-1 justify-center px-2 lg:max-w-xl xl:max-w-2xl">
+              <button
+                type="button"
+                onClick={openCommandPalette}
+                className="group flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border/40 bg-background/40 px-3 text-xs text-muted-foreground shadow-sm transition-all duration-200 hover:border-primary/30 hover:bg-card/80 xl:h-10 xl:text-sm"
+                aria-label="Open command palette"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <Search className="h-4 w-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary xl:h-5 xl:w-5" />
+                  <span className="hidden truncate md:inline-block">Search or run command…</span>
+                  <span className="truncate text-xs md:hidden">Search…</span>
+                </div>
+                <kbd className="hidden shrink-0 items-center gap-0.5 rounded border border-border/40 bg-muted/50 px-1.5 py-0.5 font-mono text-xs font-bold text-muted-foreground/60 lg:inline-flex">
+                  ⌃K
+                </kbd>
+              </button>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-1 xl:gap-2">
+              {userEmail && (
+                <span className="hidden max-w-[140px] truncate text-xs text-muted-foreground lg:inline-block xl:max-w-[180px] xl:text-sm">
+                  {userEmail}
+                </span>
+              )}
+              <ThemeToggle />
+              <NotificationBell />
+              {!isAdmin && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="hidden h-9 w-9 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex xl:h-10 xl:w-10"
+                  title="Settings"
+                  onClick={() => router.push("/studio?panel=settings")}
+                >
+                  <Settings className="h-4 w-4 xl:h-5 xl:w-5" />
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive xl:h-10 xl:w-10"
+                onClick={onSignOut}
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                <LogOut className="h-4 w-4 xl:h-5 xl:w-5" />
+              </Button>
+            </div>
           </div>
         </div>
+      </header>
 
-        {/* Mobile Navigation Menu */}
-        {mobileMenuOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden border-t border-border/40 bg-card/50 backdrop-blur"
-          >
-            <nav className="flex flex-col gap-0.5 p-3">
-              {mainNavItems.map((item) => {
-                const Icon = item.icon;
-                const active = isActive(item.href);
-
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={cn(
-                      "flex items-center gap-3 h-10 px-3 rounded-lg text-sm font-medium transition-all",
-                      active
-                        ? "text-foreground bg-primary/12 border border-primary/20"
-                        : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </nav>
-          </motion.div>
-        )}
-      </div>
-    </header>
+      {mobileOpen && (
+        <div
+          className={cn(
+            "fixed inset-x-0 z-20 border-b border-border/40 bg-card/95 shadow-xl backdrop-blur-xl md:hidden",
+            NAV_MOBILE_MENU_TOP
+          )}
+        >
+          <nav className="flex flex-col gap-1 p-3">
+            {isAdmin ? (
+              <Link
+                href="/admin/dashboard"
+                className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                onClick={() => setMobileOpen(false)}
+              >
+                Admin Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/dashboard"
+                  className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  Dashboard
+                </Link>
+                <Link
+                  href="/studio"
+                  className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  Codebase
+                </Link>
+              </>
+            )}
+            {userEmail && (
+              <div className="mt-1 border-t border-border/40 px-3 py-2">
+                <p className="truncate text-xs text-muted-foreground">{userEmail}</p>
+              </div>
+            )}
+            <button
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium",
+                "text-destructive transition-colors hover:bg-destructive/10"
+              )}
+              onClick={() => {
+                setMobileOpen(false);
+                onSignOut();
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </nav>
+        </div>
+      )}
+    </>
   );
 }

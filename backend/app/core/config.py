@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+_BACKEND_ROOT = _BACKEND_ENV_FILE.parent
 
 
 class Settings(BaseSettings):
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     log_format: str = "text"  # "text" or "json" (PHASE 2: structured logging)
     production_enforce_secure_secrets: bool = True
 
-    cors_allow_origins: str = "http://localhost:3000"
+    cors_allow_origins: str = "http://localhost:3000"  # env: CORS_ALLOW_ORIGINS
     cors_allow_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
     cors_allow_headers: str = "Authorization,Content-Type,X-Request-Id"
 
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     ollama_chat_model: str = "tinyllama:latest"
     ollama_timeout_seconds: float = 600.0
     ollama_chat_timeout_seconds: float = 15.0
+    ollama_plan_timeout_seconds: float = 240.0
+    ollama_act_timeout_seconds: float = 600.0
     ollama_embedding_timeout_seconds: float = 600.0
 
     qdrant_host: str = "localhost"
@@ -70,7 +73,9 @@ class Settings(BaseSettings):
     vector_dim: int = 768
     max_retrieval_k: int = 12
     repo_cache_dir: str = ".repo_cache"
-    repo_cache_persist: bool = False
+    # When True, remote clones are NOT deleted after indexing (required for File Explorer
+    # and ACT mode). Set False only in CI / resource-constrained environments.
+    repo_cache_persist: bool = True
     max_index_file_size_bytes: int = 1_000_000
     indexing_timeout_seconds: int = 60 * 30
     indexing_stall_timeout_seconds: int = 60 * 5
@@ -79,12 +84,19 @@ class Settings(BaseSettings):
     indexing_incremental_enabled: bool = True
     indexing_force_full_reindex: bool = False
 
+    # Snapshot retention defaults (overridden per-repository via DB)
+    # ALL | LAST_N | IMPORTANT_ONLY
+    default_retain_snapshots_mode: str = "LAST_N"
+    default_retain_snapshot_count: int = 20
+    # How often the background retention cleanup runs (seconds)
+    snapshot_retention_interval_seconds: int = 60 * 60  # 1 hour
+
     retrieval_rerank_enabled: bool = True
     retrieval_rerank_candidate_pool: int = 32
     retrieval_cache_ttl_seconds: int = 120
     retrieval_max_chunk_chars: int = 1400
-    retrieval_context_char_budget: int = 12_000
-    retrieval_min_token_overlap: int = 1
+    retrieval_context_char_budget: int = 7_000
+    retrieval_min_token_overlap: int = 2
 
     jwt_secret_key: str = "change-me-in-production"
     jwt_issuer: str = "ai-codebase-copilot"
@@ -95,8 +107,11 @@ class Settings(BaseSettings):
 
     @property
     def repo_cache_path(self) -> str:
-        """Alias for repo_cache_dir used by IndexingService._cache_root()."""
-        return self.repo_cache_dir
+        """Absolute on-disk directory for cloned repositories."""
+        cache = Path(self.repo_cache_dir)
+        if cache.is_absolute():
+            return str(cache.resolve())
+        return str((_BACKEND_ROOT / cache).resolve())
 
     @property
     def postgres_dsn(self) -> str:
@@ -162,32 +177,52 @@ class Settings(BaseSettings):
         return str(self.app_env).strip().lower() in {"production", "staging"}
 
     def validate_runtime_configuration(self) -> None:
-        """H3 FIX: Comprehensive configuration validation."""
+        """Comprehensive startup configuration validation."""
         from urllib.parse import urlparse
         import logging
-        
+
         logger_local = logging.getLogger(__name__)
-        
+
+        # Always warn on obviously-weak JWT secret regardless of environment.
+        weak_markers = {"change-me-in-production", "mypassword", "password", "changeme", "default", "secret", ""}
+        jwt_normalized = str(self.jwt_secret_key or "").strip().lower()
+        if jwt_normalized in weak_markers or len(str(self.jwt_secret_key or "")) < 32:
+            if self.is_production_like:
+                raise RuntimeError(
+                    "JWT_SECRET_KEY is weak or too short. "
+                    "Set a random 64-char secret in your .env file before deploying."
+                )
+            logger_local.warning(
+                "config_validation - JWT_SECRET_KEY is weak (length=%d). "
+                "Set a strong secret before deploying to production.",
+                len(str(self.jwt_secret_key or "")),
+            )
+
         if not self.production_enforce_secure_secrets or not self.is_production_like:
-            logger_local.debug("config_validation - skipped (not production-like)")
+            logger_local.debug("config_validation - skipped deep checks (not production-like)")
             return
 
-        # Check for weak secrets in production
+        # Deep production checks
         insecure_values = {
-            "jwt_secret_key": self.jwt_secret_key,
             "postgres_password": self.postgres_password,
         }
-        weak_markers = {"change-me-in-production", "mypassword", "password", "changeme", "default"}
-
+        pg_weak = {"mypassword", "password", "changeme", "default", "postgres", ""}
         weak_fields = []
         for key, value in insecure_values.items():
             normalized = str(value or "").strip().lower()
-            if not normalized or normalized in weak_markers:
+            if normalized in pg_weak:
                 weak_fields.append(key)
 
         if weak_fields:
             joined = ", ".join(sorted(weak_fields))
             raise RuntimeError(f"Unsafe production configuration: {joined}")
+
+        # Validate CORS is not still pointing at localhost in production
+        if "localhost" in self.cors_allow_origins and "localhost" not in (self.app_host or ""):
+            logger_local.warning(
+                "config_validation - CORS_ALLOW_ORIGINS still set to localhost. "
+                "Update CORS_ALLOW_ORIGINS in .env to your production domain."
+            )
         
         # H3: Validate external service URLs
         try:

@@ -61,4 +61,45 @@ describe('repositoryService', () => {
       method: 'GET',
     });
   });
+
+  it('calls deleteRepository API', async () => {
+    (apiClient as jest.Mock).mockResolvedValueOnce({ deleted: true });
+    const result = await repositoryService.deleteRepository('repo-1');
+    expect(result).toEqual({ deleted: true });
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1', { method: 'DELETE' });
+  });
+
+  it('calls getTree with optional params', async () => {
+    (apiClient as jest.Mock).mockResolvedValueOnce({ items: [], next_cursor: null });
+    await repositoryService.getTree('repo-1', 'src', 'snap-1', 'patch-1', 'cursor-1', 50);
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/tree', {
+      method: 'GET',
+      params: {
+        limit: '50',
+        path: 'src',
+        snapshot_id: 'snap-1',
+        patch_id: 'patch-1',
+        cursor: 'cursor-1',
+      },
+    });
+  });
+
+  it('calls searchWorkspace API', async () => {
+    const payload = { query: 'foo', case_sensitive: false };
+    (apiClient as jest.Mock).mockResolvedValueOnce({ matches: [] });
+    await repositoryService.searchWorkspace('repo-1', payload);
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/search', {
+      method: 'POST',
+      body: payload,
+    });
+  });
+
+  it('calls listSkippedFiles with filters', async () => {
+    (apiClient as jest.Mock).mockResolvedValueOnce({ items: [], total: 0, limit: 10, offset: 0 });
+    await repositoryService.listSkippedFiles('repo-1', { limit: 10, offset: 5, reason: 'BINARY_FILE' });
+    expect(apiClient).toHaveBeenCalledWith('/v1/repositories/repo-1/files/skipped', {
+      method: 'GET',
+      params: { limit: '10', offset: '5', reason: 'BINARY_FILE' },
+    });
+  });
 });

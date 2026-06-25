@@ -278,7 +278,7 @@ class TestChatSessionAndMessageModels:
         session.add(user)
         session.flush()
 
-        chat = ChatSession(id=str(uuid.uuid4()), user_id=user.id, title="Test Chat")
+        chat = ChatSession(id=str(uuid.uuid4()), user_id=user.id, session_title="Test Chat")
         session.add(chat)
         session.flush()
 
@@ -296,6 +296,23 @@ class TestChatSessionAndMessageModels:
         assert fetched is not None
         assert fetched.content == "Hello world"
         assert fetched.msg_metadata == {"tokens": 2}
+
+    def test_session_metadata_round_trip(self, session: Session):
+        user = User(id=str(uuid.uuid4()), email="meta@test.com", password_hash="h", role="USER", is_active=True)
+        session.add(user)
+        session.flush()
+
+        chat = ChatSession(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            session_metadata={"scope_paths": ["lib/"]},
+        )
+        session.add(chat)
+        session.flush()
+
+        fetched = session.get(ChatSession, chat.id)
+        assert fetched is not None
+        assert fetched.session_metadata == {"scope_paths": ["lib/"]}
 
     def test_cascade_delete_session_deletes_messages(self, session: Session):
         user = User(id=str(uuid.uuid4()), email="cascade2@test.com", password_hash="h", role="USER", is_active=True)

@@ -21,6 +21,9 @@ class ChatMode(str, Enum):
     DEBUG = "debug"
     DOCUMENTATION = "documentation"
     TOOL = "tool"
+    ASK = "ASK"
+    PLAN = "PLAN"
+    ACT = "ACT"
 
 
 class StrictRequestModel(BaseModel):
@@ -34,6 +37,13 @@ class ChatRequest(StrictRequestModel):
     session_id: str | None = Field(default=None, pattern=UUID_PATTERN)
     mode: ChatMode = Field(default=ChatMode.QUESTION, description="Chat workflow mode")
     include_patch: bool = Field(default=False, description="Include code patches in refactor mode")
+    scope_paths: list[str] | None = Field(default=None, description="Paths to restrict retrieval scope")
+    attached_files: list[str] | None = Field(default=None, description="Exact file paths to pin full content in context")
+    display_query: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="User-visible message text (when different from query, e.g. stripped @mentions)",
+    )
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "ChatRequest":
@@ -52,6 +62,83 @@ class ChatResponse(BaseModel):
     intent: str
     session_id: str
     sources: list[dict[str, Any]] = []
+
+
+TraceNodeName = Literal[
+    "planner",
+    "retrieval",
+    "reasoning",
+    "tool_execution",
+    "answer",
+    "llm",
+]
+
+TraceStepStatus = Literal["running", "done", "error"]
+TraceStage = Literal["pipeline", "llm"]
+
+
+class TraceSourcePreview(BaseModel):
+    path: str
+    score: float | None = None
+
+
+class TraceStepDetail(BaseModel):
+    intent: str | None = None
+    retrieved_count: int | None = None
+    confidence: float | None = None
+    scope_paths: list[str] | None = None
+    source_preview: list[TraceSourcePreview] | None = None
+    tool_name: str | None = None
+    error: str | None = None
+
+
+class TraceStep(BaseModel):
+    node: TraceNodeName
+    label: str
+    ts: float | None = None
+    stage: TraceStage | None = None
+    status: TraceStepStatus | None = None
+    detail: TraceStepDetail | None = None
+
+    @classmethod
+    def from_run_trace_entry(
+        cls,
+        entry: dict[str, Any],
+        *,
+        stage: TraceStage = "pipeline",
+        status: TraceStepStatus = "done",
+    ) -> "TraceStep":
+        detail_raw = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+        source_preview = None
+        if isinstance(detail_raw.get("source_preview"), list):
+            source_preview = [
+                TraceSourcePreview(
+                    path=str(item.get("path") or ""),
+                    score=item.get("score"),
+                )
+                for item in detail_raw["source_preview"]
+                if isinstance(item, dict) and item.get("path")
+            ]
+        detail = TraceStepDetail(
+            intent=detail_raw.get("intent"),
+            retrieved_count=detail_raw.get("retrieved_count"),
+            confidence=detail_raw.get("confidence"),
+            scope_paths=detail_raw.get("scope_paths"),
+            source_preview=source_preview,
+            tool_name=detail_raw.get("tool_name"),
+            error=detail_raw.get("error"),
+        )
+        node = str(entry.get("node") or "planner")
+        if node not in {"planner", "retrieval", "reasoning", "tool_execution", "answer", "llm"}:
+            node = "planner"
+        return cls(
+            node=node,  # type: ignore[arg-type]
+            label=str(entry.get("label") or ""),
+            ts=entry.get("ts"),
+            stage=stage,
+            status=status,
+            detail=detail if any(v is not None for v in detail.model_dump().values()) else None,
+        )
 
 
 class ApplyPatchRequest(StrictRequestModel):
@@ -74,10 +161,23 @@ class ApplyPatchRequest(StrictRequestModel):
 class ChatSessionResponse(BaseModel):
     id: str
     repository_id: str | None = None
-    title: str | None = None
+    session_title: str | None = None
+    session_mode: str
+    is_pinned: bool
+    is_archived: bool
     summary: str | None = None
     created_at: str
     updated_at: str
+    last_activity_at: str
+    metadata: dict[str, Any] | None = None
+
+
+class ChatSessionUpdateRequest(StrictRequestModel):
+    session_title: str | None = None
+    is_pinned: bool | None = None
+    is_archived: bool | None = None
+    session_mode: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class ChatMessageResponse(BaseModel):
@@ -95,6 +195,10 @@ class IndexRequest(StrictRequestModel):
     repo_url: str | None = Field(default=None, max_length=1024)
     repo_ref: str | None = Field(default=None, max_length=128, pattern=BRANCH_PATTERN)
     commit_sha: str = Field(default="local-working-copy", min_length=3, max_length=80, pattern=COMMIT_PATTERN)
+    full_reindex: bool = Field(
+        default=False,
+        description="When true, wipe remote clone cache and rebuild index from scratch.",
+    )
 
     @model_validator(mode="after")
     def normalize_repo_id(self) -> "IndexRequest":
@@ -111,6 +215,13 @@ class IndexResponse(BaseModel):
     indexing_job_id: str | None = None
 
 
+class ContextTokensRequest(StrictRequestModel):
+    scope_paths: list[str] = []
+    attached_files: list[str] = []
+    retrieval_query: str | None = None
+    session_id: str | None = None
+
+
 class AuthRegisterRequest(StrictRequestModel):
     email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
     password: str = Field(..., min_length=8, max_length=256)
@@ -121,7 +232,16 @@ class AuthAdminRegisterRequest(StrictRequestModel):
     email: str = Field(..., max_length=320, pattern=EMAIL_PATTERN)
     password: str = Field(..., min_length=8, max_length=256)
     full_name: str | None = Field(default=None, max_length=120)
-    admin_secret_key: str = Field(..., min_length=1, max_length=256)
+    admin_secret_key: str | None = Field(default=None, max_length=256)
+    invite_token: str | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def require_registration_credential(self) -> "AuthAdminRegisterRequest":
+        secret = (self.admin_secret_key or "").strip()
+        invite = (self.invite_token or "").strip()
+        if not secret and not invite:
+            raise ValueError("Either admin_secret_key or invite_token is required")
+        return self
 
 
 class AuthLoginRequest(StrictRequestModel):
@@ -141,19 +261,6 @@ class UserResponse(BaseModel):
     role: str
     token_scopes: list[str] = []
     is_active: bool
-
-
-class CreateProjectRequest(StrictRequestModel):
-    name: str = Field(..., min_length=2, max_length=120)
-    description: str | None = Field(default=None, max_length=500)
-
-
-class ProjectResponse(BaseModel):
-    id: str
-    name: str
-    description: str | None = None
-    created_by: str
-    created_at: str
 
 
 class AddRepositoryRequest(StrictRequestModel):
@@ -208,6 +315,42 @@ class RepositoryResponse(BaseModel):
     remote_url: str | None = None
     local_path: str | None = None
     default_branch: str
+    latest_indexed_commit: str | None = None
+    retain_snapshots_mode: str = "LAST_N"
+    retain_snapshot_count: int = 20
     created_at: str
     latest_job_status: str | None = None
     latest_job_stats: dict[str, Any] | None = None
+
+
+class SnapshotResponse(BaseModel):
+    id: str
+    repository_id: str
+    commit_sha: str
+    indexed_at: str
+    files_count: int
+    chunks_count: int
+    files_skipped: int
+    is_pinned: bool
+    is_release: bool
+
+
+class SnapshotUpdateRequest(BaseModel):
+    is_pinned: bool | None = None
+    is_release: bool | None = None
+    status: str | None = None
+
+
+class RepositoryFileResponse(BaseModel):
+    id: str
+    path: str
+    type: str
+    extension: str | None = None
+    language: str | None = None
+    size_bytes: int | None = None
+    line_count: int | None = None
+    token_count: int | None = None
+    is_generated: bool
+    status: str
+    skip_reason: str | None = None
+    last_indexed_commit: str | None = None

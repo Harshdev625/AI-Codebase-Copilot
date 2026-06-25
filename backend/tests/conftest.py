@@ -19,8 +19,11 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-# Force file-based SQLite for stable fixture isolation
-os.environ.setdefault("DATABASE_URL", "sqlite:///test.db")
+# Use in-memory SQLite so every pytest process starts with a clean database.
+# StaticPool is required for in-memory SQLite: it forces all "connections" to
+# reuse the same underlying connection, keeping the in-memory DB alive for
+# the full test session.
+os.environ["DATABASE_URL"] = "sqlite://"
 os.environ.setdefault("QDRANT_HOST", "localhost")
 os.environ.setdefault("QDRANT_PORT", "6333")
 os.environ.setdefault("REDIS_HOST", "localhost")
@@ -36,7 +39,7 @@ from app.core.security import create_access_token
 # ---------------------------------------------------------------------------
 
 _test_engine = create_engine(
-    "sqlite:///test.db",
+    "sqlite://",  # in-memory — no persistence between pytest invocations
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
     future=True,
@@ -71,9 +74,9 @@ def reset_circuit_breakers():
         cb.reset()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _create_tables():
-    """Create all tables once for the entire test session."""
+    """Create all tables before each test function to guarantee isolation."""
     Base.metadata.drop_all(bind=_test_engine)
     Base.metadata.create_all(bind=_test_engine)
     yield

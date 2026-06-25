@@ -8,6 +8,8 @@ export const adminKeys = {
   users: ["admin", "users"] as const,
   repositories: ["admin", "repositories"] as const,
   indexing: ["admin", "indexing"] as const,
+  telemetry: ["admin", "telemetry"] as const,
+  recentActivity: ["admin", "recentActivity"] as const,
 };
 
 export function useAdminDashboard() {
@@ -32,7 +34,7 @@ export function useAdminDashboard() {
   const repositoriesQuery = useQuery({
     queryKey: adminKeys.repositories,
     queryFn: async () => {
-      const data = await adminService.repositories();
+      const data = await adminService.repositories({ limit: 100, offset: 0 });
       return data.items;
     },
   });
@@ -40,9 +42,19 @@ export function useAdminDashboard() {
   const indexingQuery = useQuery({
     queryKey: adminKeys.indexing,
     queryFn: async () => {
-      const data = await adminService.indexingStatus();
+      const data = await adminService.indexingStatus({ limit: 100, offset: 0 });
       return data.items;
     },
+  });
+
+  const telemetryQuery = useQuery({
+    queryKey: adminKeys.telemetry,
+    queryFn: () => adminService.telemetry(),
+  });
+
+  const recentActivityQuery = useQuery({
+    queryKey: adminKeys.recentActivity,
+    queryFn: () => adminService.recentActivity(),
   });
 
   return {
@@ -51,5 +63,7 @@ export function useAdminDashboard() {
     usersQuery,
     repositoriesQuery,
     indexingQuery,
+    telemetryQuery,
+    recentActivityQuery,
   };
 }

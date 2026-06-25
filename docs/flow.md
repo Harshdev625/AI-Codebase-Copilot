@@ -1,76 +1,102 @@
-# Project Flow and Agent Overview
+# User Workflow Diagrams
 
-This document summarizes how the AI Codebase Copilot agent and application components interact.
-
-## High-level flow
+## 1. Repository Indexing Workflow
 
 ```mermaid
 flowchart TD
-  subgraph Frontend
-    A[User in Browser] --> B[Next.js App] --> C[Frontend API Routes]
-  end
-
-  subgraph Backend
-    C --> D[FastAPI Backend] --> E[LangGraph Orchestrator] --> F[Agent Workflow Nodes]
-    F --> G[(Postgres + pgvector)]
-    F --> H[(Qdrant / Vector DB)]
-    F --> I[(Ollama / LLM Provider)]
-    F --> J[Tool Executors: git, read_file, run_command]
-  end
-
-  subgraph Storage
-    G
-    H
-  end
-
-  subgraph LocalModels
-    I
-  end
+    A[User adds repository\nvia dashboard] -->|POST /repositories| B[API creates Repository record]
+    B -->|POST /v1/index| C[API creates IndexingJob\nstatus=queued]
+    C -->|Enqueue task| D[Redis queue]
+    D --> E[RQ Worker picks up task]
+    E --> F[Clone / fetch repo\ninto .repo_cache]
+    F --> G[Parse files\nFilter by extension/size]
+    G --> H[Chunk code into\nsemantic segments]
+    H --> I[Embed chunks\nvia Ollama]
+    I --> J[Upsert vectors\ninto Qdrant]
+    J --> K[Save Snapshot record\nto PostgreSQL]
+    K -->|status=completed| L[IndexingJob done]
+    L --> M[User can query\nthe codebase]
 ```
 
-## Agent workflow (summary)
+## 2. AI Chat Workflow
 
-- User initiates actions in the UI: search, chat, index repository, or run tools.
-- Frontend routes the request to FastAPI endpoints under `/v1/*`.
-- FastAPI translates requests into LangGraph flows or directly invokes service layers.
-- LangGraph orchestrates the multi-step agent workflow (nodes):
-  - Retrieval node: hybrid retrieval combining dense vectors (embeddings) and traditional search.
-  - Planner node: decides next steps and composes prompts or sub-tasks.
-  - LLM node: calls Ollama (or configured provider) for generation, summarization, or code-intent extraction.
-  - Tool execution nodes: run safe commands (`read_file`, `git_status`, `run_command`) via a validated safety layer.
-  - Verifier node: checks outputs, may re-run or refine prompts.
-- Results are persisted in Postgres and vector indices as needed and returned to the frontend.
+```mermaid
+flowchart TD
+    U[User types message] --> M{Chat mode?}
+    M -->|ASK| S[Send to backend\nPOST /v1/chat/stream]
+    M -->|PLAN| S
+    M -->|ACT| S
+    S --> R[Backend: LangGraph pipeline\nhybrid retrieval + reasoning]
+    R --> L[LLM generates response\nvia Ollama streaming]
+    L -->|SSE stream| F[Frontend renders\nmessage tokens]
+    F --> A{ACT mode\npatch in response?}
+    A -->|Yes| P[Create ACT patch draft\nstatus=DRAFT]
+    A -->|No| D[Conversation continues]
+    P --> V[User reviews patch\nin PatchReviewEditor]
+    V --> AP[User clicks Validate\nPOST /patches/id/validate]
+    AP --> VR{Valid?}
+    VR -->|APPROVED| APP[User clicks Apply\nPOST /patches/id/apply]
+    VR -->|REJECTED| RE[Show validation errors]
+    VR -->|CONFLICTED| CONF[Show conflict warning\nRe-validate option]
+    APP --> DONE[Patch applied to repo]
+```
 
-## Typical interactions
+## 3. Multi-Repository Query Workflow
 
-- Admin authentication:
-  1. Admin registration uses `/register/admin` with `admin_secret_key`.
-  2. Frontend proxy forwards to backend `/v1/auth/admin/register`.
-  3. Admin login uses `/login/admin` and backend enforces role `admin`.
-  4. Admin dashboard calls admin-only endpoints through `/api/admin/*` proxies.
+```mermaid
+flowchart TD
+    U[User selects multiple\nrepositories via selector] --> Q[User submits query]
+    Q --> P[Frontend fans out\nPOST /repositories/id/retrieve\nfor each selected repo]
+    P --> R1[Retrieve from Repo 1]
+    P --> R2[Retrieve from Repo 2]
+    P --> Rn[Retrieve from Repo N]
+    R1 & R2 & Rn --> M[Merge results\nby score]
+    M --> C[Build context string\nwith source attribution]
+    C --> S[Send enriched query\nto chat session]
+    S --> LLM[LLM responds with\ncross-repo context]
+```
 
-- Session validation:
-  1. Protected routes are gated by frontend app shell checks.
-  2. Session is revalidated via `/api/auth/me` on interval.
-  3. Unauthorized responses clear local session and redirect to `/login`.
+## 4. Snapshot Comparison Workflow
 
-- Chat:
-  1. User asks a question scoped to a repository.
-  2. Backend creates a ChatRequest, retrieves top documents via vector DB + hybrid heuristics.
-  3. LangGraph composes context, calls LLM, formats the answer, and returns it to frontend.
+```mermaid
+flowchart TD
+    U[User opens Snapshots panel\nin Studio secondary panel] --> L[List snapshots\nGET /snapshots]
+    L --> S[Select two snapshots\nbase and compare]
+    S --> D[Open diff dialog\nGET /snapshots/id/diff?compare_with=...]
+    D --> F{File type}
+    F -->|Added/Removed| Show[Show file in list]
+    F -->|Modified| Click[User clicks file]
+    Click --> FC[Fetch both versions\nGET /file?commit_sha=...]
+    FC --> MV[Open in MonacoDiffViewer]
+    MV --> Nav[Navigate modified files\nwith back button]
+```
 
-- Indexing:
-  1. User requests indexing of a repository.
-  2. Backend schedules an indexing job that clones (or reads) the repository, chunks files, computes embeddings, and stores them in vector DB.
-  3. Job status is tracked in Postgres for admin visibility.
+## 5. Context Management Workflow
 
-- Tool execution (safe):
-  1. User triggers a tool (e.g., `read_file`).
-  2. The request passes through `app.tools.safety.is_command_allowed` and command validators.
-  3. Approved commands are executed by `terminal_tools` or helper service; outputs are returned to the agent flow.
+```mermaid
+flowchart TD
+    U[User browses file\nin Explorer panel] --> Add[Click + Add to Context]
+    Add -->|POST /sessions/id/context| CE[Context entry created\nin PostgreSQL]
+    CE --> CP[ContextPanel shows entry\nwith token count]
+    CP --> TB[Token budget bar\nupdated in real-time]
+    TB --> W{Utilization > 80%?}
+    W -->|Yes| Warn[Warning: approaching limit\nShown in ContextPanel]
+    W -->|No| OK[Continue adding context]
+    CP --> Pin[User can pin entry\nhigher retrieval priority]
+    CP --> Remove[User can remove entry]
+```
 
-## Notes and Extensibility
+## 6. Admin: User & Repository Management
 
-- The system is modular: new LLM providers, vector stores, or tool types can be added by implementing provider adapters and wiring them into the LangGraph workflow.
-- For full end-to-end testing, run the infra (`infra/compose.yaml`) to bring up Postgres, Qdrant, Ollama, and other dependencies.
-
+```mermaid
+flowchart TD
+    A[Admin logs in\n/admin/login] --> D[Admin Dashboard]
+    D --> U[Users tab: view all users]
+    D --> R[Repositories tab: view all repos]
+    D --> O[Overview tab: metrics + health]
+    U --> Role[Change user role\nPOST /admin/users/id/role]
+    U --> Status[Enable/Disable user\nPOST /admin/users/id/status]
+    R --> RI[Re-index any repository\nPOST /v1/index]
+    O --> Health[View service health\nGET /admin/service-health]
+    O --> Metrics[View system metrics\nGET /admin/system-metrics]
+```

@@ -15,8 +15,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+import sys
+from rq import Worker, SimpleWorker
+
 if __name__ == "__main__":
     redis_connection = get_redis_connection()
     queue = get_indexing_queue()
     logger.info("index_worker - listening queue=%s", settings.indexing_queue_name)
-    Worker([queue], connection=redis_connection).work(with_scheduler=True)
+    worker_class = SimpleWorker if sys.platform == "win32" else Worker
+    worker_class([queue], connection=redis_connection).work(with_scheduler=True)

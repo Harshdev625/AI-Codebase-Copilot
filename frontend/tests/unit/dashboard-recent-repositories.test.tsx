@@ -1,63 +1,66 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { DashboardRecentRepositories } from "@/features/dashboard/components/dashboard-recent-repositories";
-import { useDashboard } from "@/features/dashboard/hooks/use-dashboard";
+import {
+  useRepositories,
+  useIndexRepository,
+  useIndexingJobs,
+  useDeleteRepository,
+} from "@/features/repositories/hooks/use-repositories";
 import { TestProviders } from "../test-utils";
 
-const mockPush = jest.fn();
-
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
-}));
-
-jest.mock("@/features/dashboard/hooks/use-dashboard", () => ({
-  useDashboard: jest.fn(),
+jest.mock("@/features/repositories/hooks/use-repositories", () => ({
+  useRepositories: jest.fn(),
+  useIndexRepository: jest.fn(),
+  useIndexingJobs: jest.fn(),
+  useDeleteRepository: jest.fn(),
+  useRepositoryInsights: jest.fn(() => ({ data: null })),
 }));
 
 describe("DashboardRecentRepositories", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    (useIndexRepository as jest.Mock).mockReturnValue({ mutate: jest.fn(), isPending: false });
+    (useIndexingJobs as jest.Mock).mockReturnValue({ data: [] });
+    (useDeleteRepository as jest.Mock).mockReturnValue({ mutate: jest.fn(), isPending: false });
   });
 
   it("renders loading skeleton", () => {
-    (useDashboard as jest.Mock).mockReturnValue({ isLoading: true });
+    (useRepositories as jest.Mock).mockReturnValue({ repositories: [], isLoading: true });
     render(<DashboardRecentRepositories />, { wrapper: TestProviders });
-    expect(screen.queryByText("No Sources Linked")).not.toBeInTheDocument();
+    expect(screen.queryByText("No repositories yet")).not.toBeInTheDocument();
   });
 
   it("renders empty state", () => {
-    (useDashboard as jest.Mock).mockReturnValue({
+    (useRepositories as jest.Mock).mockReturnValue({
+      repositories: [],
       isLoading: false,
-      summary: { recent_repositories: [] },
     });
-    
-    render(<DashboardRecentRepositories />, { wrapper: TestProviders });
-    expect(screen.getByText("No Sources Linked")).toBeInTheDocument();
 
-    const linkBtn = screen.getByText("Link Repository");
-    fireEvent.click(linkBtn);
-    expect(mockPush).toHaveBeenCalledWith("/repositories");
+    render(<DashboardRecentRepositories />, { wrapper: TestProviders });
+    expect(screen.getByText("No repositories yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Add your first repository to start indexing and exploring your codebase.")
+    ).toBeInTheDocument();
   });
 
   it("renders repositories", () => {
-    (useDashboard as jest.Mock).mockReturnValue({
+    (useRepositories as jest.Mock).mockReturnValue({
+      repositories: [
+        {
+          id: "repo-1",
+          repo_id: "test/repo-1",
+          default_branch: "main",
+          created_at: new Date().toISOString(),
+          latest_job_status: "completed",
+          remote_url: "https://github.com/test/repo-1.git",
+          local_path: null,
+        },
+      ],
       isLoading: false,
-      summary: {
-        recent_repositories: [
-          {
-            id: "repo-1",
-            repo_id: "test/repo-1",
-            default_branch: "main",
-            created_at: new Date().toISOString(),
-            latest_index_status: "completed",
-          },
-        ],
-      },
     });
 
     render(<DashboardRecentRepositories />, { wrapper: TestProviders });
     expect(screen.getByText("test/repo-1")).toBeInTheDocument();
-    expect(screen.getByText("completed")).toBeInTheDocument();
+    expect(screen.getByText("READY")).toBeInTheDocument();
   });
 });

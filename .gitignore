@@ -24,6 +24,10 @@ out/
 # IDE / OS
 .vscode/
 .idea/
+.cursor/
+
+# Screenshots / scratch artifacts
+after_sprint*_ui_*.png
 .DS_Store
 Thumbs.db
 
@@ -43,5 +47,21 @@ backend/.repo_cache/
 # Backend tool caches
 backend/.ruff_cache/
 
+# SQLite databases (dev artifacts)
+*.db
+*.sqlite
+*.sqlite3
+
 # Internal planning/spec notes
 Project.md
+project_status.md
+docs/project_status.md
+
+# Personal session tracking (local only — not for repo)
+docs/tracking/
+docs/repo-cleanup.md
+enhancement.md
+info.md
+
+# Playwright artifacts
+frontend/test-results/

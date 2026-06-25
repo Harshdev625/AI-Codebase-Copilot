@@ -4,58 +4,73 @@ import { TestProviders } from "../test-utils";
 
 jest.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
+  useRouter: () => ({ push: jest.fn() }),
 }));
 
 describe("TopNavbar", () => {
   it("renders desktop navbar content", () => {
     const signOutSpy = jest.fn();
-    render(
-      <TopNavbar 
+    const { container } = render(
+      <TopNavbar
         sectionTitle="Test App"
         userEmail="test@example.com"
-        onSignOut={signOutSpy} 
+        onSignOut={signOutSpy}
       />,
       { wrapper: TestProviders }
     );
 
-    expect(screen.getByText("Test App")).toBeInTheDocument();
-    expect(screen.getByText("test@example.com")).toBeInTheDocument();
-    // Desktop main nav items
-    expect(screen.getAllByText("Repositories").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Test App").length).toBeGreaterThan(0);
+    expect(screen.getByText("Search or run command…")).toBeInTheDocument();
+    expect(screen.getByText("Copilot")).toBeInTheDocument();
+    expect(container.querySelector(".h-14")).toBeTruthy();
+  });
+
+  it("renders admin breadcrumbs when variant is admin", () => {
+    render(
+      <TopNavbar
+        sectionTitle="Dashboard"
+        userEmail="admin@example.com"
+        onSignOut={jest.fn()}
+        variant="admin"
+      />,
+      { wrapper: TestProviders }
+    );
+
+    expect(screen.getByText("Admin")).toBeInTheDocument();
+    expect(screen.getAllByText("Dashboard").length).toBeGreaterThan(0);
+  });
+
+  it("dispatches command palette event when search is clicked", () => {
+    const dispatchSpy = jest.spyOn(window, "dispatchEvent");
+    render(
+      <TopNavbar
+        sectionTitle="Test App"
+        userEmail="test@example.com"
+        onSignOut={jest.fn()}
+      />,
+      { wrapper: TestProviders }
+    );
+
+    fireEvent.click(screen.getByLabelText("Open command palette"));
+    expect(dispatchSpy).toHaveBeenCalled();
+    const event = dispatchSpy.mock.calls[0][0] as Event;
+    expect(event.type).toBe("studio:open-command-palette");
+    dispatchSpy.mockRestore();
   });
 
   it("calls onSignOut when sign out button is clicked", () => {
     const signOutSpy = jest.fn();
     render(
-      <TopNavbar 
+      <TopNavbar
         sectionTitle="Test App"
         userEmail="test@example.com"
-        onSignOut={signOutSpy} 
+        onSignOut={signOutSpy}
       />,
       { wrapper: TestProviders }
     );
 
-    const signOutBtn = screen.getByTitle("Sign out");
+    const signOutBtn = screen.getByLabelText("Sign out");
     fireEvent.click(signOutBtn);
     expect(signOutSpy).toHaveBeenCalled();
-  });
-
-  it("toggles mobile menu", () => {
-    render(
-      <TopNavbar 
-        sectionTitle="Test App"
-        userEmail="test@example.com"
-        onSignOut={jest.fn()} 
-      />,
-      { wrapper: TestProviders }
-    );
-
-    const toggleBtn = screen.getAllByRole("button")[0];
-    fireEvent.click(toggleBtn);
-
-    // Mobile nav items should be visible
-    // Multiple items with same label now exist (desktop + mobile)
-    const reposLinks = screen.getAllByText("Repositories");
-    expect(reposLinks.length).toBeGreaterThan(1);
   });
 });

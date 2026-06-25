@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
+import threading
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any, Callable, Generator
 
 from app.core.config import settings
 from app.core.exceptions import CircuitBreakerOpen, ExternalServiceError
 from app.core.resilience import get_circuit_breaker
+from app.observability.metrics import runtime_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,9 @@ except Exception:  # pragma: no cover
 
 # PHASE 3: Get a circuit breaker for Redis
 redis_circuit_breaker = get_circuit_breaker("redis")
+
+_fallback_locks = {}
+_fallback_locks_lock = threading.Lock()
 
 
 class CacheService:
@@ -95,6 +101,68 @@ class CacheService:
             return bool(self._run_with_circuit_breaker(self._client.ping))
         except (CircuitBreakerOpen, redis.exceptions.RedisError):
             return False
+
+    @contextlib.contextmanager
+    def repository_lock(self, repository_id: str, lock_timeout: int = 3600, acquire_timeout: int = 60) -> Generator[None, None, None]:
+        """
+        Acquire a distributed lock for a repository.
+        Fails in production when Redis is down, but allows local threading coordination fallback in development.
+        """
+        runtime_metrics.increment("redis_lock_acquire_attempts", repository_id=repository_id)
+        
+        if not self.is_available:
+            # Check production vs development fallback
+            if settings.is_production_like:
+                runtime_metrics.increment("redis_lock_acquire_error", repository_id=repository_id)
+                raise ExternalServiceError("Redis", "Redis lock is unavailable in production mode.")
+                
+            logger.warning("cache_lock - redis unavailable, falling back to local threading lock for %s", repository_id)
+            with _fallback_locks_lock:
+                if repository_id not in _fallback_locks:
+                    _fallback_locks[repository_id] = threading.Lock()
+                local_lock = _fallback_locks[repository_id]
+            
+            acquired = local_lock.acquire(timeout=acquire_timeout)
+            if not acquired:
+                runtime_metrics.increment("redis_lock_acquire_error", repository_id=repository_id)
+                raise ExternalServiceError("Redis", f"Could not acquire local fallback lock for repository {repository_id} within {acquire_timeout}s.")
+            
+            runtime_metrics.increment("redis_lock_acquire_success", repository_id=repository_id)
+            start_time = time.perf_counter()
+            try:
+                yield
+            finally:
+                local_lock.release()
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                runtime_metrics.observe_ms("redis_lock_hold_duration_ms", duration_ms, repository_id=repository_id)
+            return
+
+        lock_name = f"repo_lock:{repository_id}"
+        lock = self._client.lock(lock_name, timeout=lock_timeout, blocking_timeout=acquire_timeout)
+        
+        try:
+            acquired = self._run_with_circuit_breaker(lock.acquire)
+        except Exception as e:
+            runtime_metrics.increment("redis_lock_acquire_error", repository_id=repository_id)
+            logger.error("cache_lock - lock acquire raised exception for %s: %s", repository_id, e)
+            raise ExternalServiceError("Redis", f"Lock acquisition failed due to redis client exception: {e}") from e
+
+        if not acquired:
+            runtime_metrics.increment("redis_lock_acquire_error", repository_id=repository_id)
+            raise ExternalServiceError("Redis", f"Could not acquire lock for repository {repository_id} within {acquire_timeout}s. Another job may be running.")
+
+        runtime_metrics.increment("redis_lock_acquire_success", repository_id=repository_id)
+        start_time = time.perf_counter()
+        try:
+            yield
+        finally:
+            try:
+                self._run_with_circuit_breaker(lock.release)
+            except (CircuitBreakerOpen, redis.exceptions.LockError, redis.exceptions.RedisError) as e:
+                logger.warning("cache_lock - failed to release lock %s: %s", lock_name, e)
+            finally:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                runtime_metrics.observe_ms("redis_lock_hold_duration_ms", duration_ms, repository_id=repository_id)
 
 
 @lru_cache

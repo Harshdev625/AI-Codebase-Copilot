@@ -37,7 +37,7 @@ This README is the single entry point for the project. Deep technical details li
 ## Auth and Admin Flow
 
 - User signup/login: `/register`, `/login` (developer role by default).
-- Admin signup/login: `/register/admin`, `/login/admin`.
+- Admin signup/login: `/admin/register`, `/admin/login`.
 - Admin registration requires backend `ADMIN_REGISTRATION_SECRET_KEY`.
 - Admin dashboard is available at `/admin` for users with role `admin`.
 
@@ -132,11 +132,10 @@ Frontend URL: `http://localhost:3000`
 - `/` landing page
 - `/login` sign in
 - `/register` sign up
-- `/login/admin` admin sign in
-- `/register/admin` admin sign up
-- `/dashboard` authenticated dashboard
-- `/repositories` project and repository management
-- `/chat` repository-scoped AI chat
+- `/admin/login` admin sign in
+- `/admin/register` admin sign up
+- `/dashboard` authenticated dashboard (stats, repository list, quick actions)
+- `/studio` unified Copilot Studio (chat, explorer, patches, sessions)
 - `/admin` admin-only metrics and user management
 
 See [docs/backend.md](docs/backend.md) and [docs/frontend.md](docs/frontend.md) for request formats, flows, and route details.

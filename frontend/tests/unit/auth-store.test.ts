@@ -8,6 +8,10 @@ jest.mock('@/lib/auth', () => ({
   setAuthSession: jest.fn(),
 }));
 
+// Valid JWT with far-future exp for hydrateFromStorage tests
+const VALID_JWT =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiZXhwIjo5OTk5OTk5OTk5fQ.test-signature';
+
 describe('auth-store', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -16,7 +20,7 @@ describe('auth-store', () => {
 
   it('sets auth and updates session', () => {
     const mockUser = { id: '1', email: 'test@example.com', role: 'USER' as const, is_active: true };
-    const mockToken = 'mock-token';
+    const mockToken = VALID_JWT;
 
     useAuthStore.getState().setAuth(mockUser, mockToken);
 
@@ -30,7 +34,7 @@ describe('auth-store', () => {
 
   it('hydrates from storage when user and token exist', () => {
     const mockUser = { id: '1', email: 'test@example.com', role: 'USER' as const, is_active: true };
-    const mockToken = 'mock-token';
+    const mockToken = VALID_JWT;
 
     (getStoredUser as jest.Mock).mockReturnValue(mockUser);
     (getAccessToken as jest.Mock).mockReturnValue(mockToken);
@@ -60,7 +64,7 @@ describe('auth-store', () => {
   it('logs out and clears session', () => {
     useAuthStore.setState({
       user: { id: '1', email: 'test@example.com', role: 'USER', is_active: true },
-      token: 'mock-token',
+      token: VALID_JWT,
       isAuthenticated: true,
       hydrated: true,
     });

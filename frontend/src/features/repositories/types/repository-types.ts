@@ -32,6 +32,7 @@ export type IndexRequestPayload = {
   repo_url?: string | null;
   repo_ref?: string | null;
   commit_sha?: string;
+  full_reindex?: boolean;
 };
 
 export type IndexResponse = {
@@ -57,7 +58,11 @@ export type IndexProgress = {
     embeddings_skipped?: number;
     avg_seconds_per_file?: number;
     qdrant_chunks_queued?: number;
+    stage_timings?: Record<string, { started_at?: number; completed_at?: number; duration_seconds?: number }>;
   } | null;
+  stage_timings?: Record<string, { started_at?: number; completed_at?: number; duration_seconds?: number }>;
+  current_stage?: string | null;
+  repository_id?: string;
   total_files: number;
   processed_files: number;
   percentage: number;
@@ -65,3 +70,88 @@ export type IndexProgress = {
   eta_seconds?: number | null;
   started_at?: string | null;
 };
+
+export interface RepositorySnapshot {
+  id: string;
+  repository_id: string;
+  commit_sha: string;
+  indexed_at: string;
+  files_count: number;
+  chunks_count: number;
+  files_skipped: number;
+  is_pinned: boolean;
+  is_release: boolean;
+  status: "ACTIVE" | "ARCHIVED";
+  index_status: "PENDING" | "RUNNING" | "COMPLETE" | "FAILED";
+  indexer_version?: string;
+  last_indexed_at?: string;
+}
+
+export interface SnapshotUpdateRequest {
+  is_pinned?: boolean;
+  is_release?: boolean;
+  status?: "ACTIVE" | "ARCHIVED";
+}
+
+export interface SnapshotDiffResponse {
+  added: string[];
+  removed: string[];
+  modified: string[];
+  renamed: Array<{ from: string; to: string }>;
+}
+
+export interface TreeItem {
+  id: string;
+  path: string;
+  type: "FILE" | "DIRECTORY";
+  extension?: string;
+  size_bytes?: number;
+  status?: "INDEXED" | "ADDED" | "MODIFIED" | "DELETED";
+}
+
+export interface TreeResponse {
+  items: TreeItem[];
+  next_cursor?: string;
+}
+
+export interface RetrievalItem {
+  id: string;
+  repository_id: string;
+  path: string;
+  symbol: string;
+  language: string;
+  content: string;
+  score: number;
+  rerank_score?: number;
+  start_line: number;
+  end_line: number;
+}
+
+export interface WorkspaceSearchMatch {
+  line: number;
+  column: number;
+  preview: string;
+}
+
+export interface WorkspaceSearchFileResult {
+  path: string;
+  matches: WorkspaceSearchMatch[];
+}
+
+export interface WorkspaceSearchResponse {
+  files: WorkspaceSearchFileResult[];
+  total_matches: number;
+  total_files: number;
+  truncated: boolean;
+  engine: string;
+}
+
+export interface WorkspaceSearchPayload {
+  query: string;
+  case_sensitive?: boolean;
+  whole_word?: boolean;
+  use_regex?: boolean;
+  include_globs?: string[];
+  exclude_globs?: string[];
+  max_results?: number;
+}

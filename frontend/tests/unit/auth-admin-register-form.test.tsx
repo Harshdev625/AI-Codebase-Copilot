@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { AuthenticationAdminRegisterForm } from "@/features/auth/components/auth-admin-register-form";
+import { AuthForm } from "@/features/auth/components/auth-form";
 import { useAdminAuth } from "@/features/auth/hooks/use-admin-auth";
 import { TestProviders } from "../test-utils";
 
@@ -7,34 +7,28 @@ jest.mock("@/features/auth/hooks/use-admin-auth", () => ({
   useAdminAuth: jest.fn(),
 }));
 
-describe("AuthenticationAdminRegisterForm", () => {
+describe("AuthForm admin-register", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
   it("renders correctly", () => {
     (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: false });
-    render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
+    render(<AuthForm mode="admin-register" />, { wrapper: TestProviders });
     expect(screen.getByPlaceholderText("admin@example.com")).toBeInTheDocument();
   });
 
   it("calls register on submit", () => {
     const registerMock = jest.fn();
     (useAdminAuth as jest.Mock).mockReturnValue({ register: registerMock, isRegistering: false });
-    
-    render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
-    
-    const nameInput = screen.getByPlaceholderText("Admin Name");
-    const emailInput = screen.getByPlaceholderText("admin@example.com");
-    const passwordInput = screen.getByPlaceholderText("Min. 8 characters");
-    const secretInput = screen.getByPlaceholderText("Paste secret key");
-    const btn = screen.getByText("Create admin access");
 
-    fireEvent.change(nameInput, { target: { value: "Admin" } });
-    fireEvent.change(emailInput, { target: { value: "test@example.com" } });
-    fireEvent.change(passwordInput, { target: { value: "password" } });
-    fireEvent.change(secretInput, { target: { value: "secret" } });
-    fireEvent.click(btn);
+    render(<AuthForm mode="admin-register" />, { wrapper: TestProviders });
+
+    fireEvent.change(screen.getByLabelText(/full name/i), { target: { value: "Admin" } });
+    fireEvent.change(screen.getByPlaceholderText("admin@example.com"), { target: { value: "test@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("Min. 8 characters"), { target: { value: "password" } });
+    fireEvent.change(screen.getByPlaceholderText("Enter your admin secret key"), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: /create admin account/i }));
 
     expect(registerMock).toHaveBeenCalledWith({
       email: "test@example.com",
@@ -44,25 +38,10 @@ describe("AuthenticationAdminRegisterForm", () => {
     });
   });
 
-  it("toggles password and secret visibility", () => {
-    (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: false });
-    
-    render(<AuthenticationAdminRegisterForm />, { wrapper: TestProviders });
-    
-    const passwordInput = screen.getByPlaceholderText("Min. 8 characters");
-    const secretInput = screen.getByPlaceholderText("Paste secret key");
-    expect(passwordInput).toHaveAttribute("type", "password");
-    expect(secretInput).toHaveAttribute("type", "password");
+  it("disables submit while registering", () => {
+    (useAdminAuth as jest.Mock).mockReturnValue({ register: jest.fn(), isRegistering: true });
 
-    const buttons = screen.getAllByRole("button");
-    const toggleBtns = buttons.filter(b => !b.textContent || b.textContent === "");
-    const togglePwd = toggleBtns[0];
-    const toggleSecret = toggleBtns[1];
-    
-    fireEvent.click(togglePwd);
-    expect(passwordInput).toHaveAttribute("type", "text");
-    
-    fireEvent.click(toggleSecret);
-    expect(secretInput).toHaveAttribute("type", "text");
+    render(<AuthForm mode="admin-register" />, { wrapper: TestProviders });
+    expect(screen.getByRole("button", { name: /creating admin/i })).toBeDisabled();
   });
 });

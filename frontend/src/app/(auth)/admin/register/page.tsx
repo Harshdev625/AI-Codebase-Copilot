@@ -1,11 +1,7 @@
-"use client";
+'use client';
 
-import { AuthenticationAdminRegisterForm } from "@/features/auth/components/auth-admin-register-form";
+import { AuthForm } from '@/features/auth/components/auth-form';
 
 export default function AdminRegisterPage() {
-  return (
-    <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <AuthenticationAdminRegisterForm />
-    </div>
-  );
+  return <AuthForm mode="admin-register" />;
 }
