@@ -34,6 +34,12 @@ interface SearchPanelProps {
   onResultClick?: (path: string, content: string, initialLine?: number, initialEndLine?: number) => void;
 }
 
+type OpenAtOptions = {
+  endLine?: number;
+  column?: number;
+  snippet?: string;
+};
+
 function parseGlobs(raw: string): string[] | undefined {
   const parts = raw
     .split(",")
@@ -122,7 +128,7 @@ function FileGroup({
   query: string;
   useRegex: boolean;
   activeKey: string | null;
-  onSelect: (path: string, line: number, column?: number) => void;
+  onSelect: (path: string, line: number, columnOrOpts?: number | OpenAtOptions) => void;
   onHover: (key: string) => void;
   defaultOpen?: boolean;
   workspaceHint?: string | null;
@@ -271,11 +277,8 @@ export function SearchPanel({ onResultClick }: SearchPanelProps = {}) {
   }, [result]);
 
   const openAt = useCallback(
-    (
-      path: string,
-      line: number,
-      opts?: { endLine?: number; column?: number; snippet?: string },
-    ) => {
+    (path: string, line: number, columnOrOpts?: number | OpenAtOptions) => {
+      const opts = typeof columnOrOpts === "number" ? { column: columnOrOpts } : columnOrOpts;
       const relPath = toRepoRelativePath(path, workspaceHint);
       const highlight = {
         query: mode === "text" && !useRegex ? searchQuery.trim() : undefined,

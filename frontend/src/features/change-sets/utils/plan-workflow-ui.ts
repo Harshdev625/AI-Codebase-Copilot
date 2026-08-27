@@ -51,8 +51,10 @@ export function planStatusLabel(status: ChangeSetStatus): string {
       return "Rolled back";
     case "CANCELLED":
       return "Cancelled";
-    default:
-      return status.replace(/_/g, " ").toLowerCase();
+    default: {
+      const label = String(status);
+      return label.replace(/_/g, " ").toLowerCase();
+    }
   }
 }
 

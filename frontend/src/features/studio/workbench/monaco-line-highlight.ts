@@ -35,9 +35,10 @@ function buildDecorations(
   ];
 
   const query = highlight?.query?.trim();
-  if (query && highlight.column && highlight.column > 0 && range.startLine === range.endLine) {
+  const column = typeof highlight?.column === "number" ? highlight.column : undefined;
+  if (query && typeof column === "number" && column > 0 && range.startLine === range.endLine) {
     const lineContent = model.getLineContent(range.startLine);
-    const col = Math.min(highlight.column, lineContent.length + 1);
+    const col = Math.min(column, lineContent.length + 1);
     const idx = lineContent.toLowerCase().indexOf(query.toLowerCase(), col - 1);
     const matchStart = idx >= 0 ? idx + 1 : col;
     const matchEnd = Math.min(matchStart + query.length, lineContent.length + 1);
