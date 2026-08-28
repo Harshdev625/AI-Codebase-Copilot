@@ -40,6 +40,15 @@ class Settings(BaseSettings):
     ollama_plan_timeout_seconds: float = 240.0
     ollama_act_timeout_seconds: float = 600.0
     ollama_embedding_timeout_seconds: float = 600.0
+    # Maximum characters sent to the embedding model per request. mxbai-embed-large
+    # has a 512-token context window; code chunks can exceed it, causing Ollama to
+    # return 500 "the input length exceeds the context length". Truncating here keeps
+    # indexing resilient. ~4 chars/token is a conservative estimate for code.
+    ollama_embedding_max_chars: int = 2000
+    use_nvidia_api: bool = False  # Set to True to use NVIDIA API instead of Ollama
+    nvidia_api_key: str = ""  # env: NVIDIA_API_KEY
+    nvidia_chat_model: str = "nvidia/nemotron-3.5-lightning"  # Your NVIDIA model
+    nvidia_embedding_model: str = "nvidia/embed-qa-4"  # NVIDIA embedding model
 
     qdrant_host: str = "localhost"
     qdrant_port: int = 6333

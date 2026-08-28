@@ -790,6 +790,17 @@ class IndexingService:
         if not unique_ids:
             return
 
+        # Phase 3 FIX: Ensure collection exists before deletion to avoid 404 errors.
+        # This mirrors the guard in _delete_all_repository_chunks and
+        # _delete_repository_chunks_for_paths, but was missing here, causing
+        # "404 Not Found" on /collections/code_chunks/points/delete when the
+        # collection had not yet been created.
+        try:
+            self.qdrant.ensure_collection()
+        except Exception as exc:
+            logger.warning("Failed to ensure Qdrant collection exists: %s", exc)
+            # Continue anyway - if collection doesn't exist, there's nothing to delete
+
         await self._delete_qdrant_with_retry(
             f"chunk_purge(count={len(unique_ids)})",
             self.qdrant.delete_points_by_ids,

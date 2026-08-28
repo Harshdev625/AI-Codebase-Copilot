@@ -69,6 +69,9 @@ class OllamaModelRouter:
         self.base_url = settings.ollama_base_url.rstrip("/")
         self.chat_model = settings.ollama_chat_model
         self.timeout = settings.ollama_chat_timeout_seconds
+        self.use_nvidia = settings.use_nvidia_api
+        self.nvidia_key = settings.nvidia_api_key
+        self.nvidia_chat_model = settings.nvidia_chat_model
         self.embedder = get_embedding_provider()
         self._stream_usage: dict[str, Any] = {}
 
