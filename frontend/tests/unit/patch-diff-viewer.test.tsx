@@ -60,7 +60,7 @@ describe("PatchDiffViewer", () => {
     (useIndexRepository as jest.Mock).mockReturnValue({ mutateAsync: indexMock, isPending: false });
   });
 
-  it("renders diff correctly", () => {
+  it("renders diff correctly", async () => {
     const diff = `--- a/file.txt
 +++ b/file.txt
 @@ -1,3 +1,3 @@
@@ -69,6 +69,11 @@ describe("PatchDiffViewer", () => {
  unchanged line`;
 
     render(<PatchDiffViewer repositoryId="repo-1" diff={diff} summary="Summary text" />, { wrapper: TestProviders });
+
+    // Wait for loading to complete - the Monaco diff replaces the loading spinner
+    await waitFor(() => {
+      expect(screen.getByTestId("monaco-diff")).toBeInTheDocument();
+    });
 
     expect(screen.getByText("Summary text")).toBeInTheDocument();
     expect(screen.getByText("Apply to Codebase")).toBeInTheDocument();

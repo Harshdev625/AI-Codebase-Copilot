@@ -46,7 +46,7 @@ describe("useStudioUrlSync", () => {
     });
   });
 
-  it("writes ai=open only when sessions mode is active", async () => {
+  it("keeps sidebar panel state in the store, not the URL", async () => {
     useStudioStore.setState({ primarySidebar: "sessions", aiPanelOpen: true });
 
     renderHook(() => useStudioUrlSync());
@@ -56,11 +56,12 @@ describe("useStudioUrlSync", () => {
     });
 
     const lastCall = mockReplace.mock.calls.at(-1)?.[0] as string;
-    expect(lastCall).toContain("ai=open");
+    expect(lastCall).not.toContain("ai=open");
     expect(lastCall).not.toContain("panel=explorer");
+    expect(lastCall).toContain("repository_id=repo-1");
   });
 
-  it("writes panel=explorer without ai=open in editor mode", async () => {
+  it("keeps editor panel state in the store, not the URL", async () => {
     useStudioStore.setState({ primarySidebar: "explorer", aiPanelOpen: false });
 
     renderHook(() => useStudioUrlSync());
@@ -70,7 +71,8 @@ describe("useStudioUrlSync", () => {
     });
 
     const lastCall = mockReplace.mock.calls.at(-1)?.[0] as string;
-    expect(lastCall).toContain("panel=explorer");
+    expect(lastCall).not.toContain("panel=explorer");
     expect(lastCall).not.toContain("ai=open");
+    expect(lastCall).toContain("repository_id=repo-1");
   });
 });
