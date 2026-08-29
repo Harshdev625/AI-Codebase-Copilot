@@ -181,7 +181,7 @@ async def test_upsert_chunks_success(indexing_service):
         )
     ]
     
-    mock_embed = MagicMock(return_value=[0.1] * 768)
+    mock_embed = MagicMock(return_value=[0.1] * 1024)
     indexing_service.embedder = MagicMock()
     indexing_service.embedder.embed_text = mock_embed
     indexing_service._prefer_cached_embeddings = False
