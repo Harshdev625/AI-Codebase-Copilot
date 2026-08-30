@@ -9,7 +9,7 @@ def sandbox_manager():
     return SandboxManager()
 
 def test_create_sandbox(sandbox_manager):
-    with patch("subprocess.run") as mock_run:
+    with patch("subprocess.run") as mock_run, patch("pathlib.Path.mkdir") as mock_mkdir:
         mock_run.return_value = MagicMock(returncode=0)
         cache_path = Path("/mock/cache/repo")
         sandbox_path = Path("/mock/sandbox/patch-123")

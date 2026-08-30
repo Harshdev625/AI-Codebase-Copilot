@@ -91,11 +91,12 @@ def test_ollama_embedding_provider_success_paths(monkeypatch: pytest.MonkeyPatch
         def post(self, *_args, **_kwargs):
             return self._response
 
-    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"data": [{"embedding": [1, 2.5, 3]}]})))
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"embedding": [1, 2.5, 3]})))
     provider = module.OllamaEmbeddingProvider()
+    provider.use_nvidia = False
     assert provider.embed_text("x") == [1.0, 2.5, 3.0]
 
-    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"data": [{"embedding": [4, 5]}]})))
+    monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response({"embedding": [4, 5]})))
     assert provider.embed_text("y") == [4.0, 5.0]
 
 
@@ -110,10 +111,11 @@ def test_ollama_embedding_provider_error_paths(monkeypatch: pytest.MonkeyPatch) 
             return self._response
 
     provider = module.OllamaEmbeddingProvider()
+    provider.use_nvidia = False
 
     connect_exc = httpx.ConnectError("no", request=httpx.Request("POST", "http://x"))
     monkeypatch.setattr(module, "get_http_client", lambda: _FakeClient(_Response(should_raise=connect_exc)))
-    with pytest.raises(RuntimeError, match="Could not connect to the NVIDIA NIM API"):
+    with pytest.raises(RuntimeError, match="Could not connect to Ollama"):
         provider.embed_text("z")
 
     status_exc = httpx.HTTPStatusError(

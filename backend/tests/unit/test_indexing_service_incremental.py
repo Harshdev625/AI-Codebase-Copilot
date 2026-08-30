@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from app.services.indexing_service import IndexingService
 from app.models.domain_models import CodeChunk
+from app.core.config import settings
 
 @pytest.fixture
 def indexing_service():
@@ -113,7 +114,7 @@ async def test_upsert_chunks_qdrant_exception(indexing_service):
             content="test",
         )
     ]
-    mock_embed = MagicMock(return_value=[0.1] * 1024)
+    mock_embed = MagicMock(return_value=[0.1] * settings.vector_dim)
     indexing_service.embedder = MagicMock()
     indexing_service.embedder.embed_text = mock_embed
     indexing_service._prefer_cached_embeddings = False
@@ -122,10 +123,11 @@ async def test_upsert_chunks_qdrant_exception(indexing_service):
     indexing_service.qdrant.upsert_points = MagicMock(side_effect=ExternalServiceError("qdrant error", "mock_error"))
 
     with patch.object(indexing_service, "_update_progress", new_callable=AsyncMock):
-        # When qdrant fails, the code falls back to PostgreSQL storage only
-        # Since PostgreSQL storage succeeds, no DatabaseException is raised
-        await indexing_service._upsert_chunks(chunks)
-        # Verify qdrant was attempted but failed, and PostgreSQL storage succeeded
+        # When qdrant fails, the code raises DatabaseException (Phase 3 FIX:
+        # don't silently fall back, surface the Qdrant sync failure).
+        with pytest.raises(DatabaseException, match="Failed to sync"):
+            await indexing_service._upsert_chunks(chunks)
+        # Verify qdrant was attempted but failed
         indexing_service.qdrant.upsert_points.assert_called_once()
 
 

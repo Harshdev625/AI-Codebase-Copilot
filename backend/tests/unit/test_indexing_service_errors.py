@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from app.services.indexing_service import IndexingService
 from app.models.domain_models import CodeChunk
+from app.core.config import settings
 
 @pytest.fixture
 def indexing_service():
@@ -30,7 +31,7 @@ async def test_upsert_chunks_db_exceptions(indexing_service):
         )
     ]
     
-    mock_embed = MagicMock(return_value=[0.1] * 1024)
+    mock_embed = MagicMock(return_value=[0.1] * settings.vector_dim)
     indexing_service.embedder = MagicMock()
     indexing_service.embedder.embed_text = mock_embed
     indexing_service._prefer_cached_embeddings = False
@@ -64,7 +65,7 @@ async def test_upsert_chunks_db_exceptions_both_fail(indexing_service):
         )
     ]
     
-    mock_embed = MagicMock(return_value=[0.1] * 768)
+    mock_embed = MagicMock(return_value=[0.1] * settings.vector_dim)
     indexing_service.embedder = MagicMock()
     indexing_service.embedder.embed_text = mock_embed
     
